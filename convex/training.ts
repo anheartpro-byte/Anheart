@@ -111,6 +111,8 @@ import {
   openIncidentOfEnd,
   openIncidentOfEvent,
 } from "./lib/incidents";
+// The machine logbook (ANH-149): the intervention a drive fault waits for.
+import { driveInterventionsDue } from "./lib/logbook";
 
 // ---------------------------------------------------------------------------
 // Physiology: mirrors raspberry-pi/src/training/plan.py. The Pi re-checks all
@@ -1235,6 +1237,10 @@ export const launchAutoSession = mutation({
     // ANH-145: a high incident open or analysed closes programmed sessions.
     if ((await openHighIncidents(ctx, args.machineId)) > 0)
       throw refusal("incident_open");
+    // ANH-149: a drive fault the console cannot reset keeps programmed sessions
+    // closed until its incident is closed and an intervention names it.
+    if ((await driveInterventionsDue(ctx, args.machineId)).length > 0)
+      throw refusal("drive_intervention_required");
     const medical = await currentMedicalParameters(ctx);
     if (medical === null) throw refusal("medical_parameters_unavailable");
     if (machine.medicalParametersVersion === null) {

@@ -947,6 +947,49 @@ notification, les détails d'une ligne d'audit (l'action
 L'export n'en sort que les notes et le ressenti, avec des identifiants, sans
 nom, sans adresse et sans le texte libre.
 
+### `machine_logbook` : carnet de bord des machines (ANH-149)
+
+Une ligne du temps par machine : `machineId`, `organizationId` (celle de la
+machine quand l'entrée est écrite), `at` (quand c'est arrivé : l'horloge du
+serveur, ou la date qu'un admin donne à une entrée écrite à la main, jamais
+dans le futur), `kind`, `summary` (une ligne, 3 à 200 caractères), `details?`
+(2000 caractères au plus), `by?` (l'utilisateur qui l'a écrite ; absent :
+écrite par le serveur) et `refs` (`incidentId?`, `configRevision?`,
+`softwareVersion?`, `storageId?` d'une pièce jointe). Une entrée n'est jamais
+modifiée ni supprimée. Index `by_machine_and_at` (la ligne du temps),
+`by_incident_and_kind` (les interventions d'un incident, pour la règle du
+défaut variateur), `by_storage` (une pièce jointe ne sert qu'une fois) et
+`by_organization`.
+
+`kind` vaut :
+
+| Valeur | Écrite par |
+|---|---|
+| `intervention`, `calibration`, `part_replaced` | un admin Anheart, à la main (`machineLogbook.addEntry`) |
+| `note` | un admin Anheart, ou un admin d'organisation de la machine |
+| `incident` | le serveur : un incident ouvert (`openIncident`), rouvert (`join`, un incident clos qui devient `high`) ou clos (`incidents.close`), son id dans `refs.incidentId` |
+| `validation_review` | le serveur : une revue ajoutée (`addValidationReview`, le compte rendu dans `refs.storageId`, la version dans `refs.softwareVersion`) ou un niveau abaissé (`lowerValidationLevel`) |
+| `drive_parameter_change` | le serveur : une fiche variateur jointe (`attachDriveParameterSheet`, la fiche dans `refs.storageId`) |
+| `software_update` | le serveur : un heartbeat qui annonce une autre version que la précédente (`recordHeartbeat`, la nouvelle dans `refs.softwareVersion` ; une version absente ne compte pas) |
+| `config_change` | le serveur : une configuration appliquée (ANH-141, `refs.configRevision`), une fois ANH-141 sur `develop` |
+
+Les lignes du serveur nomment des règles, des codes, des niveaux et des
+versions, jamais une personne : `incident drive_fault OCF ouvert (high)`,
+`revue de validation : niveau bench`, `logiciel pi-0.1.0 -> pi-0.2.0`.
+
+**La règle du défaut variateur (EX-4).** Après un incident `drive_fault` dont
+le code LFT est `manual_reset_only` dans
+[`contracts/drive-faults.json`](../contracts/drive-faults.json) (la politique
+de la console, `FaultSpec.resettable`, que ses tests épinglent sur ce
+fichier), ou qu'il ne connaît pas (un défaut illisible, `rule` =
+`drive_fault`), les séances programmées de la machine restent fermées tant que
+l'incident n'est pas clos **et** qu'aucune entrée `intervention` ne le nomme
+(`driveInterventionsDue`, convex/lib/logbook.ts). `launchAutoSession` refuse
+alors `drive_intervention_required`. Une séance de banc reste possible :
+c'est ainsi que la machine est essayée après l'intervention. Un défaut que la
+console réarme (`console_reset`) ne demande rien de plus que ce que demande
+déjà son incident.
+
 ### `incidents` : registre des incidents (ANH-145)
 
 Une ligne par événement de sécurité qui demande une revue humaine, ouverte
@@ -1973,6 +2016,11 @@ ANH-145 ajoute quatre codes, du lancement et du registre des incidents :
 | `programme_changed` | Code de fin seulement (contrat 1.12) : la machine ne tenait plus, au départ, la liste de programmes d'où le lancement a été fait, ou ne pouvait pas la lui comparer. Il faut relancer. |
 | `incident_not_found` | L'incident n'existe pas, ou sa machine n'est pas atteinte par l'appelant : même réponse. |
 | `incident_closed` | L'incident est clos : il n'est plus ni analysé ni clos de nouveau. |
+| `drive_intervention_required` | Un défaut variateur `manual_reset_only` (ou illisible) de la machine n'est pas clos, ou aucune entrée `intervention` du carnet ne le nomme : pas de séance programmée (`launchAutoSession`). Une séance de banc reste possible (ANH-149). |
+| `invalid_logbook_entry` | Une entrée du carnet hors de ses bornes : ligne de 3 à 200 caractères, détails de 2000 au plus, date passée, incident nommé par une intervention seulement. |
+| `invalid_logbook_file` | La pièce jointe n'est pas un PDF, JPEG ou PNG de 10 Mio au plus envoyé depuis moins d'une heure, ou elle est déjà jointe. |
+| `logbook_kind_not_allowed` | L'appelant ne peut pas écrire ce type d'entrée (un admin d'organisation écrit des notes seulement ; les types du serveur ne s'écrivent pas à la main). |
+| `logbook_incident_mismatch` | L'incident nommé par l'intervention n'existe pas ou n'est pas de cette machine. |
 | `incident_text_required` | La cause ou l'action manque (vide une fois rognée) ou dépasse `INCIDENT_TEXT_MAX` (2000 caractères). |
 
 ANH-141 ajoute les codes de la configuration des machines (`machineConfigs.ts`) :
@@ -2101,7 +2149,11 @@ changés), `programme.report_attached`, `programme.validated` (avec
 ANH-141 (configuration approuvée) ajoutera les siennes de la même façon.
 ANH-145 a ajouté `incident.analyzed` et `incident.closed` (cible `incident`,
 détail `machineId` seul : ni la cause ni l'action, texte libre, n'entrent dans
-le journal ; elles restent sur l'incident).
+le journal ; elles restent sur l'incident). ANH-149 a ajouté
+`logbook.entry_added` (cible la machine, détail `fields` = le type de
+l'entrée : ni sa ligne ni ses détails) ; les entrées que le serveur écrit
+le sont dans des mutations déjà auditées, ou dans le heartbeat, qui ne l'est
+pas.
 
 ANH-141 a ajouté, cible `machine_config` (la révision) et détail `machineId`
 et `version` (le numéro de révision) : `machine_config.proposed` et
@@ -2553,6 +2605,22 @@ sinon, identifiant illisible compris), la saisie (`invalid_request`,
 `feedback_session_not_ended`, `feedback_window_closed`), écrit la ligne
 avec `submittedBy: "operator"` et une ligne d'audit dont l'acteur est la
 machine, sans détail.
+
+### `machineLogbook.ts` (carnet de bord, ANH-149)
+
+Les entrées du serveur sont écrites par les mutations qui changent la machine
+([`machine_logbook`](#machine_logbook--carnet-de-bord-des-machines-anh-149)) ;
+ces fonctions lisent le carnet et y écrivent à la main.
+
+| Fonction | Type | Qui | Effet |
+|---|---|---|---|
+| `list({machineId})` | query | qui a accès à la machine (`canAccessMachine`, dans son périmètre) : admin Anheart, admin d'organisation, gestionnaire de la machine ; autres : `null` ; patient : `not_authorized` | Les 500 entrées les plus récentes (`LOGBOOK_LIST_LIMIT`), de la plus récente à la plus ancienne, avec le nom de qui l'a écrite et l'URL de la pièce jointe ; les incidents qui ferment encore les séances programmées (`interventionsDue`) ; les types que l'appelant peut écrire (`writable`). |
+| `addEntry({machineId, kind, summary, details?, at?, incidentId?, storageId?})` | mutation | admin Anheart (`intervention`, `calibration`, `part_replaced`, `note`) ; admin d'organisation de la machine (`note`) | Écrit l'entrée, `by` l'appelant. Refus : `logbook_kind_not_allowed` (un autre type, dont ceux du serveur), `invalid_logbook_entry` (bornes, date future, incident nommé par autre chose qu'une intervention), `logbook_incident_mismatch` (incident d'une autre machine), `invalid_logbook_file` (pièce jointe), `machine_not_found` (machine supprimée ou hors périmètre). Audit `logbook.entry_added` (cible la machine, détail `fields` = le type, jamais le texte). |
+| `generateUploadUrl()` | mutation | admin Anheart, admin d'organisation | Une URL d'envoi vers Convex Storage. La pièce jointe est un PDF, un JPEG ou un PNG de 10 Mio au plus, envoyé depuis moins d'une heure, jointe à une seule entrée. |
+
+L'export du carnet (CSV, et une vue à imprimer en PDF par le navigateur,
+comme le rapport de séance) est fait par le site à partir de `list`, avec
+les identifiants seulement.
 
 ### `incidents.ts` (registre des incidents, ANH-145)
 

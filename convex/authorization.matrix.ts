@@ -4119,6 +4119,71 @@ export const MATRIX: Entry[] = [
     ],
   },
   {
+    id: "machineLogbook.list",
+    ref: api.machineLogbook.list,
+    kind: "query",
+    // Centre A's `machine`: "foreign" asks its logbook from centre B.
+    build: async (w) => ({ machineId: w.machine }),
+    onSuccess: (res) => {
+      const book = res as { entries: unknown[]; interventionsDue: unknown[] };
+      if (!Array.isArray(book.entries) || !Array.isArray(book.interventionsDue))
+        throw new Error("Logbook not served as expected");
+    },
+    cases: [
+      { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
+      { actor: "admin", expect: ok, note: "every machine" },
+      { actor: "orgAdmin", scope: "own", expect: ok, note: "a machine of their organisation" },
+      { actor: "manager", scope: "own", expect: ok, note: "the machine they manage" },
+      { actor: "otherManager", scope: "other", expect: empty, note: "a machine they do not manage" },
+      { actor: "patient", scope: "self", expect: refuse(UNAUTHORIZED), note: "a patient reads no logbook" },
+      { actor: "orgBAdmin", scope: "foreign", expect: empty, note: "a centre A machine, by identifier" },
+      { actor: "orgBManager", scope: "foreign", expect: empty, note: "a centre A machine, by identifier" },
+      { actor: "orgBPatient", scope: "foreign", expect: refuse(UNAUTHORIZED), note: "a patient reads no logbook" },
+    ],
+  },
+  {
+    id: "machineLogbook.addEntry",
+    ref: api.machineLogbook.addEntry,
+    kind: "mutation",
+    build: async (w) => ({ machineId: w.machine, kind: "note", summary: "TEST note du carnet" }),
+    onSuccess: async (res, w, actor) => {
+      const row = await w.t.run((ctx) => ctx.db.get(res as Id<"machine_logbook">));
+      if (row?.machineId !== w.machine || row.by !== userId(w, actor) || row.kind !== "note")
+        throw new Error("Logbook entry not written by the caller");
+    },
+    cases: [
+      { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
+      { actor: "admin", expect: ok, note: "every machine, every manual kind" },
+      { actor: "orgAdmin", scope: "own", expect: ok, note: "a note on a machine of their organisation" },
+      { actor: "manager", scope: "own", expect: refuse(UNAUTHORIZED), note: "a gestionnaire reads the logbook only" },
+      { actor: "otherManager", scope: "other", expect: refuse(UNAUTHORIZED), note: "a gestionnaire reads the logbook only" },
+      { actor: "patient", scope: "self", expect: refuse(UNAUTHORIZED), note: "a patient writes no logbook" },
+      { actor: "orgBAdmin", scope: "foreign", expect: refuse(/machine_not_found/), note: "a centre A machine, by identifier" },
+      { actor: "orgBManager", scope: "foreign", expect: refuse(UNAUTHORIZED), note: "a gestionnaire reads the logbook only" },
+      { actor: "orgBPatient", scope: "foreign", expect: refuse(UNAUTHORIZED), note: "a patient writes no logbook" },
+    ],
+  },
+  {
+    id: "machineLogbook.generateUploadUrl",
+    ref: api.machineLogbook.generateUploadUrl,
+    kind: "mutation",
+    build: async () => ({}),
+    onSuccess: (res) => {
+      if (typeof res !== "string" || !/^https?:\/\//.test(res)) throw new Error("Upload URL missing");
+    },
+    cases: [
+      { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
+      { actor: "admin", expect: ok, note: "writes entries with attachments" },
+      { actor: "orgAdmin", scope: "own", expect: ok, note: "writes notes with attachments" },
+      { actor: "manager", scope: "own", expect: refuse(UNAUTHORIZED), note: "a gestionnaire reads the logbook only" },
+      { actor: "otherManager", scope: "other", expect: refuse(UNAUTHORIZED), note: "a gestionnaire reads the logbook only" },
+      { actor: "patient", scope: "self", expect: refuse(UNAUTHORIZED), note: "a patient writes no logbook" },
+      { actor: "orgBAdmin", scope: "own", expect: ok, note: "its own organisation's machines" },
+      { actor: "orgBManager", scope: "foreign", expect: refuse(UNAUTHORIZED), note: "a gestionnaire reads the logbook only" },
+      { actor: "orgBPatient", scope: "foreign", expect: refuse(UNAUTHORIZED), note: "a patient writes no logbook" },
+    ],
+  },
+  {
     id: "incidents.analyze",
     ref: api.incidents.analyze,
     kind: "mutation",

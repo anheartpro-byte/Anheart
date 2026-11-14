@@ -149,6 +149,9 @@
         "rejected": "Machine configuration rejected",
         "applied": "Configuration applied by the machine",
         "refused": "Configuration refused by the machine"
+      },
+      "logbook": {
+        "entry_added": "Logbook entry added"
       }
     },
     "targets": {
@@ -465,6 +468,11 @@
     "incident_open": "A high-severity incident is open on this machine: programmed sessions are closed there until an Anheart admin closes it (Incidents page). A bench session remains possible.",
     "incident_not_found": "Incident not found.",
     "incident_closed": "This incident is closed.",
+    "drive_intervention_required": "A drive fault the console cannot reset happened on this machine: its programmed sessions stay closed until the incident is closed and an \"intervention\" logbook entry names it. A bench session is still possible.",
+    "invalid_logbook_entry": "The logbook entry is not valid: a line of 3 to 200 characters, details of at most 2000, a date in the past, and an incident named by an intervention only.",
+    "invalid_logbook_file": "The attachment must be a PDF, JPEG or PNG of at most 10 MB, uploaded within the hour, and attached to one entry only.",
+    "logbook_kind_not_allowed": "You may not write this kind of entry: an Anheart admin writes interventions, calibrations, parts replaced and notes, an organisation admin notes only; the server writes the rest.",
+    "logbook_incident_mismatch": "The incident named does not exist or is not an incident of this machine.",
     "incident_text_required": "Enter the cause and the action, 2000 characters at most each.",
     "invitation_failed": "The invitation delivery was not confirmed. Please retry.",
     "invalid_invitation": "Check the name and email address.",

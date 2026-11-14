@@ -18,6 +18,7 @@ import {
   type CurrentUser,
 } from "./lib/auth";
 import { refusal } from "./lib/errors";
+import { writeLogbook } from "./lib/logbook";
 import { limitUser } from "./lib/rateLimits";
 import {
   configurationLockVerdict,
@@ -749,6 +750,12 @@ export const attachDriveParameterSheet = mutation({
       driveParameterSheet: sheet,
       driveParameterSheetHistory: history,
     });
+    await writeLogbook(ctx, state.machine, {
+      kind: "drive_parameter_change",
+      summary: `fiche variateur ${sheet.version} jointe`,
+      by: state.admin._id,
+      refs: { storageId: args.storageId },
+    });
     await audit(ctx, {
       actor: userActor(state.admin),
       source: "site",
@@ -809,6 +816,12 @@ export const addValidationReview = mutation({
     if (levelAt(nextValidation, Date.now()) !== args.level)
       throw refusal("validation_level_not_next");
     await saveRegistry(ctx, state, { validation: nextValidation });
+    await writeLogbook(ctx, state.machine, {
+      kind: "validation_review",
+      summary: `revue de validation : niveau ${args.level}`,
+      by: state.admin._id,
+      refs: { softwareVersion, storageId: args.reportStorageId },
+    });
     await audit(ctx, {
       actor: userActor(state.admin),
       source: "site",
@@ -854,6 +867,11 @@ export const lowerValidationLevel = mutation({
           },
         ],
       },
+    });
+    await writeLogbook(ctx, state.machine, {
+      kind: "validation_review",
+      summary: `niveau de validation abaissé de ${effectiveLevel} à ${args.level}`,
+      by: state.admin._id,
     });
     await audit(ctx, {
       actor: userActor(state.admin),
