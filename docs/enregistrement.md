@@ -1068,7 +1068,9 @@ valeur ou d'index que `tarfile` lève sur un en-tête donnent un refus nommé,
 jamais une trace d'exception. Le lecteur partagé (`read`), par où passent
 l'import, le rejeu et le jugement de bibliothèque, refuse avant de décoder et
 de garder les blocs ECG plus de 39 000 blocs ou plus d'octets décompressés (la
-taille que chaque bloc gzip annonce) que n'en tient la séance la plus longue :
+taille que chaque bloc gzip annonce, jamais comptée au-delà de ce qu'un bloc
+peut tenir : un bloc coupé en cours d'écriture reste lu comme `truncated`)
+que n'en tient la séance la plus longue :
 deux heures de programme et dix minutes, cinq blocs de 200 échantillons par
 seconde, six voies de deux octets et 512 octets d'en-tête par bloc
 (`MAX_RAW_BYTES`, 39 000 × 2 912 = 113 568 000 octets ; un vrai enregistrement
