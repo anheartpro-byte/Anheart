@@ -245,14 +245,22 @@ def test_ex1_the_console_runs_in_real_time_on_a_loopback_port_and_stops_when_ask
     sessions = [obj(line) for line in seq(report["sessions"])]
     assert [(line["kind"], line["end"]) for line in sessions] == [("manual", "operator_stop")]
     assert all(line["as_planned"] is True and line["delivered"] is True for line in sessions)
-    # Ended by itself within the scenario's own limits, whatever the host made it wait.
-    assert 6.0 < num(report["covered_s"]) < 6.0 + COMMAND_SETTLE + FINISH_LIMIT + CLOSING_LIMIT
+    # What a slow host does not stretch is held tight: the session ends when its ramp, in
+    # real time, brings it down (10 s here, 14 s at most on a host four times slower), and
+    # the dashboard hears a heartbeat every ten seconds. Only the closing, where the record
+    # is deposited and confirmed (3 s here, a minute four times slower), has the
+    # scenario's own limit.
+    covered = num(report["covered_s"])
+    ended = num(sessions[0]["started_at_s"]) + num(sessions[0]["recorded_s"])
+    assert 6.0 < ended <= 6.0 + COMMAND_SETTLE + 10.0
+    assert covered - ended < CLOSING_LIMIT
+    assert num(obj(report["sync"])["heartbeats"]) >= covered // 11 - 1
     # The loop's own cadence, seen from outside it: a tick every 200 ms, the page shown
-    # each one (the hub paces it at 0.15 s), and on a slow host still under two periods,
-    # strictly: at every other tick, the page would no longer follow the loop.
+    # each one (the hub paces it at 0.15 s). A host four times slower took its median gap
+    # to 302 ms; a loop ticking every 0.35 s would show 350 ms.
     period = obj(report["tick_period_ms"])
     tick = obj(report["tick_ms"])
-    assert 150.0 <= num(period["p50"]) < 400.0
+    assert 150.0 <= num(period["p50"]) < 330.0
     # Judged against the console's own loop_stall figure, whatever this loaded host gave.
     assert obj(report["tick_gaps"])["bound_ms"] == 30_000.0
     assert num(tick["count"]) >= 25
