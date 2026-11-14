@@ -596,32 +596,77 @@ async def test_the_page_itself_is_served(rig: Bench) -> None:
 # =========================================================================
 
 
-async def test_a_port_that_will_not_open_shows_the_link_lost_and_writes_nothing(
+async def test_a_port_that_will_not_open_keeps_its_reason_until_it_opens_and_hsp_is_read(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """The operator at the bench must know why the drive is not there: the reason stays on
+    the page whatever the polls read, until an open and its HSP read succeed."""
+
     def dead(bus: FakeBus) -> None:
         bus.raise_on_connect = connection_exception()
         bus.sticky_reads = io_exception()
 
     async with started(monkeypatch, dead) as broken:
-        await _until(lambda: broken.worker.snap.read_failed >= 1, "no failed read counted")
+        for _ in range(4):
+            await broken.polled()
         snap = broken.worker.snap
         assert snap.link_ok is False
         assert snap.hsp_hz is None, "HSP never read"
-        assert snap.last_error is not None
+        why = snap.last_link_error
+        assert why is not None
+        assert why.startswith("ouverture: "), why
+        state = cast(dict[str, object], (await broken.page.get("/api/state")).json())
+        assert state["last_link_error"] == why
         assert broken.bus.writes() == []
+        # The port comes up: the next open succeeds, HSP is read, the reason goes.
         broken.bus.raise_on_connect = None
         broken.bus.sticky_reads = Behave.NORMALLY
+        await _until(lambda: broken.worker.snap.hsp_hz == 50.0, "HSP never read once open")
+        await broken.polled()
+        assert broken.worker.snap.last_link_error is None
+        assert broken.worker.snap.link_ok is True
+        assert broken.bus.writes() == []
 
 
-async def test_a_ceiling_that_cannot_be_read_stays_unknown(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_an_open_that_fails_while_reads_go_through_is_tried_again_at_rest(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The open refused while the drive still answers (a port the library reopens by
+    itself): the bus thread opens it again at rest, and reads HSP once it does."""
+
+    def refused(bus: FakeBus) -> None:
+        bus.port_opens = False
+
+    async with started(monkeypatch, refused) as halfway:
+        await halfway.polled()
+        await halfway.polled()
+        snap = halfway.worker.snap
+        assert snap.hsp_hz is None
+        why = snap.last_link_error
+        assert why is not None
+        assert why.startswith("ouverture: "), why
+        assert snap.link_ok is True, "the polls do answer"
+        halfway.bus.port_opens = True
+        await _until(lambda: halfway.worker.snap.hsp_hz == 50.0, "never opened again")
+        assert halfway.worker.snap.last_link_error is None
+
+
+async def test_a_ceiling_that_cannot_be_read_keeps_its_reason_on_the_page(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     def no_hsp(bus: FakeBus) -> None:
         del bus.registers[bus.regs.hsp]
 
     async with started(monkeypatch, no_hsp) as unread:
-        await unread.polled()
-        assert unread.worker.snap.hsp_hz is None, "shown as unknown, never guessed"
-        assert unread.worker.snap.link_ok is True
+        for _ in range(3):
+            await unread.polled()
+        snap = unread.worker.snap
+        assert snap.hsp_hz is None, "shown as unknown, never guessed"
+        assert snap.link_ok is True
+        why = snap.last_link_error
+        assert why is not None
+        assert why.startswith("lecture HSP: "), why
+        assert snap.last_error is None, "the polls succeed; the reason is kept apart"
         assert unread.bus.writes() == []
 
 
