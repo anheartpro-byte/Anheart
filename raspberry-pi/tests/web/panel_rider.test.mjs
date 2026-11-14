@@ -36,8 +36,11 @@ function panel(storage = new Map()) {
   const nodes = new Map(
     [...html.matchAll(/id="([^"]+)"/g)].map((match) => [match[1], new Element()]),
   );
+  const clock = { now: 1000 };
   const context = vm.createContext({
+    performance: { now: () => clock.now },
     document: {
+      documentElement: { style: { setProperty: () => undefined } },
       getElementById: (id) => nodes.get(id) ?? null,
       createElement: () => new Element(),
     },
@@ -61,7 +64,7 @@ function panel(storage = new Map()) {
       },
     });
   }
-  return { context, nodes, storage };
+  return { clock, context, nodes, storage };
 }
 
 const ADULT = {
@@ -81,7 +84,15 @@ const UNSET = {
 };
 
 function roster(riders, overrides = {}) {
-  return { state: "current", detail: "", age_s: 12.4, problem: null, riders, ...overrides };
+  return {
+    state: "current",
+    detail: "",
+    age_s: 12.4,
+    problem: null,
+    riders,
+    max_age_s: 900,
+    ...overrides,
+  };
 }
 
 const options = (node) => node.children.map((option) => [option.value, option.textContent]);
@@ -159,6 +170,38 @@ test("a refresh that changes nothing keeps the choice and the options as they ar
   assert.equal(nodes.get("rider").children, before, "the options were not rebuilt");
   assert.equal(nodes.get("rider").value, "k17adult");
   assert.equal(nodes.get("roster-note").textContent, "liste du tableau de bord recue il y a 3 min");
+});
+
+test("between two answers the list ages on the page, and past its age nobody is offered", () => {
+  const { clock, context, nodes } = panel();
+  context.renderRoster(roster([ADULT], { age_s: 895 }));
+  nodes.get("rider").value = "k17adult";
+  context.onRiderChange();
+  clock.now += 4000;
+  context.refreshLiveness();
+  assert.equal(nodes.get("rider").value, "k17adult", "899 s: still offered");
+  assert.equal(nodes.get("roster-note").textContent, "liste du tableau de bord recue il y a 14 min");
+
+  // The page's ten seconds have not passed: no answer yet, and the list is past 900 s.
+  clock.now += 1500;
+  context.refreshLiveness();
+  assert.deepEqual(options(nodes.get("rider")), [["", "- aucun passager propose -"]]);
+  assert.equal(nodes.get("rider").value, "");
+  const note = nodes.get("roster-note");
+  assert.equal(note.className, "note note-bad");
+  assert.equal(
+    note.textContent,
+    "liste des passagers perimee : recue il y a 15 min 1 s, au-dela de 15 min personne n'est propose",
+  );
+  assert.equal(context.selectedRider("k17adult"), null, "no start can name them");
+
+  // The next answer brings the list back, as received.
+  context.renderRoster(roster([ADULT], { age_s: 2 }));
+  assert.deepEqual(options(nodes.get("rider")), [
+    ["", "- choisir le passager -"],
+    ["k17adult", "Synthetic Adult"],
+  ]);
+  assert.equal(nodes.get("roster-note").textContent, "liste du tableau de bord recue il y a 2 s");
 });
 
 test("no list offered: the reason is said, and nobody can be chosen", () => {
