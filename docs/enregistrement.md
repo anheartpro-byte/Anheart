@@ -210,7 +210,8 @@ fréquence utilisable à aucun. Ils ne s'additionnent donc pas à la durée.
 Ce sont des secondes, finies et positives ou nulles ; le reader refuse une
 valeur négative ou non finie. Ils ne sont écrits que pour une séance à
 programme, la seule qui ait une zone (le runtime ne compte que pendant un
-programme) ; une séance manuelle, ou un producteur qui ne les a pas observés,
+programme, et plus une fois la phase `DONE` atteinte, le tic qui l'atteint
+compris) ; une séance manuelle, ou un producteur qui ne les a pas observés,
 écrit les trois à `null`. Un enregistrement écrit avant ces champs se relit
 comme avant, les trois valant `null`. Les tics ne contiennent que la
 fréquence confirmée, pas la fréquence filtrée que le runtime classe : sans

@@ -2056,6 +2056,25 @@ async def test_the_zone_counters_only_count_ticks_with_a_usable_heart_rate() -> 
     assert rig.runtime.counters.in_zone > 0.0
 
 
+async def test_the_zone_counters_stop_at_done_and_the_snapshot_no_longer_grows() -> None:
+    """ANH-234: the programme stays set after DONE; the ticks after it count nothing."""
+    rig = _rig()
+    rig.fed_bpm = Bpm(127)
+    assert is_ok(await rig.start())
+    for _ in range(400):
+        await rig.run(1.0)
+        if rig.state() is RuntimeState.FINISHED:
+            break
+    assert rig.state() is RuntimeState.FINISHED
+    assert rig.runtime.snapshot().phase is Phase.DONE
+    ended = rig.runtime.counters
+    assert ended.in_zone > 0.0
+    # The heart rate still comes, usable and in the zone, for a minute at rest.
+    await rig.run(60.0)
+    assert rig.runtime.counters == ended
+    assert rig.runtime.snapshot().counters == ended
+
+
 # =========================================================================
 # Evidence handling
 # =========================================================================

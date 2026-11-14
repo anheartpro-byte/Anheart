@@ -927,7 +927,8 @@ gestionnaire de service (`LocalPanel.control_cycle`,
 6. `_settle` : si la phase ne demande plus de mouvement, la consigne est 0 et
    RFRD montre l'arrêt, alors `SWITCH_ON` (transition 5) puis `SHUTDOWN`
    (transition 2). Sinon rien n'est envoyé.
-7. Compteurs de temps en zone, instantané.
+7. Compteurs de temps en zone, et plus une fois la phase `DONE` atteinte, le
+   tic qui l'atteint compris (ANH-234) ; instantané.
 
 **L'instantané ne calcule rien pour l'écran.** En séance manuelle, la page
 affiche l'heure d'arrivée de la rampe (`arrivee ~m:ss`). C'est une marche du
