@@ -608,6 +608,43 @@ def test_an_import_refuses_more_ecg_blocks_than_the_longest_record(
     assert result == Err("the source record holds more ECG blocks than the longest record")
 
 
+@pytest.mark.parametrize(
+    ("name", "line", "refusal"),
+    [
+        (
+            "events.jsonl",
+            "x" * (shared_reader.LONGEST_LINE + 1),
+            "the source record holds a line longer than any record writes",
+        ),
+        (
+            "drive_frames.jsonl",
+            json.dumps(
+                {
+                    "t": 0.1,
+                    "kind": "read_status",
+                    "register": list(range(shared_reader.MODBUS_READ_REGISTERS + 1)),
+                    "value": None,
+                    "ok": True,
+                    "latency_ms": 0,
+                }
+            ),
+            "the source record holds a drive frame of more registers than a Modbus read",
+        ),
+    ],
+)
+def test_an_import_names_a_line_or_a_frame_that_holds_more_than_a_record_writes(
+    sources: dict[str, tuple[Path, Path]], tmp_path: Path, name: str, line: str, refusal: str
+) -> None:
+    source, config = sources["programme"]
+    hostile = copy(source, tmp_path / "hostile")
+    with (hostile / name).open("a") as file:
+        file.write(line + "\n")
+    reseal(hostile)
+    result = import_record(hostile, "opaque", tmp_path / "library", config=config)
+    assert result == Err(refusal)
+    assert not (tmp_path / "library").exists()
+
+
 def test_a_block_too_short_to_say_its_size_counts_for_nothing_before_the_reader_refuses_it(
     sources: dict[str, tuple[Path, Path]], tmp_path: Path
 ) -> None:
