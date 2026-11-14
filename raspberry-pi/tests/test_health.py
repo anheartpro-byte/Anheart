@@ -9,10 +9,11 @@ from pathlib import Path
 
 import pytest
 
-from src.cloud_sync import CloudSync, health_for
+from src.cloud_sync import CloudSync, PacedTransport, Refused, health_for
 from src.contract import (
     CONTRACT_VERSION,
     HEALTH_STATE_FIELDS,
+    RATE_LIMITED,
     SERVER_VERSION_FIELD,
     ContractVersion,
 )
@@ -28,9 +29,9 @@ from src.health_system import (
 from src.local_panel import build_panel
 from src.record.retention import confirm_deposit
 from src.record.rows import JsonValue
-from src.result import Ok
+from src.result import Err, Ok
 from src.units import Monotonic, MotorRpm, Percent, Seconds
-from tests.test_cloud_sync import POLL_PATH, Dashboard, config_of, ok, rig
+from tests.test_cloud_sync import POLL_PATH, Dashboard, Reply, config_of, ok, rig
 from tests.test_record_retention import CONFIRMED, closed_record
 
 
@@ -227,6 +228,107 @@ async def test_the_chain_and_clock_state_go_only_to_a_dashboard_of_1_14_or_later
         "clock_trusted": True,
         "clock_max_error_s": 0.25,
     }
+
+
+async def test_a_dashboard_rolled_back_to_1_13_loses_one_heartbeat_not_every_one(
+    tmp_path: Path,
+) -> None:
+    """A 400 to a heartbeat that carried the fields of 1.14 forgets the version announced:
+    the next one goes without them and is taken, and its answer says the version again."""
+    setup = rig(tmp_path)
+    server = ["1.14"]
+    outcomes: list[str] = []
+
+    def heartbeat(body: Mapping[str, object]) -> Reply:
+        health = body.get("health")
+        carried = isinstance(health, dict) and any(name in health for name in HEALTH_STATE_FIELDS)
+        if server[0] == "1.13" and carried:
+            outcomes.append("400")
+            return Err(Refused(400, "Invalid machine health measurements"))
+        outcomes.append("200 with" if carried else "200 without")
+        return ok({SERVER_VERSION_FIELD: server[0]})
+
+    setup.dashboard.handle("/api/machine/heartbeat", heartbeat)
+    sync = CloudSync(
+        clock=setup.clock,
+        transport=setup.dashboard,
+        runtime=setup.runtime,
+        surface=setup.panel.surface,
+        store=setup.panel.services.store,
+        tiers=config_of().tiers,
+        programs_enabled=True,
+        health=HealthWatch(None, probe=SystemHealth),
+        health_context=lambda: HealthContext(clock_trusted=True, clock_max_error_s=Seconds(0.25)),
+    )
+
+    async def beats(count: int) -> None:
+        for _ in range(count):
+            await sync.step()
+            setup.clock.advance(Seconds(11))
+
+    await beats(3)
+    assert outcomes == ["200 without", "200 with", "200 with"]
+    server[0] = "1.13"  # Convex rolled back
+    await beats(3)
+    assert outcomes[3:] == ["400", "200 without", "200 without"]
+    assert sync.server_contract == "1.13"
+    server[0] = "1.14"  # and deployed again: the fields come back
+    await beats(2)
+    assert outcomes[6:] == ["200 without", "200 with"]
+    assert sync.server_contract == "1.14"
+
+
+async def test_a_400_to_a_heartbeat_without_those_fields_forgets_nothing(tmp_path: Path) -> None:
+    """Not about them: the version announced stays, whatever else the 400 was for."""
+    setup = rig(tmp_path)
+    setup.dashboard.answer("/api/machine/heartbeat", ok({SERVER_VERSION_FIELD: "1.13"}))
+    sync = CloudSync(
+        clock=setup.clock,
+        transport=setup.dashboard,
+        runtime=setup.runtime,
+        surface=setup.panel.surface,
+        store=setup.panel.services.store,
+        tiers=config_of().tiers,
+        programs_enabled=True,
+        health=HealthWatch(None, probe=SystemHealth),
+        health_context=HealthContext,
+    )
+    await sync.step()
+    assert sync.server_contract == "1.13"
+    setup.dashboard.answer("/api/machine/heartbeat", Err(Refused(400, "malformed")))
+    setup.clock.advance(Seconds(11))
+    await sync.step()
+    assert sync.server_contract == "1.13"
+
+
+async def test_a_heartbeat_held_here_or_limited_never_forgets_the_version(tmp_path: Path) -> None:
+    """Only a 400 says the fields were refused: a 429 of the dashboard, and the hold the
+    console then makes of the route ("requete retenue ici"), forget nothing."""
+    setup = rig(tmp_path)
+    server = Dashboard()
+    server.answer("/api/machine/heartbeat", ok({SERVER_VERSION_FIELD: "1.14"}))
+    paced = PacedTransport(server, setup.clock)
+    sync = CloudSync(
+        clock=setup.clock,
+        transport=paced,
+        runtime=setup.runtime,
+        surface=setup.panel.surface,
+        store=setup.panel.services.store,
+        tiers=config_of().tiers,
+        programs_enabled=True,
+        health=HealthWatch(None, probe=SystemHealth),
+        health_context=HealthContext,
+    )
+    await sync.step()
+    assert sync.server_contract == "1.14"
+    limited = Refused(429, "Too many requests", code=RATE_LIMITED, retry_after=Seconds(60.0))
+    server.answer("/api/machine/heartbeat", Err(limited))
+    for _ in range(2):  # the dashboard's 429, then the hold made here
+        setup.clock.advance(Seconds(11))
+        await sync.step()
+        assert sync.server_contract == "1.14"
+    assert len(server.to("/api/machine/heartbeat")) == 2, "the second one was held here"
+    assert sync.link.detail == "heartbeat : requete retenue ici, non envoyee (rate_limited)"
 
 
 def test_health_for_keeps_everything_else_as_it_is() -> None:

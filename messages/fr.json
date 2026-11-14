@@ -471,6 +471,14 @@
     "clock_trusted": "Horloge tenue par un service de temps",
     "clock_max_error_s": "Erreur maximale de l’horloge",
     "sto_state": "Chaîne de sécurité STO",
+    "sto_source": "Source de la lecture STO",
+    "stoSources": {
+      "none": "Aucune",
+      "sim_ready": "Simulée (prête)",
+      "sim_open": "Simulée (ouverte)",
+      "drive_input": "Entrée du variateur",
+      "bridged_declared": "Pont déclaré"
+    },
     "stoStates": {
       "ready": "Prête",
       "open": "Ouverte",

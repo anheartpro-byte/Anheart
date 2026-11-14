@@ -3899,7 +3899,9 @@ Ce que l'opérateur lit, mot pour mot :
   Le même battement porte depuis 1.14 l'état de la chaîne STO lu au dernier
   tic (`sto_state`, `sto_source`, ANH-92). Ces quatre champs ne partent que
   vers un serveur qui a annoncé 1.14 ou plus : un serveur antérieur refuse un
-  champ de santé qu'il ne connaît pas (`HEALTH_STATE_FIELDS`, `health_for`). Le pré-vol (ANH-142, [4.2](#le-pré-vol-anh-142)) juge
+  champ de santé qu'il ne connaît pas (`HEALTH_STATE_FIELDS`, `health_for`) ;
+  un 400 à un heartbeat qui les portait fait oublier la version annoncée, et
+  le suivant part sans eux. Le pré-vol (ANH-142, [4.2](#le-pré-vol-anh-142)) juge
   l'horloge avec les autres contrôles : avec une personne à bord, l'erreur
   garantie doit rester sous 5 s.
 

@@ -122,7 +122,21 @@ describe("machine health", () => {
       "en",
     );
     expect(html).toContain("Bridged (declared, bench only)");
+    expect(html).toContain("STO reading source");
+    expect(html).toContain("Declared bridge");
     expect(html).toContain("0.5 s");
     expect(html).not.toContain("machineHealth.");
+    // A simulated chain is said simulated, next to its "ready".
+    const simulated = paint(
+      {
+        health: { ...health, sto_state: "ready", sto_source: "sim_ready" },
+        updatedAt: now,
+        serverNow: now,
+        history: [],
+      },
+      "fr",
+    );
+    expect(simulated).toContain("Prête");
+    expect(simulated).toContain("Simulée (prête)");
   });
 });

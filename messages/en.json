@@ -471,6 +471,14 @@
     "clock_trusted": "Clock kept by a time service",
     "clock_max_error_s": "Clock maximum error",
     "sto_state": "STO safety chain",
+    "sto_source": "STO reading source",
+    "stoSources": {
+      "none": "None",
+      "sim_ready": "Simulated (ready)",
+      "sim_open": "Simulated (open)",
+      "drive_input": "Drive input",
+      "bridged_declared": "Declared bridge"
+    },
     "stoStates": {
       "ready": "Ready",
       "open": "Open",

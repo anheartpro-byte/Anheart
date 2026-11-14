@@ -1168,9 +1168,13 @@ dernier tic l'a lue), `sto_source` (`none`, `sim_ready`, `sim_open`,
 tient l'horloge murale) et `clock_max_error_s` (l'erreur qu'il garantit). Une
 console antérieure n'en envoie aucun ; une console 1.14 ne les envoie qu'à un
 serveur dont le dernier heartbeat a annoncé 1.14 ou plus, puisqu'un serveur
-antérieur refuse un champ inconnu. Ils sont gardés dans `machines.health` et
-affichés par la carte de santé ; l'historique de cinq minutes n'en garde
-rien, et rien ne décide sur eux.
+antérieur refuse un champ inconnu. Ils sont gardés dans `machines.health`,
+la carte de santé affiche les quatre, et la période de cinq minutes de
+l'historique les garde dans son dernier rapport (`last`, le rapport entier),
+pas dans son minimum ni son maximum ; rien ne décide sur eux. Une console
+1.14 qui reçoit un 400 à un heartbeat qui les portait oublie la version
+annoncée (un serveur revenu à 1.13) : le suivant part sans eux, et sa réponse
+redit la version.
 
 Un objet mal formé refuse tout le heartbeat (400). `machines.health` et
 `healthUpdatedAt` portent le dernier rapport; un ancien client omettant health

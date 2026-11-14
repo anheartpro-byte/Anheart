@@ -1501,6 +1501,8 @@ class CloudSync:
             # ``record_degraded`` in the wire's own spelling. Top level, never
             # inside ``live``: that object is validated field by field.
             body["recordDegraded"] = self._record_degraded()
+        # Whether this heartbeat carries the fields of contract 1.14 (health_for).
+        carried = self._health is not None and takes_health_state(self._server_contract)
         if self._health is not None:
             body["health"] = health_for(
                 self._server_contract,
@@ -1526,12 +1528,25 @@ class CloudSync:
                         self._link.heartbeat_failed(error.detail)
                     case Refused():
                         self._link.heartbeat_failed(refusal_words(error))
+                        self._after_refused_heartbeat(error, carried=carried)
                     case _ as unreachable:
                         assert_never(unreachable)
             case _ as unreachable:
                 assert_never(unreachable)
         self._last_rtt = elapsed(began, self._clock.monotonic()) if isinstance(sent, Ok) else None
         self._note(sent)
+
+    def _after_refused_heartbeat(self, refused: Refused, *, carried: bool) -> None:
+        """A heartbeat that carried the fields of 1.14 was refused 400: forget the version.
+
+        The dashboard may have been rolled back to an earlier minor, whose
+        strict health schema refuses those fields, and its 400 announces no
+        version. Kept, the 1.14 announced before would keep every heartbeat
+        refused until the console restarts. Forgotten, the next heartbeat goes
+        without them, and its answer announces the version again.
+        """
+        if carried and refused.status == HTTPStatus.BAD_REQUEST:
+            self._server_contract = None
 
     async def _push_profiles(self, now: Monotonic) -> None:
         rev = int(self._store.rev)

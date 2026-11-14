@@ -237,6 +237,13 @@ export function HealthReadouts({ data }: { data: HealthData }) {
         ? t("unknown")
         : t(`stoStates.${health.sto_state}`),
     ],
+    // Next to the state: a simulated chain reads "ready" like a real one.
+    [
+      "sto_source",
+      health.sto_source === undefined || health.sto_source === null
+        ? t("unknown")
+        : t(`stoSources.${health.sto_source}`),
+    ],
     ["link_rtt_ms", number(health.link_rtt_ms, " ms")],
     ["bitalino_battery_pct", number(health.bitalino_battery_pct, " %")],
     ["bitalino_link", link(health.bitalino_link)],
