@@ -343,6 +343,10 @@ ARMING_REFUSAL_WORDS: Final[Mapping[ErrorCode, str]] = MappingProxyType(
             "incident grave ouvert sur cette machine : seances programmees fermees jusqu'a "
             "sa cloture"
         ),
+        ErrorCode("drive_intervention_required"): (
+            "defaut variateur non rearmable sur cette machine : seances programmees fermees "
+            "jusqu'a la cloture de l'incident et son intervention au carnet de bord"
+        ),
         PROGRAMME_CHANGED: (
             "programmes de la machine changes depuis le lancement : le relancer depuis le "
             "tableau de bord"

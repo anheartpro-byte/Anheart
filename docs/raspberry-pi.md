@@ -4364,14 +4364,14 @@ jour-là ; la durée varie).
 ## 14. Versions et compatibilité
 
 `src/contract.py`. Le contrat entre la console et Convex porte un numéro
-`majeure.mineure` (aujourd'hui `1.15`). Sa définition unique est
+`majeure.mineure` (aujourd'hui `1.16`). Sa définition unique est
 [`contracts/machine-api.json`](../contracts/machine-api.json) à la racine du
 dépôt ; la description complète des règles est dans
 [convex.md](convex.md#11-versions-et-compatibilité).
 
 Ce que fait la console :
 
-* **Chaque requête** porte l'en-tête `X-Anheart-Contract: 1.15`. Il est posé sur
+* **Chaque requête** porte l'en-tête `X-Anheart-Contract: 1.16`. Il est posé sur
   le client HTTP lui-même, pas requête par requête : aucune ne peut partir sans.
 * **Chaque heartbeat** porte `software_version`, `contract_version`,
   `medical_parameters_version` et `config_hash`. `medical_parameters_version`
@@ -4443,6 +4443,13 @@ Ce que fait la console :
   échoue. Le départ d'un programme lancé du site peut être refusé
   `incident_open` (409) : la console n'arme pas et n'envoie pas de fin. Face à
   un serveur `1.9`, le champ manque : le contrôle reste orange.
+* **Le défaut variateur qui attend son intervention** (contrat 1.16,
+  ANH-149) : la réponse du poll porte `drive_interventions_due`, le nombre
+  de défauts variateur de la machine que la console ne réarme pas et qui
+  attendent leur intervention au carnet de bord. Le départ d'un programme
+  lancé du site peut être refusé `drive_intervention_required` (409) : la
+  console n'arme pas et n'envoie pas de fin. Face à un serveur `1.15`, le
+  champ manque, et un tel départ est refusé `incident_open`.
 * **Un serveur qui refuse le contrat** (réponse 426, code
   `contract_unsupported`) : la console l'écrit dans son journal et affiche
   `serveur incompatible (contrat X vs Y)`, X étant sa version et Y les

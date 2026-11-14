@@ -465,7 +465,7 @@
     "release_notes_too_long": "Les notes sont limitées à 2000 caractères.",
     "level_change_needs_notes": "Changer le niveau de validation d'une version déjà enregistrée exige des notes qui disent pourquoi.",
     "notification_not_found": "Alerte introuvable.",
-    "incident_open": "Un incident de cette machine ferme ses séances programmées : un incident grave ouvert, jusqu'à sa clôture par un admin Anheart (page Incidents), ou un défaut variateur non réarmable qui attend son intervention dans le carnet de bord. Une séance de banc reste possible.",
+    "incident_open": "Un incident grave est ouvert sur cette machine : les séances programmées y sont fermées jusqu'à sa clôture par un admin Anheart (page Incidents). Une séance de banc reste possible.",
     "incident_not_found": "Incident introuvable.",
     "incident_closed": "Cet incident est clos.",
     "drive_intervention_required": "Un défaut variateur non réarmable à la console a eu lieu sur cette machine : les séances programmées y restent fermées jusqu'à la clôture de l'incident et une entrée « intervention » qui le nomme dans le carnet de bord. Une séance de banc reste possible.",

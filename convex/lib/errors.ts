@@ -296,7 +296,7 @@ export const DASHBOARD_ERRORS = {
   incident_open:
     "A high-severity incident of the machine is open or analysed: no programmed session is launched or armed there until an Anheart admin closes it. Thrown by `launchAutoSession`; also an arming refusal (contract 1.10).",
   drive_intervention_required:
-    "A drive fault the console does not reset (`manual_reset_only` in contracts/drive-faults.json) closes the machine's programmed sessions until its incident is closed and an `intervention` logbook entry names it (ANH-149). Thrown by `launchAutoSession`. A bench session stays possible.",
+    "A drive fault the console does not reset (`manual_reset_only` in contracts/drive-faults.json) closes the machine's programmed sessions until its incident is closed and an `intervention` logbook entry names it (ANH-149). Thrown by `launchAutoSession`; also an arming refusal (contract 1.16). A bench session stays possible.",
   incident_not_found:
     "The incident does not exist, or concerns a machine the caller does not reach.",
   incident_closed: "The incident is closed: it is no longer analysed.",

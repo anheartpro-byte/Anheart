@@ -5,6 +5,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ConvexError } from "convex/values";
 import driveFaults from "../contracts/drive-faults.json";
+import machineApi from "../contracts/machine-api.json";
 import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { CONTRACT_VERSION } from "./lib/contract";
@@ -360,17 +361,33 @@ describe("EX-4 a drive fault the console cannot reset closes programmed sessions
 
   it("refuses an automatic launch until the incident is closed and an intervention names it", async () => {
     const w = await seedLaunchWorld(modules);
+    const due = () =>
+      w.t.query(internal.machineLogbook.interventionsDueCount, { machineId: w.machine });
+    expect(await due()).toBe(0);
     const incidentId = await driveFault(w, "OCF (LFT 23): overcurrent", "bench");
     expect((await read(w))?.interventionsDue).toEqual([incidentId]);
+    expect(await due()).toBe(1);
     expect(await codeOf(launch(w))).toBe("drive_intervention_required");
     vi.setSystemTime(NOW + 1000);
     await close(w, incidentId);
     expect(await codeOf(launch(w))).toBe("drive_intervention_required");
     await intervention(w);
     expect(await codeOf(launch(w))).toBe("drive_intervention_required");
+    expect(await due()).toBe(1);
     await intervention(w, incidentId);
     expect((await read(w))?.interventionsDue).toEqual([]);
+    expect(await due()).toBe(0);
     expect(await codeOf(launch(w))).toBeNull();
+  });
+
+  it("is a refusal of the machine contract since 1.16, and a field of its poll", () => {
+    expect(machineApi.arming_refusals.codes).toContain("drive_intervention_required");
+    expect(machineApi.error_codes.drive_intervention_required.statuses).toEqual([409]);
+    expect(machineApi.drive_interventions).toMatchObject({
+      since: "1.16",
+      route: "GET /api/machine/training/poll",
+      field: "drive_interventions_due",
+    });
   });
 
   it("asks for an intervention before the closure too, and for a fault whose code is unreadable", async () => {
@@ -402,7 +419,7 @@ describe("EX-4 a drive fault the console cannot reset closes programmed sessions
         machineId: w.machine,
         sessionId,
       }),
-    ).toMatchObject({ armed: false, code: "incident_open" });
+    ).toMatchObject({ armed: false, code: "drive_intervention_required" });
     const other = await w.t.run((ctx) =>
       ctx.db.insert("sessions", {
         organizationId: w.orgA,

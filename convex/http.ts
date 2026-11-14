@@ -356,12 +356,14 @@ function sessionIdOf(
 /**
  * GET /api/machine/training/poll
  * -> {session: PendingTraining | null, incidents_open_high,
- *     server_contract_version}
+ *     drive_interventions_due, server_contract_version}
  * The console arms nothing from an answer whose major is not its own. A bench
  * launch (contract 1.9, ANH-250) is offered only to a poll whose
  * `X-Anheart-Contract` is 1.9 or later (`training.getPendingTrainingSession`).
  * `incidents_open_high` (contract 1.10, ANH-145): the machine's high-severity
  * incidents open or analysed, which its pre-flight reads.
+ * `drive_interventions_due` (contract 1.16, ANH-149): its drive faults waiting
+ * for their intervention in the logbook, which close its programmed sessions.
  */
 http.route({
   path: "/api/machine/training/poll",
@@ -374,9 +376,14 @@ http.route({
     const incidents = await ctx.runQuery(internal.incidents.openHighCount, {
       machineId,
     });
+    const interventions = await ctx.runQuery(
+      internal.machineLogbook.interventionsDueCount,
+      { machineId },
+    );
     return json(200, {
       session,
       incidents_open_high: incidents,
+      drive_interventions_due: interventions,
       server_contract_version: CONTRACT_VERSION,
     });
   }),
