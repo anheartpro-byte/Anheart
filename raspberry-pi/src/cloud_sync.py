@@ -152,6 +152,7 @@ from src.contract import (
     CONTRACT_HEADER,
     CONTRACT_UNSUPPORTED,
     CONTRACT_VERSION,
+    HEALTH_STATE_FIELDS,
     PROGRAMME_CHANGED,
     RATE_LIMITED,
     SERVER_VERSION_FIELD,
@@ -163,6 +164,7 @@ from src.contract import (
     error_code_of,
     majors_of,
     server_refusal,
+    takes_health_state,
     unsupported_refusal,
     version_of,
 )
@@ -799,6 +801,20 @@ class RuntimeView(Protocol):
 # =========================================================================
 # Wire shapes
 # =========================================================================
+
+
+def health_for(
+    announced: ContractVersion | None, health: Mapping[str, JsonValue]
+) -> dict[str, JsonValue]:
+    """``health`` as a dashboard that announced ``announced`` takes it.
+
+    Without :data:`~src.contract.HEALTH_STATE_FIELDS` before contract 1.14, and
+    before any answer: an earlier minor refuses a health object with a field it
+    does not know, and would refuse the whole heartbeat with it.
+    """
+    if takes_health_state(announced):
+        return dict(health)
+    return {name: value for name, value in health.items() if name not in HEALTH_STATE_FIELDS}
 
 
 def profile_row(profile: TrainingProfile) -> Mapping[str, JsonValue]:
@@ -1486,13 +1502,14 @@ class CloudSync:
             # inside ``live``: that object is validated field by field.
             body["recordDegraded"] = self._record_degraded()
         if self._health is not None:
-            body["health"] = dict(
+            body["health"] = health_for(
+                self._server_contract,
                 await self._health.sample(
                     snapshot,
                     self._health_context(),
                     self._last_rtt,
                     self._incidents_open_high,
-                )
+                ),
             )
         began = self._clock.monotonic()
         sent = await self._transport.post("/api/machine/heartbeat", body)

@@ -24,6 +24,11 @@ MILLISECONDS: Final[int] = 1000
 class HealthContext:
     bitalino_connected: bool | None = None
     clock_offset_s: Seconds | None = None
+    clock_trusted: bool | None = None
+    """Whether a time service keeps the wall clock; ``None`` without a probe (contract 1.14)."""
+
+    clock_max_error_s: Seconds | None = None
+    """The error that time service answers for; ``None`` when none keeps it."""
     record_degraded: bool | None = None
     restart_loop: bool | None = None
     preflight_last: ControlState | None = None
@@ -148,6 +153,12 @@ class HealthWatch:
             "disk_free_mb": system.disk_free_mb,
             "uptime_s": system.uptime_s,
             "clock_offset_s": context.clock_offset_s,
+            # Contract 1.14 (ANH-92, ANH-148): left out for an earlier dashboard
+            # (cloud_sync, HEALTH_STATE_FIELDS).
+            "clock_trusted": context.clock_trusted,
+            "clock_max_error_s": context.clock_max_error_s,
+            "sto_state": snapshot.sto.state.value,
+            "sto_source": snapshot.sto.source.value,
             "link_rtt_ms": None if rtt is None else rtt * MILLISECONDS,
             "bitalino_battery_pct": (
                 None

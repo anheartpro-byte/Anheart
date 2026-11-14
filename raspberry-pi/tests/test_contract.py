@@ -29,6 +29,8 @@ from src.contract import (
     CONTRACT_HEADER,
     CONTRACT_UNSUPPORTED,
     CONTRACT_VERSION,
+    HEALTH_STATE_FIELDS,
+    HEALTH_STATE_SINCE,
     MAJORS_SHOWN,
     MAX_REFUSAL_SENTENCE,
     SERVER_VERSION_FIELD,
@@ -46,6 +48,7 @@ from src.contract import (
     unsupported_refusal,
     version_of,
 )
+from src.motor.sto import StoSourceKind, StoState
 from src.result import Ok
 from src.training.plan import SHIPPED_DEFAULTS_PATH, parse_store, profiles_digest
 
@@ -67,8 +70,18 @@ def shared() -> dict[str, object]:
 
 def test_ex1_the_contract_version_is_the_shared_file_s() -> None:
     assert shared()["contract_version"] == CONTRACT_VERSION
-    assert CONTRACT_VERSION == "1.13"
+    assert CONTRACT_VERSION == "1.14"
     assert version_of(CONTRACT_VERSION) == CONTRACT_VERSION
+
+
+def test_the_health_state_of_1_14_is_the_shared_file_s() -> None:
+    """ANH-92, ANH-148: the fields, the minor they start at, and every word they take."""
+    entry = shared()["health_state"]
+    assert isinstance(entry, dict)
+    assert entry["since"] == HEALTH_STATE_SINCE
+    assert entry["fields"] == list(HEALTH_STATE_FIELDS)
+    assert entry["sto_states"] == [state.value for state in StoState]
+    assert entry["sto_sources"] == [source.value for source in StoSourceKind]
 
 
 def test_ex1_the_header_and_the_poll_field_are_the_shared_file_s() -> None:

@@ -6,6 +6,29 @@ const reading = z.number().finite().nullable();
 const count = z.number().int().nonnegative().nullable();
 const link = v.union(v.literal("up"), v.literal("down"), v.null());
 
+/**
+ * Contract 1.14 (`health_state` of contracts/machine-api.json, ANH-92,
+ * ANH-148): the safety chain as the console's last tick read it, and whether
+ * a time service keeps its wall clock. Each optional: an earlier console
+ * sends none of them. Kept and shown, never decided on.
+ */
+export const STO_STATES = [
+  "ready",
+  "open",
+  "unknown",
+  "not_configured",
+  "bridged",
+] as const;
+export const STO_SOURCES = [
+  "none",
+  "sim_ready",
+  "sim_open",
+  "drive_input",
+  "bridged_declared",
+] as const;
+const stoState = v.union(...STO_STATES.map((s) => v.literal(s)), v.null());
+const stoSource = v.union(...STO_SOURCES.map((s) => v.literal(s)), v.null());
+
 export const healthMeasurements = {
   cpu_temp_c: measurement,
   cpu_load_1m: measurement,
@@ -23,6 +46,10 @@ export const healthMeasurements = {
 export const healthMeasurementsValidator = v.object(healthMeasurements);
 export const machineHealthValidator = v.object({
   ...healthMeasurements,
+  sto_state: v.optional(stoState),
+  sto_source: v.optional(stoSource),
+  clock_trusted: v.optional(v.union(v.boolean(), v.null())),
+  clock_max_error_s: v.optional(measurement),
   bitalino_link: link,
   drive_link: link,
   record_degraded: v.union(v.boolean(), v.null()),
@@ -48,6 +75,10 @@ export const machineHealthSchema = z.strictObject({
   disk_free_mb: z.number().nonnegative().nullable(),
   uptime_s: z.number().nonnegative().nullable(),
   clock_offset_s: reading,
+  sto_state: z.enum(STO_STATES).nullable().optional(),
+  sto_source: z.enum(STO_SOURCES).nullable().optional(),
+  clock_trusted: z.boolean().nullable().optional(),
+  clock_max_error_s: z.number().finite().nonnegative().nullable().optional(),
   link_rtt_ms: z.number().nonnegative().nullable(),
   bitalino_battery_pct: z.number().min(0).max(100).nullable(),
   drive_thermal_state: reading,

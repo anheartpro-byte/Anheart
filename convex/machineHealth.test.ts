@@ -2,13 +2,25 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Infer } from "convex/values";
 import { api, internal } from "./_generated/api";
 import { as, modules, NOW, seedMachineWorld, seedWorld } from "./test.setup";
+import sharedText from "../contracts/machine-api.json?raw";
 import {
   machineHealthSchema,
   machineHealthValidator,
   HEARTBEAT_RETENTION_MS,
   HEALTH_RETENTION_MS,
+  STO_SOURCES,
+  STO_STATES,
 } from "./lib/machineHealth";
 import { CONTRACT_HEADER, CONTRACT_VERSION } from "./lib/contract";
+
+const shared = JSON.parse(sharedText) as {
+  health_state: {
+    since: string;
+    fields: string[];
+    sto_states: string[];
+    sto_sources: string[];
+  };
+};
 
 const reading = (cpu: number | null): Infer<typeof machineHealthValidator> => ({
   cpu_temp_c: cpu,
@@ -230,6 +242,52 @@ describe("ANH-249 the machine health schema, under zod 4.6", () => {
     expect(issues(withFaults({ ["A".repeat(33)]: 1 }))).toEqual(["invalid_key"]);
     expect(issues(withFaults({ E01: -1 }))).toEqual(["too_small"]);
     expect(issues(withFaults(codes(129)))).toEqual(["custom"]);
+  });
+
+  it("takes the chain's and the clock's state of contract 1.14, each optional, and keeps them (ANH-92, ANH-148)", async () => {
+    expect(shared.health_state.since).toBe("1.14");
+    expect([...STO_STATES]).toEqual(shared.health_state.sto_states);
+    expect([...STO_SOURCES]).toEqual(shared.health_state.sto_sources);
+    const state = {
+      sto_state: "bridged",
+      sto_source: "bridged_declared",
+      clock_trusted: true,
+      clock_max_error_s: 0.25,
+    } as const;
+    expect(Object.keys(state)).toEqual(shared.health_state.fields);
+    // An earlier console sends none of them, and is read as before.
+    expect(issues(reading(65))).toEqual([]);
+    expect(issues({ ...reading(65), ...state })).toEqual([]);
+    expect(
+      issues({
+        ...reading(65),
+        sto_state: null,
+        sto_source: null,
+        clock_trusted: null,
+        clock_max_error_s: null,
+      }),
+    ).toEqual([]);
+    expect(issues({ ...reading(65), sto_state: "closed" })).toEqual([
+      "invalid_value",
+    ]);
+    expect(issues({ ...reading(65), clock_max_error_s: -1 })).toEqual([
+      "too_small",
+    ]);
+
+    const w = await seedMachineWorld(modules);
+    vi.setSystemTime(Date.now() + 10_000);
+    const response = await w.t.fetch("/api/machine/heartbeat", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${w.machineKey}`,
+        [CONTRACT_HEADER]: CONTRACT_VERSION,
+      },
+      body: JSON.stringify({ health: { ...reading(65), ...state } }),
+    });
+    expect(response.status).toBe(200);
+    expect(
+      (await w.t.run((ctx) => ctx.db.get(w.machine)))?.health,
+    ).toMatchObject(state);
   });
 
   it("refuses a measurement it does not know, at the top and among the counters", () => {

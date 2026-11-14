@@ -1160,6 +1160,18 @@ sont booléens ou `null`. `preflight_last` vaut `ok`, `warn`, `block` ou `null`.
 `counters` contient `rotation_hours`, `sessions_total`, `sessions_failed` et
 `drive_faults_by_code` (au plus 128 codes), chacun nullable.
 
+Depuis le contrat 1.14 (ANH-92, ANH-148, [entrée `health_state`](../contracts/machine-api.json)),
+quatre champs de plus, chacun facultatif et nullable : `sto_state` (`ready`,
+`open`, `unknown`, `not_configured` ou `bridged`, la chaîne STO telle que le
+dernier tic l'a lue), `sto_source` (`none`, `sim_ready`, `sim_open`,
+`drive_input` ou `bridged_declared`), `clock_trusted` (un service de temps
+tient l'horloge murale) et `clock_max_error_s` (l'erreur qu'il garantit). Une
+console antérieure n'en envoie aucun ; une console 1.14 ne les envoie qu'à un
+serveur dont le dernier heartbeat a annoncé 1.14 ou plus, puisqu'un serveur
+antérieur refuse un champ inconnu. Ils sont gardés dans `machines.health` et
+affichés par la carte de santé ; l'historique de cinq minutes n'en garde
+rien, et rien ne décide sur eux.
+
 Un objet mal formé refuse tout le heartbeat (400). `machines.health` et
 `healthUpdatedAt` portent le dernier rapport; un ancien client omettant health
 efface ces deux champs. `machine_health_history` garde des périodes de cinq
@@ -4621,6 +4633,7 @@ sont décrites ci-dessous.
 
 | Mineure | Ajouts, tous compatibles |
 |---|---|
+| `1.14` | L'état de la chaîne STO et de l'horloge dans la santé du heartbeat (ANH-92, ANH-148, [entrée `health_state`](../contracts/machine-api.json), [Santé machine](#santé-machine-anh-148)) : `sto_state`, `sto_source`, `clock_trusted` et `clock_max_error_s`, facultatifs et nullables, que la console n'envoie qu'à un serveur qui a annoncé 1.14 ou plus. Aucun code d'erreur nouveau. Ordre de déploiement : Convex avant l'image du Pi. |
 | `1.13` | La connexion nommée à la console (ANH-152, [entrée `operator_list`](../contracts/machine-api.json), [§6](#la-liste-des-opérateurs-signée-contrat-113-anh-152)) : la route `GET /api/machine/operators`, non limitée en débit, qui répond la liste signée des opérateurs et des tablettes de la machine, ou `not_configured` sans clé ; `actor` d'un événement peut valoir `device:<id>` ; `POST /api/machine/training/local` accepte `operatorId`, gardé s'il est un opérateur de la machine, `operatorName` restant exigé. Aucun code d'erreur nouveau. Ordre de déploiement : Convex, puis la clé de signature dans Convex, puis l'image du Pi. |
 | `1.12` | Le lancement auto lié à la liste de programmes d'où il a été fait ([entrée `launch_programme_list`](../contracts/machine-api.json), [§6](#lancement-lié-à-la-liste-de-programmes-contrat-112)) : `profilesDigest` dans le corps de `POST /api/machine/profiles` et de `POST /api/machine/training/start`, facultatif, et dans le lancement auto du poll ; un refus à l'armement de plus en **409**, `programme_changed`, pour un lancement auto seulement. Ordre de déploiement : Convex avant l'image du Pi. |
 | `1.11` | Le catalogue de programmes signé vers les machines (ANH-138, [entrée `programme_catalog`](../contracts/machine-api.json), [§6](#le-catalogue-signé-contrat-111-anh-138)) : la route `GET /api/machine/programmes?since=`, non limitée en débit, qui répond le texte du catalogue et sa signature Ed25519, ou `not_configured` sans clé ; trois champs facultatifs dans le corps de `POST /api/machine/profiles`, `catalogRevision`, `accepted` et `rejected`. Aucun code d'erreur nouveau. Ordre de déploiement : Convex, puis la clé de signature dans Convex, puis l'image du Pi qui porte sa moitié publique. |

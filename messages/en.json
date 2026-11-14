@@ -468,6 +468,16 @@
     "disk_free_mb": "Available disk",
     "uptime_s": "Time since boot",
     "clock_offset_s": "Estimated clock offset",
+    "clock_trusted": "Clock kept by a time service",
+    "clock_max_error_s": "Clock maximum error",
+    "sto_state": "STO safety chain",
+    "stoStates": {
+      "ready": "Ready",
+      "open": "Open",
+      "unknown": "Unknown",
+      "not_configured": "Not read",
+      "bridged": "Bridged (declared, bench only)"
+    },
     "link_rtt_ms": "Last Convex round trip",
     "bitalino_battery_pct": "BITalino battery",
     "bitalino_link": "BITalino link",

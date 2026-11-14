@@ -468,6 +468,16 @@
     "disk_free_mb": "Disque disponible",
     "uptime_s": "Temps depuis le démarrage",
     "clock_offset_s": "Écart d’horloge estimé",
+    "clock_trusted": "Horloge tenue par un service de temps",
+    "clock_max_error_s": "Erreur maximale de l’horloge",
+    "sto_state": "Chaîne de sécurité STO",
+    "stoStates": {
+      "ready": "Prête",
+      "open": "Ouverte",
+      "unknown": "Inconnue",
+      "not_configured": "Non lue",
+      "bridged": "Pontée (déclarée, banc seulement)"
+    },
     "link_rtt_ms": "Dernier aller-retour Convex",
     "bitalino_battery_pct": "Batterie BITalino",
     "bitalino_link": "Liaison BITalino",

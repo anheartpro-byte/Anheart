@@ -9,8 +9,13 @@ from pathlib import Path
 
 import pytest
 
-from src.cloud_sync import CloudSync
-from src.contract import CONTRACT_VERSION, SERVER_VERSION_FIELD
+from src.cloud_sync import CloudSync, health_for
+from src.contract import (
+    CONTRACT_VERSION,
+    HEALTH_STATE_FIELDS,
+    SERVER_VERSION_FIELD,
+    ContractVersion,
+)
 from src.health import HealthContext, HealthWatch, pending_records
 from src.health_counters import Counters, HealthCounters, load_counters, save_counters
 from src.health_system import (
@@ -22,6 +27,7 @@ from src.health_system import (
 )
 from src.local_panel import build_panel
 from src.record.retention import confirm_deposit
+from src.record.rows import JsonValue
 from src.result import Ok
 from src.units import Monotonic, MotorRpm, Percent, Seconds
 from tests.test_cloud_sync import POLL_PATH, Dashboard, config_of, ok, rig
@@ -170,6 +176,63 @@ async def test_heartbeat_health_carries_previous_rtt_and_validated_poll_echo(
     assert last["restart_loop"] is True
     assert last["preflight_last"] is None
     json.dumps(sent)
+
+
+@pytest.mark.parametrize(
+    ("announced", "carried"),
+    [
+        pytest.param(None, False, id="no-answer-yet"),
+        pytest.param("1.13", False, id="earlier-minor"),
+        pytest.param("2.14", False, id="other-major"),
+        pytest.param("1.14", True, id="this-minor"),
+        pytest.param("1.15", True, id="later-minor"),
+    ],
+)
+async def test_the_chain_and_clock_state_go_only_to_a_dashboard_of_1_14_or_later(
+    tmp_path: Path, announced: str | None, carried: bool
+) -> None:
+    """Contract 1.14 (ANH-92, ANH-148): an earlier minor refuses a health object with a
+    field it does not know, and would refuse the whole heartbeat with it."""
+    setup = rig(tmp_path)
+    answer = {} if announced is None else {SERVER_VERSION_FIELD: announced}
+    setup.dashboard.answer("/api/machine/heartbeat", ok(answer))
+    watch = HealthWatch(None, probe=SystemHealth)
+    sync = CloudSync(
+        clock=setup.clock,
+        transport=setup.dashboard,
+        runtime=setup.runtime,
+        surface=setup.panel.surface,
+        store=setup.panel.services.store,
+        tiers=config_of().tiers,
+        programs_enabled=True,
+        health=watch,
+        health_context=lambda: HealthContext(clock_trusted=True, clock_max_error_s=Seconds(0.25)),
+    )
+    await sync.step()
+    setup.clock.advance(Seconds(11))
+    await sync.step()
+    first, second = (body["health"] for body in setup.dashboard.to("/api/machine/heartbeat"))
+    assert isinstance(first, dict)
+    assert isinstance(second, dict)
+    named = {name for name in HEALTH_STATE_FIELDS if name in second}
+    # Before any answer: never.
+    assert not any(name in first for name in HEALTH_STATE_FIELDS)
+    if not carried:
+        assert named == set()
+        return
+    snapshot = setup.runtime.snapshot()
+    assert {name: second[name] for name in HEALTH_STATE_FIELDS} == {
+        "sto_state": snapshot.sto.state.value,
+        "sto_source": snapshot.sto.source.value,
+        "clock_trusted": True,
+        "clock_max_error_s": 0.25,
+    }
+
+
+def test_health_for_keeps_everything_else_as_it_is() -> None:
+    health: Mapping[str, JsonValue] = {"cpu_temp_c": 40, "sto_state": "ready"}
+    assert health_for(None, health) == {"cpu_temp_c": 40}
+    assert health_for(ContractVersion("1.14"), health) == health
 
 
 async def test_composed_console_uses_its_health_observer(tmp_path: Path) -> None:

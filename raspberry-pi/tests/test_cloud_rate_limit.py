@@ -642,6 +642,11 @@ class _LargestHealth(HealthWatch):
             "disk_free_mb": reading,
             "uptime_s": reading,
             "clock_offset_s": reading,
+            # Contract 1.14, at their longest: sent once the dashboard has said 1.14.
+            "clock_trusted": False,
+            "clock_max_error_s": reading,
+            "sto_state": "not_configured",
+            "sto_source": "bridged_declared",
             "link_rtt_ms": reading,
             "bitalino_battery_pct": reading,
             "bitalino_link": "down",
@@ -681,11 +686,14 @@ async def test_the_largest_heartbeat_the_console_sends_fits_the_route(tmp_path: 
     )
 
     await sync.step()
+    time.advance(HEARTBEAT_PERIOD)
+    await sync.step()
 
     sent = dashboard.to(HEARTBEAT)
-    assert len(sent) == 1
-    body = cast("Mapping[str, JsonValue]", sent[0])
+    assert len(sent) == 2
+    body = cast("Mapping[str, JsonValue]", sent[1])
     assert "drive_faults_by_code" in str(body["health"])
+    assert "bridged_declared" in str(body["health"])
     # With a session running, its identifier twice more: in the body and in `live`.
     session_ids = 2 * len(', "activeSessionId": ""') + 2 * 64
     assert wire_bytes(body) + session_ids <= sizes()[f"POST {HEARTBEAT}"]
