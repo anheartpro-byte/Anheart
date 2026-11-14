@@ -587,6 +587,7 @@ d'une machine (bouton **Modifier** de la carte Configuration).
 | **Nom de la machine** * | Obligatoire (message « Le nom est obligatoire » s'il est vide). |
 | **Emplacement** | Facultatif. Affiché sous le nom partout. |
 | **Assigner aux Gestionnaires** | Cases à cocher, visibles seulement pour un administrateur et s'il existe des gestionnaires. **Le premier coché devient « Propriétaire ».** |
+| **Numéro de série du Pi** | À la création seulement (ANH-115). Renseigné : la machine est créée **sans clé** et un **code d'appairage** est émis pour ce Pi (ci-dessous). Laissé vide : la clé API à copier, comme avant. Chiffres, lettres et `. _ : -`, 64 caractères au plus. |
 
 Boutons : **Créer** (ou **Enregistrer** en modification), **Annuler**.
 
@@ -603,8 +604,18 @@ Boutons : **Créer** (ou **Enregistrer** en modification), **Annuler**.
 └──────────────────────────────────────────────────┘
 ```
 
-**Copiez la clé tout de suite** (bouton **Copier**, qui devient « Copié! »
-pendant 2 s) et gardez la en lieu sûr. Une fois la fenêtre fermée, **personne ne
+**Avec un numéro de série du Pi**, la fenêtre devient « Code d'appairage » :
+le code en grand (`XXXX-XXXX`), « Expire dans 29:59 » qui décompte ses
+30 minutes, et l'avertissement de ne le copier dans aucun message. Il n'y a
+pas de bouton Copier : lisez-le au technicien, qui le tape sur l'écran de
+première mise sous tension de la console. **Fermer** l'oublie ; il reste
+valable jusqu'à son expiration (carte **Appairage de la console** du détail
+pour le révoquer ou en émettre un autre). Si le numéro ou le code est refusé,
+la fenêtre « Machine créée, appairage à terminer » le dit : la machine existe,
+sans clé, et l'appairage se termine depuis son détail.
+
+**Sans numéro de série**, **copiez la clé tout de suite** (bouton **Copier**,
+qui devient « Copié! » pendant 2 s) et gardez la en lieu sûr. Une fois la fenêtre fermée, **personne ne
 pourra la relire**, pas même un administrateur. Elle doit être recopiée dans le
 fichier de configuration du Raspberry Pi (voir [procédure P5](#p5-enregistrer-une-machine-et-installer-sa-clé)).
 
@@ -802,6 +813,25 @@ Visible par l'administrateur et le gestionnaire de la machine. Sous titre :
   lancer de séance auto sur cette machine. », boutons **Annuler** et
   **Retirer**.
 - Une erreur du serveur s'affiche dans un encadré rouge en haut de la carte.
+
+#### Carte « Appairage de la console »
+
+**Pour qui** : administrateur (Anheart, ou de l'organisation de la machine),
+sur une machine non supprimée. Un gestionnaire ne la voit pas.
+
+La console d'une machine peut recevoir sa clé par un **code d'appairage** au
+lieu d'une clé copiée à la main (ANH-115). La carte montre le Pi que nomme le
+registre (« Pi du registre : … »), puis « Code en cours, émis le … par …,
+valable jusqu'au … » ou « Aucun code en cours. ». Elle rappelle qu'un
+appairage révoque aussitôt toutes les autres clés de la machine.
+
+| Bouton | Effet |
+|---|---|
+| **Émettre un code d'appairage** (**Émettre un nouveau code** si un code est en cours) | La fenêtre « Code d'appairage » montre le code **une seule fois**, en grand, avec le temps qui lui reste (30 minutes au départ). Un nouveau code remplace celui en cours. Grisé tant que le registre ne nomme aucun numéro de série du Pi : seul l'admin Anheart le renseigne, dans l'**Identité** du registre. |
+| **Révoquer le code** (code en cours) | Le code ne sert plus ; notification « Code d'appairage révoqué. ». |
+
+Le code ne sert qu'une fois, au Pi que nomme le registre, et cinq codes faux
+le rendent inutilisable : il faut alors en émettre un autre.
 
 #### Carte « Clés de la machine »
 
@@ -2012,6 +2042,13 @@ Un patient peut avoir plusieurs gestionnaires : cochez le chez chacun.
 **Ce que vous devez voir** : dans la minute, la machine passe **En ligne** dans
 **Machines**, la carte **État en direct** se remplit (badge **En direct**) et la
 carte **Programmes** liste les programmes de la machine.
+
+**Avec un code d'appairage (ANH-115)**, au lieu des étapes 5 à 7 : à
+l'étape 2, renseignez aussi le **Numéro de série du Pi** ; après **Créer**,
+lisez le code au technicien, qui le tape sur l'écran de première mise sous
+tension de la console, et la console écrit elle-même sa clé et l'adresse
+Convex. Cet écran de la console n'est pas encore livré : d'ici là, suivez les
+étapes 5 à 7 avec une clé.
 
 **Si ça ne marche pas** :
 

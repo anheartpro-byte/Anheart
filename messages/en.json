@@ -678,6 +678,26 @@
     "revokeDescription": "The key opens nothing from now on: a machine still using it loses its link to the dashboard until another key is installed on it.",
     "revokeLast": "This is the machine's only valid key: without a new key, it will stay cut off from the dashboard."
   },
+  "machinePairing": {
+    "title": "Console pairing",
+    "description": "The console receives its key from a one-time pairing code, typed on its first power-up screen, instead of a key copied by hand.",
+    "serial": "Pi in the registry:",
+    "noSerial": "The registry names no Pi serial number: a code serves only the Pi it names. The Anheart admin enters it in the registry's identity.",
+    "none": "No open code.",
+    "open": "Open code, issued on {date} by {name}, valid until {expiry}.",
+    "openNoAuthor": "Open code, issued on {date}, valid until {expiry}.",
+    "issue": "Issue a pairing code",
+    "reissue": "Issue a new code",
+    "revoke": "Revoke the code",
+    "revokesKeys": "Pairing revokes every other key of the machine at once: only the paired console stays linked to the dashboard.",
+    "codeTitle": "Pairing code",
+    "codeIntro": "To type on the console's first power-up screen, on the Pi the registry names.",
+    "codeSpelled": "Pairing code, character by character: {characters}",
+    "expiresIn": "Expires in {time}",
+    "expired": "This code has expired. Issue another from the machine's page.",
+    "codeWarning": "Shown this once only. Read it to the technician; never copy it into a message, a ticket or a screenshot.",
+    "codeDone": "Close"
+  },
   "consoleAccess": {
     "title": "Console access",
     "description": "Who may act at this machine's console, and from which tablets. The console receives this signed list at its next rest when it is linked to the dashboard; offline, it keeps the last one received.",
@@ -772,7 +792,8 @@
     "physiologySaved": "Physiology saved.",
     "sessionLaunched": "Session created. It is waiting for the machine to arm it.",
     "stopRequestSent": "Request sent. This page shows the state of the session.",
-    "done": "Done."
+    "done": "Done.",
+    "pairingCodeRevoked": "Pairing code revoked."
   },
   "programmes": {
     "title": "Programmes",
@@ -1145,7 +1166,12 @@
       "organizationDescription": "The machine belongs to this organization; only its managers can be assigned to it.",
       "organizationPlaceholder": "Choose an organization...",
       "noOrganization": "This machine does not belong to an organization yet: it keeps its current managers, who can be changed here once the multi-organization migration has run.",
-      "partiallySaved": "The name and the location are saved, but not the list of managers: {reason}"
+      "partiallySaved": "The name and the location are saved, but not the list of managers: {reason}",
+      "serialPi": "Pi serial number",
+      "serialPiDescription": "The one the console's first power-up screen shows. Filled in, the machine is created without a key and a pairing code is issued for this Pi; left empty, a key to copy into its .env is shown.",
+      "serialPiInvalid": "Digits, letters and . _ : - only, 64 characters at most.",
+      "pairingIncompleteTitle": "Machine created, pairing to finish",
+      "pairingIncomplete": "The machine is created without a key, but: {reason} Finish the pairing from its page."
     }
   },
   "sessions": {

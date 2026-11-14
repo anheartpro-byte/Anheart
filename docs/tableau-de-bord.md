@@ -357,6 +357,14 @@ aucun badge.
   configuration de la machine (`MACHINE_API_KEY` dans `/etc/anheart/anheart.env`
   sur un Pi installé, dans `raspberry-pi/.env` sur un poste de développement).
   C'est la première ligne de la carte **Clés de la machine**, sans expiration.
+  Avec un **numéro de série du Pi** (ANH-115), la machine est créée sans clé
+  (`createMachine` avec `keyless`), le numéro est écrit dans l'identité du
+  registre (`machineRegistry.updateIdentity`) et un code d'appairage est émis
+  (`pairingCodes.issuePairingCode`) : la fenêtre du code remplace celle de la
+  clé. Le numéro est vérifié comme le serveur le lira (chiffres, lettres et
+  `. _ : -`, 64 caractères au plus). Si le numéro ou le code est refusé, la
+  fenêtre dit que la machine existe déjà, sans clé, et que l'appairage se
+  termine depuis sa fiche.
 
 ### Détail d'une machine : `/fr/dashboard/machines/{id}`
 
@@ -387,6 +395,7 @@ Admin et gestionnaire de la machine.
 | Gestionnaires | Liste, badge « Propriétaire » pour le premier. | lecture |
 | **Configuration de la machine** (ANH-141) | État de la configuration, l'avertissement « Configuration appliquée ≠ approuvée », le formulaire de proposition et les révisions (ci-dessous). | admin Anheart (toutes les clés) ; admin d'organisation (nom et lieu seulement) ; machine non supprimée ; aucune carte pour le gestionnaire |
 | **Registre de la machine** | Quatre sections : **Identité**, **Mesures**, **Variateur**, **Validation** ; version remontée et attendue, verdicts des verrous, signalements. | admin Anheart en écriture ; admin d'organisation en lecture seule ; aucun registre pour le gestionnaire |
+| **Appairage de la console** (ANH-115) | Le Pi que nomme le registre, « Code en cours, émis le {date} par {nom}, valable jusqu'au {date}. » ou « Aucun code en cours. » ; boutons **Émettre un code d'appairage** (**Émettre un nouveau code** quand un code est en cours) et **Révoquer le code** (ci-dessous). Sans numéro de série du Pi dans le registre, l'émission est grisée et la carte dit pourquoi. | admin Anheart, admin de l'organisation ; machine non supprimée |
 | **État en direct** | Mode, phase, fréquence cardiaque, vitesse du bras (et moteur, consigne), charge g, action de sécurité, état du variateur ; badge « En direct » / « Données périmées » et « Mis à jour il y a … », recalculés chaque seconde (§6). L'action de sécurité et l'état du variateur sont traduits ; une valeur que le site ne connaît pas s'affiche telle quelle. | lecture |
 | **Programmes** | Programmes synchronisés depuis le Pi (lecture seule) : zone, durée, vitesse max, FC limite. Mention « Manuel : depuis la console de la machine. Sans personne à bord, une séance de banc lestée peut aussi être proposée depuis le site. » pour un admin ou un gestionnaire, « Manuel : uniquement depuis la console de la machine » pour un patient (la séance de banc lestée est réservée au personnel). La carte explique aussi si les programmes auto sont désactivés, si la machine annonce un fichier médical non signé ou si aucune version de référence n'est enregistrée. Depuis ANH-138 (contrat 1.11), elle dit « Programmes de secours » quand la machine n'a jamais reçu de catalogue signé, et liste chaque programme du catalogue que la machine a refusé : « refusé par la machine : » suivi de sa raison ; un programme refusé n'est pas lançable ([programmes.md](programmes.md#publication-vers-les-machines-anh-138)). | lecture |
 | **Droits de lancement** | Patients autorisés, « Accordé par {nom}, {date} », leur FC max ; boutons **Accorder** (choisir un patient) et **Retirer** (avec confirmation). | admin, gestionnaire |
@@ -529,6 +538,23 @@ retirerait ses gestionnaires sans en mettre aucun. Elle affiche à la place
 gestionnaires actuels, qui pourront être changés ici une fois la migration
 multi-organisation passée. » Le nom et le lieu s'enregistrent comme pour toute
 machine.
+
+**Appairage de la console (ANH-115).** `MachinePairingCard` lit
+`machinePairing.pairingState` (jamais le code, son sel ni son empreinte) et le
+numéro de série de `machineRegistry.getRegistry`. Un code en cours dont
+l'expiration passe pendant que la page est ouverte n'est plus dit dans les
+15 secondes, comptées sur l'horloge du serveur (`serverNow`, §6). **Émettre**
+appelle l'action `pairingCodes.issuePairingCode` sans message de réussite :
+le code n'est dans aucune notification, aucune adresse, aucun presse-papiers.
+Il s'affiche une seule fois dans la fenêtre « Code d'appairage », en grand
+(`XXXX-XXXX`), lu caractère par caractère aux lecteurs d'écran, avec « Expire
+dans m:ss » compté sur l'horloge du serveur (rôle `timer`) et l'avertissement
+de ne le copier nulle part ; passé son expiration, il n'est plus montré
+(« Ce code a expiré… », rôle `status`), et fermer la fenêtre l'oublie. Un
+refus du serveur (`pairing_serial_missing`, `pairing_serial_in_use`) est dit
+en notification d'erreur, sans fenêtre. **Révoquer le code** appelle
+`machinePairing.revokePairingCode` (« Code d'appairage révoqué. »). La carte
+rappelle qu'un appairage révoque aussitôt les autres clés de la machine.
 
 **Clés de la machine (ANH-165).** La machine se présente au tableau de bord
 avec une clé (`MACHINE_API_KEY` sur le Pi) ; elle peut en avoir plusieurs

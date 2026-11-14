@@ -23,7 +23,7 @@ export async function issuedCode(
   w: World,
   actor: Actor = "admin",
   machineId: Id<"machines"> = w.machine,
-): Promise<{ code: string; expiresAt: number }> {
+): Promise<{ code: string; expiresAt: number; serverNow: number }> {
   return await as(w.t, actor).action(api.pairingCodes.issuePairingCode, {
     machineId,
   });

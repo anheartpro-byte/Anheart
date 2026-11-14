@@ -78,6 +78,39 @@ const REFUSAL = {
 };
 
 describe("ANH-115 EX-1 a one-time pairing code, issued from the site", () => {
+  it("serves a machine created without a key: its first key is the one its code gives", async () => {
+    const w = await seedWorld(modules);
+    const created = await as(w.t, "admin").mutation(
+      api.machines.createMachine,
+      {
+        name: "Synthetic machine to pair",
+        organizationId: w.orgA,
+        keyless: true,
+      },
+    );
+    expect(created.apiKey).toBeNull();
+    const keys = () =>
+      w.t.run((ctx) =>
+        ctx.db
+          .query("machine_api_keys")
+          .withIndex("by_machine", (q) => q.eq("machineId", created.machineId))
+          .collect(),
+      );
+    expect(await keys()).toEqual([]);
+    const audited = await w.t.run((ctx) =>
+      ctx.db
+        .query("audit_log")
+        .filter((q) => q.eq(q.field("targetId"), created.machineId))
+        .collect(),
+    );
+    expect(audited.map((row) => row.action)).toEqual(["machine.created"]);
+    await withPiSerial(w, created.machineId);
+    const { code } = await issuedCode(w, "admin", created.machineId);
+    const response = await pair(w.t, { code, serialPi: PI_SERIAL });
+    expect(response.status).toBe(200);
+    expect(await keys()).toHaveLength(1);
+  });
+
   it("is eight Crockford characters, open 30 minutes, kept as a salted scrypt hash only", async () => {
     const { w } = await pairable();
     const { code, expiresAt } = await issuedCode(w, "orgAdmin");
@@ -156,6 +189,7 @@ describe("ANH-115 EX-1 a one-time pairing code, issued from the site", () => {
       createdAt: NOW,
       expiresAt,
       createdByName: expect.any(String),
+      serverNow: NOW,
     });
     expect(JSON.stringify(state)).not.toContain(code.replace("-", ""));
     await as(w.t, "orgAdmin").mutation(api.machinePairing.revokePairingCode, {

@@ -1,5 +1,5 @@
 import { api, internal } from "./_generated/api";
-import { backendOf } from "./test.setup";
+import { backendOf, createdKey } from "./test.setup";
 import { CONTRACT_HEADER, CONTRACT_VERSION } from "./lib/contract";
 
 /**
@@ -28,7 +28,7 @@ export async function machineFixture(
   const created = await admin.mutation(api.machines.createMachine, {
     name: "Synthetic authentication machine",
   });
-  return { t, admin, ...created };
+  return { t, admin, machineId: created.machineId, apiKey: createdKey(created) };
 }
 
 /** What an accepted machine request carries: its key and the contract it speaks. */

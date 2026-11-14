@@ -2457,7 +2457,7 @@ leviers, non faits ici :
 
 | Fonction | Autorisation | Rôle |
 |---|---|---|
-| `createMachine` | admin Anheart | Crée la machine, statut `offline`, dans l'organisation `organizationId` (par défaut celle de l'admin) ; refusée pour une organisation inconnue ou supprimée dans Clerk. Retourne `{machineId, apiKey}` : la clé `anh1.<sélecteur>.<secret>` **n'est visible qu'à ce moment**. Elle est la première ligne de la machine dans `machine_api_keys`, sans expiration. |
+| `createMachine` | admin Anheart | Crée la machine, statut `offline`, dans l'organisation `organizationId` (par défaut celle de l'admin) ; refusée pour une organisation inconnue ou supprimée dans Clerk. Retourne `{machineId, apiKey}` : la clé `anh1.<sélecteur>.<secret>` **n'est visible qu'à ce moment**. Elle est la première ligne de la machine dans `machine_api_keys`, sans expiration. Avec `keyless: true` (ANH-115), aucune clé : `apiKey` vaut `null` et la console reçoit la sienne par un code d'appairage (`pairingCodes.issuePairingCode`) ; seule `machine.created` est auditée. |
 | `getMachine`, `listMachines` | admin ; gestionnaire (ses machines) | Lecture. `listMachines` renvoie `[]` à un `user`. Option `includeDeleted` pour l'admin. `getMachine` renvoie aussi `organizationId`, `softwareVersion`, `contractVersion`, `lastVersionSeenAt`, `medicalParametersVersion`, `medicalParametersStatus` et `medicalParametersReferenceVersion` (voir §2, `machines`). Les deux renvoient `serverNow`, l'heure du serveur dans la réponse, sur laquelle le site vieillit `lastHeartbeat` ([tableau-de-bord.md §6](tableau-de-bord.md#fraîcheur-recalculée-à-lhorloge)). |
 | `updateMachine` | admin, gestionnaire de la machine | Nom, lieu. |
 | `deleteMachine` | admin, gestionnaire de la machine | Suppression douce. Refusée s'il y a une séance `active` ou `pending`. |
@@ -2498,9 +2498,9 @@ réclamation dans `machinePairing.ts`, les règles dans
 
 | Fonction | Autorisation | Rôle |
 |---|---|---|
-| `pairingCodes.issuePairingCode` | admin Anheart ; admin de l'organisation de la machine | Action. `{machineId}` → `{code, expiresAt}`. Le code `XXXX-XXXX` (8 caractères de l'alphabet de Crockford, 40 bits) n'est visible **qu'à ce moment** ; valable 30 minutes, il remplace le code ouvert de la machine. Refus, rien n'étant écrit : `not_authorized`, `machine_not_found` (machine inconnue, supprimée, sans organisation ou d'une autre organisation), `pairing_serial_missing` (le registre ne nomme aucun numéro de série du Pi, ou un qu'une console ne peut pas envoyer), `pairing_serial_in_use` (une autre machine a un code ouvert pour ce numéro). |
+| `pairingCodes.issuePairingCode` | admin Anheart ; admin de l'organisation de la machine | Action. `{machineId}` → `{code, expiresAt, serverNow}`. Le code `XXXX-XXXX` (8 caractères de l'alphabet de Crockford, 40 bits) n'est visible **qu'à ce moment** ; valable 30 minutes, il remplace le code ouvert de la machine. Refus, rien n'étant écrit : `not_authorized`, `machine_not_found` (machine inconnue, supprimée, sans organisation ou d'une autre organisation), `pairing_serial_missing` (le registre ne nomme aucun numéro de série du Pi, ou un qu'une console ne peut pas envoyer), `pairing_serial_in_use` (une autre machine a un code ouvert pour ce numéro). |
 | `machinePairing.revokePairingCode` | idem | `{machineId}` : le code ouvert de la machine ne sert plus. Sans code ouvert, rien n'est écrit. |
-| `machinePairing.pairingState` | idem ; `null` pour tout autre rôle | `{machineId}` → `{createdAt, expiresAt, createdByName}` du code que la machine peut faire réclamer maintenant, ou `null`. Jamais le code, son sel ni son empreinte. |
+| `machinePairing.pairingState` | idem ; `null` pour tout autre rôle | `{machineId}` → `{createdAt, expiresAt, createdByName, serverNow}` du code que la machine peut faire réclamer maintenant, ou `null` ; `serverNow`, l'horloge du serveur, pour que le site compte le temps qui reste sans se fier à la sienne. Jamais le code, son sel ni son empreinte. |
 
 Fonctions internes : `prepareIssue` (la limite d'écriture du compte, son
 droit et le numéro de série, avant le tirage), `storeIssuedCode` (les mêmes

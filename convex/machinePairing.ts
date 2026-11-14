@@ -174,11 +174,12 @@ async function closeOpenCodes(
 /**
  * The code `pairingCodes.issuePairingCode` drew, as its salt and scrypt hash:
  * every check again, every open code of the machine closed (replaced), then
- * the new one, open for 30 minutes. Answers when it expires.
+ * the new one, open for 30 minutes. Answers when it expires, and the
+ * server's clock now (`serverNow`, lib/server-clock.ts on the site).
  */
 export const storeIssuedCode = internalMutation({
   args: { machineId: v.id("machines"), salt: v.string(), hash: v.string() },
-  returns: v.object({ expiresAt: v.number() }),
+  returns: v.object({ expiresAt: v.number(), serverNow: v.number() }),
   handler: async (ctx, args) => {
     const caller = await requireRole(ctx, ORGANIZATION_ADMIN_ROLES);
     const now = Date.now();
@@ -209,7 +210,7 @@ export const storeIssuedCode = internalMutation({
       targetId: pairingId,
       details: { machineId: machine._id, expiresAt },
     });
-    return { expiresAt };
+    return { expiresAt, serverNow: now };
   },
 });
 
@@ -231,9 +232,10 @@ export const revokePairingCode = mutation({
 });
 
 /**
- * Whether the machine has a code a console can claim now, and until when:
- * never the code, its salt or its hash. Null when it has none, and for anyone
- * but an admin of the machine's organisation (or the Anheart admin).
+ * Whether the machine has a code a console can claim now, and until when,
+ * with the server's clock (`serverNow`): never the code, its salt or its hash.
+ * Null when it has none, and for anyone but an admin of the machine's
+ * organisation (or the Anheart admin).
  */
 export const pairingState = query({
   args: { machineId: v.id("machines") },
@@ -243,6 +245,7 @@ export const pairingState = query({
       createdAt: v.number(),
       expiresAt: v.number(),
       createdByName: v.union(v.string(), v.null()),
+      serverNow: v.number(),
     }),
   ),
   handler: async (ctx, args) => {
@@ -271,6 +274,7 @@ export const pairingState = query({
       expiresAt: live.expiresAt,
       createdByName:
         author === null ? null : `${author.firstName} ${author.lastName}`,
+      serverNow: now,
     };
   },
 });

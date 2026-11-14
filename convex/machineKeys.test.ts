@@ -29,7 +29,7 @@ import {
   machineHeaders,
   machineRoutes,
 } from "./machineAuth.fixtures";
-import { as, modules, NOW, seedWorld } from "./test.setup";
+import { as, createdKey, modules, NOW, seedWorld } from "./test.setup";
 
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
@@ -287,7 +287,7 @@ describe("ANH-165 EX-2 a rotation keeps both keys valid during the overlap", () 
     await rotate(f, { overlapMinutes: 0 });
 
     expect(await keysOf(f, other.machineId)).toEqual(before);
-    expect(await status(f, other.apiKey)).toBe(200);
+    expect(await status(f, createdKey(other))).toBe(200);
   });
 
   it("issues no key for a machine that does not exist any more", async () => {

@@ -117,6 +117,11 @@ async function writeMachineGestionnaires(
  * The machine belongs to exactly one organisation: `organizationId`, or the
  * admin's own when it is not given. Only gestionnaires of that organisation
  * can be assigned.
+ *
+ * `keyless` (ANH-115): a machine to pair, created without a key; its console
+ * receives its own with a pairing code (`pairingCodes.issuePairingCode`), and
+ * `apiKey` is null. Otherwise its first key is answered, the only time it is
+ * shown.
  */
 export const createMachine = mutation({
   args: {
@@ -124,10 +129,11 @@ export const createMachine = mutation({
     location: v.optional(v.string()),
     gestionnaireIds: v.optional(v.array(v.id("users"))), // Gestionnaires to assign this machine to
     organizationId: v.optional(v.id("organizations")), // Defaults to the admin's organisation
+    keyless: v.optional(v.boolean()),
   },
   returns: v.object({
     machineId: v.id("machines"),
-    apiKey: v.string(),
+    apiKey: v.union(v.string(), v.null()),
   }),
   handler: async (ctx, args) => {
     await limitUser(ctx);
@@ -158,20 +164,25 @@ export const createMachine = mutation({
       action: "machine.created",
       targetId: machineId,
     });
-    // Its first key, in `machine_api_keys` like every key (ANH-165).
-    const { apiKey, keyId } = await insertMachineKey(ctx, machineId, {
-      createdBy: currentUser._id,
-      expiresAt: undefined,
-      now,
-    });
-    await audit(ctx, {
-      actor: userActor(currentUser),
-      source: "site",
-      organizationId,
-      action: "machine_key.created",
-      targetId: keyId,
-      details: { machineId, count: 0 },
-    });
+    // Its first key, in `machine_api_keys` like every key (ANH-165), unless
+    // its console is to be paired.
+    let apiKey: string | null = null;
+    if (args.keyless !== true) {
+      const first = await insertMachineKey(ctx, machineId, {
+        createdBy: currentUser._id,
+        expiresAt: undefined,
+        now,
+      });
+      apiKey = first.apiKey;
+      await audit(ctx, {
+        actor: userActor(currentUser),
+        source: "site",
+        organizationId,
+        action: "machine_key.created",
+        targetId: first.keyId,
+        details: { machineId, count: 0 },
+      });
+    }
 
     // Assign machine to gestionnaires: the first one kept owns it.
     const links = await writeMachineGestionnaires(
@@ -191,7 +202,7 @@ export const createMachine = mutation({
       });
     }
 
-    // Return plain API key - this is the only time it's visible!
+    // The plain API key, if any: this is the only time it's visible.
     return {
       machineId,
       apiKey,

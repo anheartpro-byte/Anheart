@@ -341,6 +341,105 @@ describe("ANH-203 machine window: the API key, shown once after a creation", () 
   );
 });
 
+describe("ANH-115 machine window: a machine to pair", () => {
+  const IDENTITY = "machineRegistry:updateIdentity";
+  const ISSUE = "pairingCodes:issuePairingCode";
+  const SERIAL = "10000000C0FFEE42";
+  // Made up, and of the form of a code, not of a key.
+  const CODE = "7KQ2-M4XP";
+  const SERVER_NOW = 1_800_000_000_000;
+  const pairing = fr.machinePairing;
+
+  beforeEach(() => {
+    mutation(CREATE).mockResolvedValue({ machineId, apiKey: null });
+    mutation(IDENTITY).mockResolvedValue(null);
+    mutation(ISSUE).mockResolvedValue({
+      code: CODE,
+      expiresAt: SERVER_NOW + 30 * 60_000,
+      serverNow: SERVER_NOW,
+    });
+  });
+
+  async function created(serialPi = SERIAL) {
+    signedInAs("admin");
+    const opened = open();
+    await type(field(opened.screen, "name"), "Centri Lyon");
+    await type(field(opened.screen, "serialPi"), serialPi);
+    await submit(opened.screen.form());
+    return opened;
+  }
+
+  it("creates the machine without a key, names its Pi, issues its code and shows it once", async () => {
+    const { screen, onSuccess } = await created();
+
+    expect(mutationCalls()).toEqual({
+      [CREATE]: [
+        [{ name: "Centri Lyon", location: undefined, gestionnaireIds: [], keyless: true }],
+      ],
+      [IDENTITY]: [[{ machineId, serialPi: SERIAL }]],
+      [ISSUE]: [[{ machineId }]],
+    });
+    const order = [CREATE, IDENTITY, ISSUE].map(
+      (name) => mutation(name).mock.invocationCallOrder[0],
+    );
+    expect(order).toEqual([...order].sort((a, b) => a - b));
+    expect(screen.text()).toContain(CODE);
+    expect(screen.text()).toContain("Expire dans 30:00");
+    expect(screen.text()).toContain(pairing.codeWarning);
+    expect(screen.tag("form")).toEqual([]);
+    expect(screen.hasButton(fr.common.copy)).toBe(false);
+    // The creation is said; the code never is.
+    expect(shown()).toEqual([{ kind: "success", message: t.createSuccess }]);
+    expect(onSuccess).not.toHaveBeenCalled();
+  });
+
+  it("forgets the code once its window is closed, and tells the page a machine was created", async () => {
+    const { screen, onOpenChange, onSuccess } = await created();
+
+    await click(screen.button(pairing.codeDone));
+
+    expect(onOpenChange.mock.calls).toEqual([[false]]);
+    expect(onSuccess).toHaveBeenCalledTimes(1);
+    expect(screen.text()).not.toContain(CODE);
+  });
+
+  it("refuses a serial number no console can send: message under the field, nothing sent", async () => {
+    const { screen } = await created("not a serial!");
+
+    expect(screen.text()).toContain(t.form.serialPiInvalid);
+    expect(mutationCalls()).toEqual({});
+  });
+
+  it.each([
+    ["naming its Pi", IDENTITY],
+    ["issuing its code", ISSUE],
+  ])(
+    "says the machine exists without a key when %s fails, and issues no code",
+    async (_step, failing) => {
+      mutation(failing).mockRejectedValue(new Error("Refused for the test."));
+      const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+      const { screen, onSuccess } = await created();
+
+      expect(screen.text()).toContain(t.form.pairingIncompleteTitle);
+      expect(screen.text()).toContain("Refused for the test.");
+      expect(screen.text()).not.toContain(CODE);
+      if (failing === IDENTITY) expect(mutation(ISSUE)).not.toHaveBeenCalled();
+      await click(screen.button(fr.common.close));
+      expect(onSuccess).toHaveBeenCalledTimes(1);
+      logged.mockRestore();
+    },
+  );
+
+  it("offers no serial number to an edit", () => {
+    signedInAs("admin");
+    const { screen } = open({ machine: MACHINE });
+
+    expect(
+      screen.all((element) => element.localName === "input" && element.name === "serialPi"),
+    ).toEqual([]);
+  });
+});
+
 describe("ANH-203 machine window: editing", () => {
   it("opens on the machine's name and place, and says it edits", () => {
     signedInAs("admin");

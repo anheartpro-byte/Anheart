@@ -46,7 +46,7 @@ function drawnCode(): string {
 
 /**
  * Issue a pairing code for the machine and answer it, the only time it is
- * shown, with when it expires (30 minutes). Any open code of the machine is
+ * shown, with when it expires (30 minutes) and the server's clock now. Any open code of the machine is
  * replaced. Admins of the machine's organisation and the Anheart admin only,
  * as a key (`machineKeys.createMachineKey`); refused, with nothing written,
  * for a machine whose registry holds no Pi serial number
@@ -55,23 +55,28 @@ function drawnCode(): string {
  */
 export const issuePairingCode = action({
   args: { machineId: v.id("machines") },
-  returns: v.object({ code: v.string(), expiresAt: v.number() }),
-  handler: async (ctx, args): Promise<{ code: string; expiresAt: number }> => {
+  returns: v.object({
+    code: v.string(),
+    expiresAt: v.number(),
+    serverNow: v.number(),
+  }),
+  handler: async (
+    ctx,
+    args,
+  ): Promise<{ code: string; expiresAt: number; serverNow: number }> => {
     await ctx.runMutation(internal.machinePairing.prepareIssue, {
       machineId: args.machineId,
     });
     const code = drawnCode();
     const salt = randomBytes(PAIRING_SCRYPT.saltBytes);
     const hash = await hashed(code, salt);
-    const { expiresAt }: { expiresAt: number } = await ctx.runMutation(
-      internal.machinePairing.storeIssuedCode,
-      {
+    const stored: { expiresAt: number; serverNow: number } =
+      await ctx.runMutation(internal.machinePairing.storeIssuedCode, {
         machineId: args.machineId,
         salt: salt.toString("base64"),
         hash: hash.toString("base64"),
-      },
-    );
-    return { code: shownCode(code), expiresAt };
+      });
+    return { code: shownCode(code), ...stored };
   },
 });
 

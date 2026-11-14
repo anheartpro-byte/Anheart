@@ -7,6 +7,12 @@ import { z } from "zod";
 import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { useMutationWithFeedback } from "@/hooks/use-mutation-with-feedback";
+import { useActionWithFeedback } from "@/hooks/use-action-with-feedback";
+import { normalizedSerial } from "@/convex/lib/machinePairing";
+import {
+  PairingCodeDialog,
+  type IssuedPairingCode,
+} from "@/components/machines/PairingCodeDialog";
 import { pushFeedback } from "@/lib/feedback";
 import { Id } from "@/convex/_generated/dataModel";
 import { useTranslations } from "next-intl";
@@ -44,13 +50,24 @@ import {
 import { Copy, Check, AlertTriangle, Loader2 } from "lucide-react";
 
 // Validation messages are passed in so they follow the active locale.
-const createMachineSchema = (messages: { nameRequired: string }) =>
+const createMachineSchema = (messages: {
+  nameRequired: string;
+  serialPiInvalid: string;
+}) =>
   z.object({
     name: z.string().min(1, messages.nameRequired).max(100),
     location: z.string().max(200).optional(),
     gestionnaireIds: z.array(z.string()).optional(),
     // Creation by the Anheart admin only: the machine's organisation.
     organizationId: z.string().optional(),
+    // Creation only (ANH-115): the Pi to pair, read as the server reads it.
+    serialPi: z
+      .string()
+      .optional()
+      .refine(
+        (serial) => !serial?.trim() || normalizedSerial(serial) !== null,
+        messages.serialPiInvalid,
+      ),
   });
 
 type MachineFormValues = z.infer<ReturnType<typeof createMachineSchema>>;
@@ -84,6 +101,9 @@ export function MachineFormModal({
 
   const [apiKey, setApiKey] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  // A machine to pair (ANH-115): its code, shown once, or why it was not issued.
+  const [issued, setIssued] = useState<IssuedPairingCode | null>(null);
+  const [incomplete, setIncomplete] = useState<string | null>(null);
 
   const currentUser = useQuery(api.users.getCurrentUser);
   // Only the Anheart admin creates machines, in any organisation: they choose
@@ -119,11 +139,18 @@ export function MachineFormModal({
   const assignMachineToGestionnaires = useMutationWithFeedback(
     api.machines.assignMachineToGestionnaires,
   );
+  const updateIdentity = useMutationWithFeedback(
+    api.machineRegistry.updateIdentity,
+  );
+  const issuePairingCode = useActionWithFeedback(
+    api.pairingCodes.issuePairingCode,
+  );
 
   const machineSchema = useMemo(
     () =>
       createMachineSchema({
         nameRequired: t("machines.form.nameRequired"),
+        serialPiInvalid: t("machines.form.serialPiInvalid"),
       }),
     [t],
   );
@@ -134,6 +161,7 @@ export function MachineFormModal({
       name: "",
       location: "",
       gestionnaireIds: [],
+      serialPi: "",
     },
   });
 
@@ -152,6 +180,7 @@ export function MachineFormModal({
         name: machine?.name ?? "",
         location: machine?.location ?? "",
         gestionnaireIds: machine?.gestionnaires?.map((g) => g._id) ?? [],
+        serialPi: "",
       });
     }
     filledFor.current = target;
@@ -197,17 +226,28 @@ export function MachineFormModal({
       onOpenChange(false);
       onSuccess?.();
     } else {
+      // A Pi named: the machine is created without a key, and its console
+      // gets its own from a pairing code (ANH-115). None: a key to copy.
+      const serialPi = values.serialPi?.trim() ? values.serialPi : undefined;
       const created = await createMachine(
         {
           name: values.name,
           location: values.location || undefined,
           gestionnaireIds: values.gestionnaireIds as Id<"users">[] | undefined,
           organizationId: machineOrganization,
+          keyless: serialPi === undefined ? undefined : true,
         },
         { success: t("machines.createSuccess") },
       );
       if (!created.ok) return showFailure(created.message);
-      setApiKey(created.value.apiKey);
+      if (serialPi === undefined) return setApiKey(created.value.apiKey);
+      const { machineId } = created.value;
+      const identified = await updateIdentity({ machineId, serialPi });
+      if (!identified.ok) return setIncomplete(identified.message);
+      // No message on success: the code is in its window, never in a message.
+      const code = await issuePairingCode({ machineId });
+      if (!code.ok) return setIncomplete(code.message);
+      setIssued(code.value);
     }
   };
 
@@ -220,12 +260,36 @@ export function MachineFormModal({
   };
 
   const handleClose = () => {
-    const hadApiKey = !!apiKey;
+    const created = !!apiKey || issued !== null || incomplete !== null;
     setApiKey(null);
+    setIssued(null);
+    setIncomplete(null);
     form.reset();
     onOpenChange(false);
-    if (hadApiKey) onSuccess?.();
+    if (created) onSuccess?.();
   };
+
+  // A machine to pair: its code, shown once, then nothing kept.
+  if (issued) {
+    return <PairingCodeDialog issued={issued} onClose={handleClose} />;
+  }
+
+  // A machine to pair whose code could not be issued: it exists, keyless.
+  if (incomplete !== null) {
+    return (
+      <Dialog open={open} onOpenChange={handleClose}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>{t("machines.form.pairingIncompleteTitle")}</DialogTitle>
+            <DialogDescription>
+              {t("machines.form.pairingIncomplete", { reason: incomplete })}
+            </DialogDescription>
+          </DialogHeader>
+          <Button onClick={handleClose}>{t("common.close")}</Button>
+        </DialogContent>
+      </Dialog>
+    );
+  }
 
   // Show API key dialog after creation
   if (apiKey) {
@@ -322,6 +386,30 @@ export function MachineFormModal({
                 </FormItem>
               )}
             />
+
+            {/* The Pi of a new machine, to pair its console (ANH-115) */}
+            {!isEditing && (
+              <FormField
+                control={form.control}
+                name="serialPi"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>{t("machines.form.serialPi")}</FormLabel>
+                    <FormControl>
+                      <Input
+                        autoComplete="off"
+                        spellCheck={false}
+                        {...field}
+                      />
+                    </FormControl>
+                    <FormDescription>
+                      {t("machines.form.serialPiDescription")}
+                    </FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+            )}
 
             {/* Organisation of a new machine (Anheart admin) */}
             {choosesOrganization && organizations && organizations.length > 0 && (
