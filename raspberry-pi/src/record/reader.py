@@ -2,7 +2,9 @@ import csv
 import hashlib
 import io
 import json
+import stat
 import zlib
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
@@ -46,12 +48,52 @@ six channels at two bytes (2 400 bytes) and its header line (512 allowed), 39 00
 = 113 568 000 bytes. A real six-channel record of 2 h 10 min holds 39 000 x 2 635, about
 102.8 MB.
 
-The reader keeps every decoded block, and a decoded block takes about twenty times its
-bytes in memory: a record at this bound needs about 2.3 GB to be read, as a real one of
-that length does. However small an archive is compressed, a record never needs more."""
+The reader keeps every decoded block, and a decoded block takes at most about twenty
+times its bytes in memory (16.6 measured): a record at this bound needs at most about
+2.3 GB for its ECG, as a real one of that length does. With the files of
+:data:`FILE_BOUNDS`, at most about 4 GB for the whole record."""
 
 GZIP_SIZE_BYTES: Final[int] = 4
 """The trailer field of a gzip member that gives its decompressed size (ISIZE)."""
+
+LARGEST_BLOCK_FILE: Final[int] = MAX_BLOCK_HEADER_BYTES + MAX_RAW_BLOCK_BYTES + 64 * 1024
+"""The largest a raw block's file can be: what it can hold, and room for gzip's overhead,
+which on data that does not compress is a few bytes per 16 KiB."""
+
+FILE_BOUNDS: Final[Mapping[str, int]] = {
+    "manifest.json": 2 * 1024 * 1024,
+    "checksums.sha256": (MAX_RAW_BLOCKS + 16) * 128,
+    "ticks.csv": LONGEST_RECORD_S * 5 * 512,
+    "sensors.csv": LONGEST_RECORD_S * len(SensorKind) * 128,
+    "events.jsonl": LONGEST_RECORD_S * 20 * 512,
+    "drive_frames.jsonl": LONGEST_RECORD_S * 128 * 256,
+}
+"""The files the reader reads whole, each no larger than the longest record makes it.
+
+* ``manifest.json``: 2 MiB, what the deposit accepts;
+* ``checksums.sha256``: a line of at most 128 bytes (87 for a block) per block and per
+  other file, 4 994 048 bytes;
+* ``ticks.csv``: five rows a second, 512 bytes allowed each (344 is the longest written,
+  every column filled), 19 968 000 bytes;
+* ``sensors.csv``: a row a second for each of the six channels, 128 bytes allowed each (61
+  the longest written), 5 990 400 bytes;
+* ``events.jsonl``: twenty events a second, 512 bytes allowed each (126 the longest
+  written; a console makes about five a second at its busiest), 79 872 000 bytes;
+* ``drive_frames.jsonl``: 128 frames a second, 256 bytes allowed each (106 the longest
+  written): the native driver makes about 30 a second, and about 120 with the SDK's
+  transport calls kept, the bench diagnostic of the link; 255 590 400 bytes.
+
+Each over 7 800 s (:data:`LONGEST_RECORD_S`). Read, a tick or a sensor row takes at most
+about ten times its bytes in memory, an event or a frame about four: at these bounds,
+about 200, 60, 320 and 1 020 MB, and the ECG about 2 300 (:data:`MAX_RAW_BYTES`), at most
+about 4 GB in all. A real record of this length without the link's diagnostic takes
+much less."""
+
+RAW_BLOCKS_ABOVE_LONGEST_RECORD: Final[str] = "raw_blocks_above_longest_record"
+RAW_BYTES_ABOVE_LONGEST_RECORD: Final[str] = "raw_bytes_above_longest_record"
+FILE_ABOVE_ITS_BOUND: Final[str] = "file_above_its_bound"
+NOT_A_REGULAR_FILE: Final[str] = "not_a_regular_file"
+"""Why ``read`` refuses a record before reading it, as the ``detail`` of its error."""
 
 CSV_TEXT_COLUMNS: Final = frozenset(
     {
@@ -137,7 +179,9 @@ def _checksums(path: Path, warnings: list[ReadWarning]) -> None:
         digest, name = line.split("  ", 1)
         member = path / name
         if member.resolve().is_relative_to(path.resolve()) and member.is_file():
-            actual = hashlib.sha256(member.read_bytes()).hexdigest()
+            # Hashed as it is read, a file the reader keeps nothing of is never held whole.
+            with member.open("rb") as content:
+                actual = hashlib.file_digest(content, "sha256").hexdigest()
             if actual != digest:
                 warnings.append(ReadWarning(name, "checksum_mismatch"))
         else:
@@ -152,12 +196,12 @@ def _checksums(path: Path, warnings: list[ReadWarning]) -> None:
 def read(path: Path) -> Result[Recording, RecordError]:
     warnings: list[ReadWarning] = []
     try:
+        # Before one byte is read: the reader keeps what it reads, all of it.
+        outside = _outside_bounds(path)
+        if outside is not None:
+            return Err(RecordError("read", outside))
         manifest = MANIFEST.validate_json((path / "manifest.json").read_bytes())
         validate_manifest(manifest, Privacy())
-        # Before one block is decoded: the reader keeps them all.
-        above = _raw_above_longest_record(path / "ecg_raw")
-        if above is not None:
-            return Err(RecordError("read", above))
         _checksums(path, warnings)
         rows = _csv(path / "ticks.csv", ROW, TICK_COLUMNS, warnings)
         for row in rows:
@@ -184,29 +228,56 @@ def read(path: Path) -> Result[Recording, RecordError]:
     return Ok(recording)
 
 
-def _inflated_size(block: Path) -> int:
-    """The size a gzip block says it holds decompressed, from its last four bytes.
+def _inflated_size(block: Path, size: int) -> int:
+    """The size a gzip block of ``size`` bytes says it holds decompressed (its last four).
 
     Counted for no more than a block can hold: a block cut short while it was being
     written ends in other bytes than its trailer, and is read as ``truncated``. A block
     whose trailer lies fails its own check when it is decoded (``inflate``): a block
     that is read holds what it says.
     """
+    if size < GZIP_SIZE_BYTES:
+        return 0
     with block.open("rb") as content:
-        if content.seek(0, io.SEEK_END) < GZIP_SIZE_BYTES:
-            return 0
-        content.seek(-GZIP_SIZE_BYTES, io.SEEK_END)
+        content.seek(size - GZIP_SIZE_BYTES)
         said = int.from_bytes(content.read(GZIP_SIZE_BYTES), "little")
     return min(said, MAX_BLOCK_HEADER_BYTES + MAX_RAW_BLOCK_BYTES)
+
+
+def _outside_bounds(path: Path) -> str | None:
+    """Why the files ``read`` reads whole are not what a record holds, or ``None``.
+
+    From what the file system says, before a byte is read: each a regular file, never a
+    link, a pipe or a device (a folder given as it is, not extracted, can hold one), and
+    no larger than its bound (:data:`FILE_BOUNDS`), then the raw blocks.
+    """
+    for name, bound in FILE_BOUNDS.items():
+        try:
+            status = (path / name).lstat()
+        except FileNotFoundError:
+            continue  # read as missing, as ever
+        if not stat.S_ISREG(status.st_mode):
+            return NOT_A_REGULAR_FILE
+        if status.st_size > bound:
+            return FILE_ABOVE_ITS_BOUND
+    return _raw_above_longest_record(path / "ecg_raw")
 
 
 def _raw_above_longest_record(path: Path) -> str | None:
     """Why the raw blocks under ``path`` hold more than the longest record, or ``None``."""
     blocks = sorted(path.glob("*.bin.gz"))
     if len(blocks) > MAX_RAW_BLOCKS:
-        return "raw_blocks_above_longest_record"
-    if sum(_inflated_size(block) for block in blocks) > MAX_RAW_BYTES:
-        return "raw_bytes_above_longest_record"
+        return RAW_BLOCKS_ABOVE_LONGEST_RECORD
+    sizes = [block.lstat() for block in blocks]
+    if any(not stat.S_ISREG(status.st_mode) for status in sizes):
+        return NOT_A_REGULAR_FILE
+    if any(status.st_size > LARGEST_BLOCK_FILE for status in sizes):
+        return FILE_ABOVE_ITS_BOUND
+    said = sum(
+        _inflated_size(block, status.st_size) for block, status in zip(blocks, sizes, strict=True)
+    )
+    if said > MAX_RAW_BYTES:
+        return RAW_BYTES_ABOVE_LONGEST_RECORD
     return None
 
 

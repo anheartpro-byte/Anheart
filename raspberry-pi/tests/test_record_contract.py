@@ -2,6 +2,7 @@ import dataclasses
 import gzip
 import hashlib
 import json
+import os
 import zlib
 from dataclasses import replace
 from pathlib import Path
@@ -37,6 +38,7 @@ from src.record.schema import (
     Manifest,
     Preflight,
     Profile,
+    ReadWarning,
     RecordedBallast,
     RecordError,
 )
@@ -417,6 +419,85 @@ def test_the_bound_holds_a_real_six_channel_record_of_the_longest_length() -> No
     per_second = RAW_BLOCKS_PER_SECOND * len(content)
     assert per_second * reader.LONGEST_RECORD_S < reader.MAX_RAW_BYTES
     assert (reader.MAX_RAW_BLOCKS, reader.MAX_RAW_BYTES) == (39_000, 113_568_000)
+
+
+def _closed_record(tmp_path: Path) -> Path:
+    """A closed record, every file the reader reads whole on its disk."""
+    recording = writer(tmp_path)
+    assert isinstance(recording.tick(row()), Ok)
+    assert isinstance(recording.event(Event(t=0.1, kind=EventKind.WARNING, detail="x")), Ok)
+    frame = DriveFrame(t=0.1, kind="write_request", register=8602, value=100, ok=True, latency_ms=0)
+    assert isinstance(recording.frame(frame), Ok)
+    block = RawBlock(Header(0, 0.0, 1, ("ECG",)), ((7,),))
+    assert isinstance(recording.raw(block), Ok)
+    assert isinstance(recording.close(ManualClock(epoch_millis=UnixMillis(1)), "x"), Ok)
+    return recording.path
+
+
+@pytest.mark.parametrize("name", sorted(reader.FILE_BOUNDS))
+def test_a_file_larger_than_the_longest_record_is_refused_before_a_byte_is_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, name: str
+) -> None:
+    """The reader keeps what it reads, all of it: a file above its bound is refused from
+    its size, the record left unread, and one at its bound is read."""
+    path = _closed_record(tmp_path)
+    size = (path / name).stat().st_size
+    assert size > 0
+    monkeypatch.setattr(reader, "FILE_BOUNDS", {**reader.FILE_BOUNDS, name: size})
+    assert isinstance(read(path), Ok)
+
+    def never(_path: Path, _warnings: list[ReadWarning]) -> list[str]:
+        raise AssertionError("a file was read before its size was checked")
+
+    monkeypatch.setattr(reader, "FILE_BOUNDS", {**reader.FILE_BOUNDS, name: size - 1})
+    monkeypatch.setattr(reader, "complete_lines", never)
+    assert read(path) == Err(RecordError("read", reader.FILE_ABOVE_ITS_BOUND))
+
+
+def test_a_raw_block_file_larger_than_a_block_can_be_is_refused(tmp_path: Path) -> None:
+    path = _closed_record(tmp_path)
+    (path / "ecg_raw" / "000099.bin.gz").write_bytes(b"\0" * (reader.LARGEST_BLOCK_FILE + 1))
+    assert read(path) == Err(RecordError("read", reader.FILE_ABOVE_ITS_BOUND))
+
+
+def test_a_folder_holding_a_pipe_or_a_link_where_a_file_belongs_is_refused_unread(
+    tmp_path: Path,
+) -> None:
+    """A folder given as it is, not extracted: a pipe would block the reader, a link to
+    an endless device would be read without end. Neither is a regular file."""
+    piped = _closed_record(tmp_path / "piped")
+    (piped / "ticks.csv").unlink()
+    os.mkfifo(piped / "ticks.csv")
+    assert read(piped) == Err(RecordError("read", reader.NOT_A_REGULAR_FILE))
+    linked = _closed_record(tmp_path / "linked")
+    (linked / "ecg_raw" / "000099.bin.gz").symlink_to("/dev/zero")
+    assert read(linked) == Err(RecordError("read", reader.NOT_A_REGULAR_FILE))
+    zero = _closed_record(tmp_path / "zero")
+    (zero / "manifest.json").unlink()
+    (zero / "manifest.json").symlink_to("/dev/zero")
+    assert read(zero) == Err(RecordError("read", reader.NOT_A_REGULAR_FILE))
+
+
+def test_the_file_bounds_hold_a_real_record_of_the_longest_length() -> None:
+    """The bounds' own arithmetic, against the longest lines a console writes (every
+    column filled) and its busiest rates, over the longest record."""
+    longest = reader.LONGEST_RECORD_S
+    real = {
+        "ticks.csv": 5 * 344,
+        "sensors.csv": len(SensorKind) * 61,
+        "events.jsonl": 5 * 126,
+        "drive_frames.jsonl": 120 * 106,
+    }
+    for name, per_second in real.items():
+        assert per_second * longest < reader.FILE_BOUNDS[name], name
+    assert dict(reader.FILE_BOUNDS) == {
+        "manifest.json": 2_097_152,
+        "checksums.sha256": 4_994_048,
+        "ticks.csv": 19_968_000,
+        "sensors.csv": 5_990_400,
+        "events.jsonl": 79_872_000,
+        "drive_frames.jsonl": 255_590_400,
+    }
 
 
 def test_ex7_configured_sensor_metrics_are_published_at_one_hz(tmp_path: Path) -> None:
