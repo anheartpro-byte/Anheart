@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import functools
+import logging
 from collections.abc import Awaitable, Callable, Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Final, Literal
@@ -29,6 +30,8 @@ from src.units import Monotonic, Seconds
 
 if TYPE_CHECKING:
     from src.cloud_sync import CloudError, CloudTransport, Document
+
+_logger: Final[logging.Logger] = logging.getLogger(__name__)
 
 IO_TIMEOUT: Final[Seconds] = Seconds(30)
 MAX_BACKOFF: Final[Seconds] = Seconds(300)
@@ -77,9 +80,16 @@ class RecordDeposit:
         self._active: asyncio.Task[None] | None = None
         self._next: Monotonic = clock.monotonic()
         self._backoff: Seconds = MIN_BACKOFF
+        """The wait after the next failure of the whole queue: 2 s, doubled up to 300 s."""
         self._record_path: Path | None = None
         self._after: Path | None = None
         self._verified: dict[str, str] = {}
+        self._tried: Path | None = None
+        self._refused: Path | None = None
+        self._waits: dict[Path, tuple[Seconds, Monotonic]] = {}
+        """Per record a file of which the server refused: its own wait, and when it ends."""
+        self._unread: set[Path] = set()
+        """Records already said unreadable. Touched only by the one disk worker."""
 
     def pause(self) -> None:
         if self._active is not None:
@@ -106,23 +116,58 @@ class RecordDeposit:
 
     async def step(self) -> None:
         succeeded = await self._attempt()
+        now = self._clock.monotonic()
         if not succeeded:
             self._after = self._record_path
-        self._backoff = MIN_BACKOFF if succeeded else Seconds(min(MAX_BACKOFF, self._backoff * 2))
+        refused = self._refused
+        if refused is not None:
+            # A file the server refused, sent again as it was: this record alone waits, its
+            # own delay doubling from 2 s to 300 s, at the back of the queue; a new or healthy
+            # record is tried at once.
+            held = self._waits.get(refused)
+            wait = MIN_BACKOFF if held is None else Seconds(min(MAX_BACKOFF, held[0] * 2))
+            self._waits[refused] = (wait, Monotonic(now + wait))
+            succeeded = True
+        elif succeeded and self._tried is not None:
+            self._waits.pop(self._tried, None)
         delay = SUCCESS_DELAY if succeeded else self._backoff
-        self._next = Monotonic(self._clock.monotonic() + delay)
+        self._backoff = MIN_BACKOFF if succeeded else Seconds(min(MAX_BACKOFF, self._backoff * 2))
+        self._next = Monotonic(now + delay)
+
+    def _unreadable(self, path: Path) -> bool:
+        """Say once in the system log that a record cannot be read: its name, nothing of it.
+
+        Answers whether it was said before. Then the record is passed over like a waiting
+        one, read again at each step, and no longer holds the whole queue back.
+        """
+        if path in self._unread:
+            return True
+        self._unread.add(path)
+        _logger.warning(
+            "deposit: the record %r could not be read (its cursor, its manifest or its files): "
+            "it is passed over, read again at each step, and stays on the card",
+            path.name,
+        )
+        return False
 
     async def _work[T](self, work: Callable[[], T]) -> Result[T, RecordError]:
         async with self._disk:
             return await self._io.run(work, IO_TIMEOUT)
 
     async def _attempt(self) -> bool:
-        listed = await self._work(functools.partial(next_record, self._root, self._after))
+        self._tried = None
+        self._refused = None
+        now = self._clock.monotonic()
+        waiting = frozenset(path for path, (_wait, ends) in self._waits.items() if ends > now)
+        listed = await self._work(
+            functools.partial(next_record, self._root, self._after, waiting, self._unreadable)
+        )
         if isinstance(listed, Err) or isinstance(listed.value, Err):
             return False
         record = listed.value.value
         if record is None:
             return True
+        self._tried = record.path
         if self._record_path != record.path:
             self._record_path = record.path
             self._verified = {}
@@ -162,11 +207,17 @@ class RecordDeposit:
             pending.append((name, rejected))
             if len(pending) >= FILES_PER_STEP:
                 break
-        return all(
+        sent = all(
             await asyncio.gather(
                 *(self._send_bounded(record, name, rejected) for name, rejected in pending)
             )
         )
+        # A file the server refused, sent again as it was: only a later server can take it.
+        # Not a success: this record waits, doubling, and the records after it go first,
+        # instead of the same refusal coming back every second.
+        refused = sent and any(rejected for _name, rejected in pending)
+        self._refused = record.path if refused else None
+        return sent and not refused
 
     async def _complete(self, record: DepositRecord, remote: RemoteStatus) -> bool:
         cursor = remote.cursor

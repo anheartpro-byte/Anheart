@@ -43,7 +43,7 @@ import {
   machineValidationLevelValidator,
   machineValidationValidator,
 } from "./schema";
-import { ARMING_REFUSAL_CODES } from "./training";
+import { endedBeforeStart } from "./sessionReports";
 
 const configurationKeyValidator = v.union(
   v.literal("PROGRAMS_ENABLED"),
@@ -341,14 +341,7 @@ async function alertsOf(
   const unvalidated = sessions.filter((session) => {
     if (session.status === "pending") return false;
     // Exclude only known pre-start endings; every other ending counts (fail closed).
-    if (
-      session.status === "failed" &&
-      (ARMING_REFUSAL_CODES.some((code) => code === session.endCode) ||
-        (session.endCode === undefined &&
-          (session.endReason?.startsWith("Cancelled before start by") ||
-            session.endReason?.startsWith("refusee par la machine : "))))
-    )
-      return false;
+    if (endedBeforeStart(session)) return false;
     return (
       personOnBoard(session) &&
       validationRank(

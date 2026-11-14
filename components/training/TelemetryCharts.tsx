@@ -107,6 +107,15 @@ export function TelemetryCharts({
 
   const xTick = (v: number) => formatClock(v);
   const ticks = width === undefined ? undefined : printTimeTicks(rows);
+  // Printed, the heart rate axis reads evenly: a tick every 10 bpm, 20 over a wide range.
+  const hrStep = hrDomain[1] - hrDomain[0] > 100 ? 20 : 10;
+  const hrTicks =
+    width === undefined
+      ? undefined
+      : Array.from(
+          { length: Math.floor((hrDomain[1] - hrDomain[0]) / hrStep) + 1 },
+          (_, index) => hrDomain[0] + index * hrStep,
+        );
 
   return (
     <div className="space-y-6">
@@ -142,6 +151,7 @@ export function TelemetryCharts({
             />
             <YAxis
               domain={hrDomain}
+              ticks={hrTicks}
               tickLine={false}
               axisLine={false}
               width={36}

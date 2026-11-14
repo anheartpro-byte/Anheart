@@ -1692,7 +1692,7 @@ administrateur (sinon « Admin access required » ; identifiant inconnu :
   directe de son adresse de rapport explique l'absence et permet le retour à
   la séance, sans résumé vide ni bouton d'impression.
 - La phrase sous la description reste visible quand la liste est vide : les
-  séances échouées ne figurent pas ici. Ouvrez **Sessions > Échouées > Voir**,
+  séances échouées ne figurent pas ici. Ouvrez **Sessions > Échouées**, l'œil « Voir le rapport » de sa ligne,
   puis **Résumé de la séance > Rapport PDF**, ou l'historique du passager
   depuis sa fiche si vous y avez accès. Le passager peut consulter ses propres
   séances échouées par cet onglet ; sa fiche n'est pas accessible à tous les rôles.
@@ -2254,7 +2254,7 @@ la largeur de l'écran. Laissez les graphiques d'arrière-plan désactivés : il
 ne sont pas nécessaires. Le menu, l'en-tête du tableau de bord et les boutons
 ne sont pas imprimés. **Français / English** change sa langue.
 
-**Séance échouée** : ouvrez **Sessions > Échouées > Voir**, puis la carte
+**Séance échouée** : ouvrez **Sessions > Échouées**, l'œil « Voir le rapport » de sa ligne, puis la carte
 **Résumé de la séance > Rapport PDF**. L'historique du passager donne aussi le
 rapport si vous avez accès à sa fiche. Les anciennes séances ECG n'ont pas de
 rapport ; **Voir** reste disponible.
@@ -2681,7 +2681,7 @@ rattache au passager choisi à la console (ANH-84) attend le redéploiement.
 
 **Où est le rapport PDF d'une séance ?**
 Pour un entraînement terminé, ouvrez **Rapports > Rapport PDF**. Pour un
-entraînement échoué, ouvrez **Sessions > Échouées > Voir**, puis
+entraînement échoué, ouvrez **Sessions > Échouées**, l'œil « Voir le rapport » de sa ligne, puis
 **Résumé de la séance > Rapport PDF**, ou l'historique du passager si vous
 avez accès à sa fiche. **Télécharger en PDF** ouvre l'impression du navigateur.
 Les anciens enregistrements ECG n'ont pas de rapport.
@@ -2749,7 +2749,7 @@ direct et télémétrie, nouvelles routes de la machine) et les nouvelles pages
 | 9 | Messages du serveur en anglais, et peut être masqués en production. (Depuis ANH-156, un message masqué est remplacé par « L'action a échoué. Réessayez. Référence à transmettre si le problème persiste : … ». La traduction des messages du serveur reste à faire.) | Messages peu compréhensibles. | Tableau du §7.2. |
 | 10 | Compteur Utilisateurs / Patients du tableau de bord non programmé ; « Sessions actives » compté sur les 10 dernières séances seulement. | Chiffres faux ou absents. | Regarder les listes. |
 | 11 | (Corrigé dans le code le 14 octobre 2026, à vérifier au redéploiement.) Listes des patients et gestionnaires : le serveur prenait les 50 à 100 séances **les plus récentes de toute la base**, puis filtrait. Les listes appliquent maintenant les droits avant de couper, et les pages Sessions et Rapports arrivent par pages de 50 avec **Afficher plus** (ANH-158). | Sur une base active, un patient ou un gestionnaire pouvait ne pas voir ses séances plus anciennes. | Jusqu'au redéploiement : aucun. |
-| 12 | (Ancien mode d'enregistrement ECG retiré.) Les séances ECG n'ont pas de rapport. Les séances d'entraînement ont un **Rapport PDF** avec résumé et télémétrie (ANH-89). | Le PDF s'enregistre par l'impression du navigateur. | **Rapports > Rapport PDF** pour les entraînements terminés ; **Sessions > Échouées > Voir > Résumé de la séance > Rapport PDF** pour les échoués. |
+| 12 | (Ancien mode d'enregistrement ECG retiré.) Les séances ECG n'ont pas de rapport. Les séances d'entraînement ont un **Rapport PDF** avec résumé et télémétrie (ANH-89). | Le PDF s'enregistre par l'impression du navigateur. | **Rapports > Rapport PDF** pour les entraînements terminés ; **Sessions > Échouées**, l'œil « Voir le rapport » de sa ligne, puis **Résumé de la séance > Rapport PDF** pour les échoués. |
 | 13 | Textes non traduits. (Corrigé par ANH-123 pour la fiche machine, le fil d'Ariane, les fiches de séance, la fenêtre de régénération de clé, la vue ECG et le rapport.) Restent en anglais : la confirmation de suppression d'un compte, la fiche d'un administrateur ou d'un gestionnaire, les messages d'accès des pages Gestionnaires, les erreurs de saisie du formulaire patient. | Quelques écrans encore mi français mi anglais. | Aucun. |
 | 14 | Motifs de fin bruts (`programme_complete`, `operator_stop`...). (Corrigé par ANH-123 pour les actions de sécurité et l'état du variateur, désormais traduits.) | Moins lisible. | Tableaux des §4.6 et §4.12. |
 | 15 | « Mis à jour il y a ... » et « En direct » ne se rafraîchissent qu'au changement de donnée ; « Données périmées » peut tarder jusqu'à environ 2,5 min. (Corrigé par ANH-160 : ces trois affichages sont recalculés chaque seconde, « Données périmées » apparaît 90 s après le dernier état.) Le statut « En ligne », le compteur « Machines en ligne » (aujourd'hui « Machines connectées ») et « Dernier signal » restaient au rythme du serveur : corrigé par ANH-193, ils sont recalculés chaque seconde, sur l'heure du serveur.) Reste : le serveur accepte encore un lancement sur une machine muette depuis moins de 2,5 min environ, depuis la fenêtre ouverte sur le détail de cette machine. | Une séance lancée sur une machine muette reste « en attente ». | L'annuler ([§6.3](#63-si-la-machine-est-hors-ligne)). |

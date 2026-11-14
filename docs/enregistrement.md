@@ -1011,7 +1011,7 @@ un rejeu conforme ne remplace pas ce contrôle.
 Le reader reste strict : une clé inconnue refuse la ligne, le bloc ou le
 manifeste. Les ajouts restent au schéma 2 et n'ajoutent aucun kind
 d'événement. Certains ajoutent des clés au manifeste, dont `subject_fit` et
-`fitness_questionnaire_version` (ANH-143, dernier paragraphe de cette
+`fitness_questionnaire_version` (ANH-143, avant-dernier paragraphe de cette
 section) et les trois compteurs de zone de `end_observation` (ANH-234). Les
 versions ci-dessous désignent les révisions du lecteur, pas une nouvelle
 valeur de `schema_version` :
@@ -1106,14 +1106,24 @@ au chemin, à la taille et au SHA-256 ; le POST natif Storage utilise seulement
 l'URL signée de ce déploiement et son type de contenu réservé, sans clé machine.
 
 Quatre transferts au plus tournent ensemble, chacun cadencé à 256 KiB/s, par
-lots de 64 fichiers. Une erreur déclenche un recul de 2 à 300 secondes. Le
+lots de 64 fichiers. Une erreur d'échange ou de disque fait attendre toute la
+file : 2 s après la première, puis le double à chaque nouvel échec, jusqu'à
+300 s. Un fichier que le serveur refuse et qui repart tel quel ne fait
+attendre que son enregistrement, avec le même recul, à la fin de la file :
+les autres passent sans attendre. Le
 curseur adjacent `.sync.json` garde les reçus non acquittés ; un redémarrage
 réutilise ces reçus et le statut serveur. Le balayage serveur toutes les cinq
 minutes retrouve aussi un fichier envoyé dont la réponse a été perdue, et
 retire ses doublons. Il ne traite que les objets portant une réservation connue.
 
 Un enregistrement local illisible ou en échec ne bloque pas les suivants :
-la sélection continue après lui et réessaie ensuite. Une suppression cloud
+la sélection continue après lui et réessaie ensuite. Un enregistrement
+illisible (curseur, manifeste ou fichiers), un manifeste refusé par le
+lecteur strict par exemple, n'atteint pas le serveur tant qu'il le reste : le
+journal système le dit une fois, par son seul nom de dossier, sans rien de
+son contenu. Il est relu à chaque passage, au cas où l'erreur était
+passagère, mais ne retient plus la file : seul, il ne compte pas comme un
+échec, et un enregistrement nouveau passe aussitôt. Une suppression cloud
 est conservée dans le curseur comme révocation, y compris après redémarrage ;
 les octets locaux restent présents et aucun marqueur de dépôt n'est créé.
 La réservation signale un fichier rejeté même s'il n'est pas dans la page de

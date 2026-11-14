@@ -124,17 +124,19 @@ class EndObservation:
     silent: bool | None = None
     stop_reason: str | None = None
     shutdown_detail: str | None = None
-    zone_in_s: Annotated[Seconds, Field(ge=0)] | None = None
+    zone_in_s: Annotated[Seconds, Field(ge=0, strict=True)] | None = None
     """Seconds the heart rate spent in its target zone, both bounds in it, as the
     runtime counted them (``ZoneCounters.in_zone`` of the snapshot the record was
     closed with). ``None``: a session without a programme has no zone, and a
     producer that did not observe the counters writes none. Optional when read
-    (a record written before this field existed); the writer always emits it."""
+    (a record written before this field existed); the writer emits the three with
+    every end observation, and a record closed without one has none of them. A
+    number, never a text or a boolean: strict, as Convex reads it."""
 
-    zone_above_s: Annotated[Seconds, Field(ge=0)] | None = None
+    zone_above_s: Annotated[Seconds, Field(ge=0, strict=True)] | None = None
     """Seconds above the zone (``ZoneCounters.above_zone``); ``None`` as for ``zone_in_s``."""
 
-    zone_below_s: Annotated[Seconds, Field(ge=0)] | None = None
+    zone_below_s: Annotated[Seconds, Field(ge=0, strict=True)] | None = None
     """Seconds below the zone (``ZoneCounters.below_zone``); ``None`` as for ``zone_in_s``."""
 
 

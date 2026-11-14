@@ -162,6 +162,38 @@ describe("the figures of a summary", () => {
     expect(text).toContain("unknown_code");
   });
 
+  it.each([
+    ["console", r.zoneSource.console],
+    ["ticks", r.zoneSource.ticks],
+  ] as const)(
+    "says where the time in zone of a final summary was counted: %s",
+    (source, said) => {
+      const counted = figures();
+      const zone = counted.zone;
+      if (zone === null) throw new Error("the fixture has a zone");
+      const screen = render(
+        <SessionSummaryFigures
+          figures={{ ...counted, zone: { ...zone, source } }}
+          provisional={false}
+          recordProblem={null}
+        />,
+      );
+      expect(screen.text()).toContain(said);
+    },
+  );
+
+  it("says nothing of where the time in zone was counted when the summary does not say", () => {
+    const screen = render(
+      <SessionSummaryFigures
+        figures={figures()}
+        provisional={true}
+        recordProblem={null}
+      />,
+    );
+    expect(screen.text()).not.toContain(r.zoneSource.console);
+    expect(screen.text()).not.toContain(r.zoneSource.ticks);
+  });
+
   it("says what a provisional summary or a manual session does not have", () => {
     const screen = render(
       <SessionSummaryFigures
@@ -363,7 +395,8 @@ describe("the summary card of a session", () => {
     const screen = render(<SessionSummaryCard sessionId={sessionId} />);
     expect(screen.text()).toContain(r.provisional);
     expect(screen.text()).toContain(r.provisionalNote);
-    expect(screen.text()).toContain("(invalid_ticks)");
+    expect(screen.text()).toContain(`(${r.recordProblems.invalid_ticks})`);
+    expect(screen.text()).not.toContain("invalid_ticks");
     expect(screen.text()).toContain("30 min 00 s");
   });
 

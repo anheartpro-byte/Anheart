@@ -50,7 +50,10 @@ import {
 import { readableSessions, stillReadable } from "./lib/readableSessions";
 import { ARMING_REFUSAL_CODES } from "./training";
 
-/** Known pre-start endings, duplicated from machineRegistry.ts (unvalidated sessions). */
+/**
+ * Known pre-start endings: the reports (no summary to expect) and the machine's registry
+ * (a session that never started is not one with a person on board) share this one rule.
+ */
 export function endedBeforeStart(
   session: Pick<Doc<"sessions">, "status" | "endCode" | "endReason">,
 ): boolean {

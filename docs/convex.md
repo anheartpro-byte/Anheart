@@ -149,10 +149,9 @@ leur séance ; `machine_api_keys` et `machine_heartbeats` par leur machine ;
 suivent les droits de leur séance, machine ou compte, sans index par
 organisation propre.
 
-Le compte « huit tables » de la migration ANH-114 plus loin décrit son
-périmètre initial : machines, comptes, liens passager-gestionnaire et les cinq
-tables alors rattachées aux machines. Ce n'est pas le compte du schéma actuel ;
-la migration actuelle inclut aussi `training_events`.
+La migration ANH-114 plus loin rattache neuf tables : machines, comptes,
+liens passager-gestionnaire et les six tables rattachées aux machines, dont
+`training_events`, ajoutée après son périmètre initial de huit.
 
 - Une **machine appartient à exactement une organisation**. Ce qu'elle écrit
   par les routes machine (séances locales, télémétrie, programmes) et ce qui
@@ -844,7 +843,7 @@ séance ECG (`recording`) porte une mention d'absence de rapport ; son URL
 `/dashboard/sessions/{id}/report` affiche cette explication et un retour à la
 séance, sans rapport vide ni bouton d'impression. La page indique aussi où
 ouvrir le rapport d'une séance `failed`, absente de cette liste :
-**Sessions > Échouées > Voir**, puis **Résumé de la séance > Rapport PDF**,
+**Sessions > Échouées**, l'œil « Voir le rapport » de sa ligne, puis **Résumé de la séance > Rapport PDF**,
 ou l'historique du passager depuis sa fiche si le rôle permet de la lire.
 
 Écarts connus avec la console, vérifiés le 14 octobre 2026 sur quatre
@@ -3988,7 +3987,7 @@ les tests (`convex/multiOrganizationMigration.test.ts`).
    npx convex run migrations/multiOrganization:attachExistingRowsToAnheart '{}'
    ```
    Elle crée l'organisation « Anheart », y rattache toutes les lignes sans
-   organisation des huit tables, et crée pour chaque compte une appartenance
+   organisation des neuf tables, et crée pour chaque compte une appartenance
    active avec son rôle actuel. Elle travaille par lots (500 lignes par
    défaut, argument `batchSize`, 1000 au plus) et se replanifie seule jusqu'à
    ce qu'il ne reste rien : la réponse `done: false` veut dire que la suite est
@@ -4536,15 +4535,15 @@ que soit sa valeur :
   manifeste n'est pas vérifié.
 - `RecordDeposit` (`raspberry-pi/src/record/deposit.py`) lit ce refus dans
   `records/status` et renvoie le même manifeste avec une nouvelle
-  réservation. Chaque envoi recevant 200, aucun recul ne s'applique : il
-  recommence à chaque passage du lien hors séance (`CloudSync.step`, une
-  fois par seconde), bien sous les plafonds des deux routes (dix par
-  seconde), et les enregistrements suivants attendent derrière celui-ci.
-  Chaque renvoi remplace la ligne refusée et repasse la séance à `partial`
-  (`attachUpload`, `convex/recordStorage.ts`) avant que la vérification ne
-  la remette à `rejected` : le statut bascule à chaque renvoi, environ une
-  fois par seconde, et un objet de manifeste est stocké puis effacé à
-  chaque fois.
+  réservation. Un fichier refusé et renvoyé tel quel ne compte pas comme un
+  succès, même quand chaque envoi reçoit 200 : ce seul enregistrement attend
+  2 s avant son essai suivant, puis 4, 8 et ainsi de suite jusqu'à 300 s
+  (`MIN_BACKOFF`, `MAX_BACKOFF`), et repasse après les enregistrements
+  suivants ; un enregistrement nouveau ou sain est essayé sans attendre. Chaque renvoi remplace la ligne refusée et
+  repasse la séance à `partial` (`attachUpload`, `convex/recordStorage.ts`)
+  avant que la vérification ne la remette à `rejected` : le statut bascule à
+  chaque renvoi, et un objet de manifeste est stocké puis effacé à chaque
+  fois, au plus une fois toutes les cinq minutes une fois le recul monté.
 - Rien n'est perdu : l'enregistrement reste sur la carte du Pi, sans
   marqueur de dépôt, et la purge locale ne touche jamais un enregistrement
   non confirmé ([enregistrement.md](enregistrement.md#dépôt-vérifié-dans-convex)).

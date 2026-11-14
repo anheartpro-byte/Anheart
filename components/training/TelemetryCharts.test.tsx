@@ -194,6 +194,23 @@ describe("ANH-203 telemetry charts: the scale of the heart-rate axis", () => {
     expect(domain()).toEqual([40, 160]);
   });
 
+  it("ticks the printed heart-rate axis evenly: every 10 bpm, every 20 over a wide range", () => {
+    const ticks = () => given("YAxis")[0].ticks;
+    draw({ points: [point({ bpm: 100 })], width: 680, height: 180 });
+    expect(ticks()).toEqual([50, 60, 70, 80, 90, 100, 110, 120, 130]);
+
+    draw({
+      points: [point({ bpm: 48 }), point({ bpm: 171 })],
+      width: 680,
+      height: 180,
+    });
+    expect(ticks()).toEqual([30, 50, 70, 90, 110, 130, 150, 170, 190]);
+
+    // On screen the chart picks its own.
+    draw({ points: [point({ bpm: 100 })] });
+    expect(ticks()).toBeUndefined();
+  });
+
   it("leaves the speed axis to scale itself", () => {
     draw({ points: [point({ bpm: 100 })] });
 

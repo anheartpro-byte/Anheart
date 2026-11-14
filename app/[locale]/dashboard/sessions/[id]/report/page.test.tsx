@@ -454,17 +454,51 @@ describe("the report of a session", () => {
     ).toBeTruthy();
   });
 
-  it("marks a provisional summary, with why the record could not be read", async () => {
+  it("marks a provisional summary, with why the record could not be read, in words", async () => {
     serve({
-      summary: summary({ provisional: true, recordProblem: "missing_file" }),
+      summary: summary({ provisional: true, recordProblem: "invalid_ticks" }),
     });
     await open();
 
     expect(screen.getByText(r.provisional)).toBeTruthy();
     expect(screen.getByText(r.provisionalNote)).toBeTruthy();
     expect(
-      screen.getByText(r.recordProblem.replace("{problem}", "missing_file")),
+      screen.getByText(
+        r.recordProblem.replace("{problem}", r.recordProblems.invalid_ticks),
+      ),
     ).toBeTruthy();
+    expect(screen.queryByText(/invalid_ticks/)).toBeNull();
+  });
+
+  it("has a word for each reason a record could not be read, in both languages", () => {
+    const codes = [
+      "missing_file",
+      "too_large",
+      "invalid_manifest",
+      "invalid_encoding",
+      "invalid_ticks",
+      "no_session_ticks",
+      "summary_failed",
+    ];
+    expect(Object.keys(fr.sessionReport.recordProblems).sort()).toEqual(
+      [...codes].sort(),
+    );
+    expect(Object.keys(en.sessionReport.recordProblems).sort()).toEqual(
+      [...codes].sort(),
+    );
+  });
+
+  it("offers no print of a session that did not start: a title and a note", async () => {
+    serve({
+      session: session({ status: "failed" }),
+      summary: { absent: "not_started" },
+    });
+    await open();
+
+    expect(screen.getByText(r.notStartedNote)).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: r.download }).hasAttribute("disabled"),
+    ).toBe(true);
   });
 
   it("says what is not in the report yet: the preflight only", async () => {
