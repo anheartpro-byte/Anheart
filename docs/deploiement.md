@@ -185,10 +185,14 @@ publié, une console garde ses programmes de secours ; un catalogue dont
 tout a été retiré la laisse sans programme. Procédure de la clé :
 [secrets.md, 3.4](secrets.md#34-clés-de-signature).
 
-**Carnet de bord (ANH-149), étape facultative après le déploiement de
-Convex.** Les défauts variateur enregistrés avant ANH-149 ne portent pas
-encore leur marque `interventionDue` ; le serveur les juge lui même tant
-qu'ils ne la portent pas, et le rattrapage la leur pose une fois pour toutes :
+**Carnet de bord (ANH-149), étape obligatoire juste après le déploiement
+de Convex.** Les défauts variateur enregistrés avant ANH-149 ne portent pas
+encore leur marque `interventionDue`. Le serveur les juge lui même tant qu'ils
+ne la portent pas, donc la règle est juste sans le rattrapage ; mais d'ici là
+chaque lancement, chaque poll, chaque départ et chaque passage de la tâche des
+lancements en attente relit tous les anciens défauts variateur de la machine,
+et une machine qui en a des milliers peut atteindre la limite de lecture de
+Convex. Le rattrapage leur pose la marque une fois pour toutes :
 
 ```bash
 npx convex run machineLogbook:backfillInterventionDue '{}'
@@ -196,6 +200,8 @@ npx convex run machineLogbook:backfillInterventionDue '{}'
 
 À relancer après tout changement de `contracts/drive-faults.json`
 ([convex.md](convex.md#machine_logbook--carnet-de-bord-des-machines-anh-149)).
+
+**Effet du déploiement.** Toute machine qui a un défaut variateur `manual_reset_only` enregistré avant ANH-149, même clos, a ses lancements automatiques fermés dès ce déploiement, jusqu'à ce qu'un admin Anheart écrive dans le carnet une intervention qui le nomme : aucune intervention ne peut dater d'avant le carnet. Une séance de banc reste possible.
 
 ### 3.2 Vérifier un déploiement sans navigateur
 

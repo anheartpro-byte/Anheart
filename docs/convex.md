@@ -997,14 +997,19 @@ et ceux qui ne portent pas encore le champ (écrits avant ANH-149), qu'il juge
 lui même par la règle entière : les défauts résolus d'une machine ne sont
 jamais relus, et la lecture est juste que le rattrapage ait été lancé ou non.
 
-**Rattrapage, facultatif.** `machineLogbook.backfillInterventionDue`
+**Rattrapage, obligatoire au déploiement.** `machineLogbook.backfillInterventionDue`
 (interne) pose le champ sur les défauts écrits avant ANH-149, 200 incidents par
 lot, le lot suivant programmé jusqu'au bout de la table ; relancé, il juge de
-même. À lancer une fois après le déploiement de Convex
+même. La lecture est juste sans lui, mais d'ici là chaque lancement, poll,
+départ et passage de la tâche relit tous les anciens défauts variateur de la
+machine, ce qui peut atteindre la limite de lecture de Convex sur une machine
+qui en a des milliers. À lancer juste après le déploiement de Convex
 ([deploiement.md](deploiement.md#3-déployer-convex)), et **après tout
 changement de [`contracts/drive-faults.json`](../contracts/drive-faults.json)** :
 un code passé à `manual_reset_only` ne change pas d'eux mêmes les incidents
-déjà jugés, qui gardent leur marque jusqu'à ce qu'on y touche. Un défaut que la console réarme (`console_reset`) ne demande
+déjà jugés, qui gardent leur marque jusqu'à ce qu'on y touche.
+
+**Effet du déploiement.** Toute machine qui a un défaut variateur `manual_reset_only` enregistré avant ANH-149, même clos, a ses lancements automatiques fermés dès ce déploiement, jusqu'à ce qu'un admin Anheart écrive dans le carnet une intervention qui le nomme : aucune intervention ne peut dater d'avant le carnet. Une séance de banc reste possible. Un défaut que la console réarme (`console_reset`) ne demande
 rien de plus que ce que demande déjà son incident. Une séance de banc reste
 possible : c'est ainsi que la machine est essayée après l'intervention.
 

@@ -585,6 +585,35 @@ servir. Une rotation proposée à la restauration rouvrirait les clés au
 moment même de la restauration, avant tout geste sur elles : la révocation
 sur la machine supprimée permet de les couper avant. Aucun droit ne change.
 
+#### Carte : Carnet de bord (ANH-149)
+
+Ce qui a été fait sur la machine, du plus récent au plus ancien
+(`machineLogbook.list`, [convex.md](convex.md#machine_logbook--carnet-de-bord-des-machines-anh-149)).
+Visible de l'admin Anheart, de l'admin d'organisation et du gestionnaire de la
+machine, y compris sur une machine supprimée.
+
+- **Chaque entrée** : sa date, son type (Intervention, Calibration, Pièce
+  remplacée, Note, Incident, Revue de validation, Fiche variateur, Mise à jour
+  logicielle, Configuration appliquée), qui l'a écrite (« écrit par le
+  serveur » pour les entrées automatiques), sa ligne et ses détails, le lien de
+  l'incident qu'elle nomme et sa pièce jointe.
+- **Bandeau rouge « Séances programmées fermées »** quand un défaut variateur
+  non réarmable à la console attend son intervention, avec le lien de chaque
+  incident : clore l'incident et écrire une entrée « Intervention » qui le
+  nomme rouvrent les séances programmées. Une séance de banc reste possible.
+- **Le formulaire** n'apparaît qu'à qui peut écrire : l'admin Anheart
+  (intervention, calibration, pièce remplacée, note), l'admin d'organisation
+  (note). Un résumé de 3 à 200 caractères, des détails facultatifs (3 à 2000),
+  pour une intervention l'incident qu'elle traite, et une pièce jointe (PDF,
+  JPEG ou PNG, 10 Mio au plus). Un gestionnaire lit le carnet sans écrire.
+- **Exporter (CSV)** et **Imprimer (PDF)**, pour l'admin Anheart seulement :
+  le CSV donne une ligne par entrée, de la plus ancienne à la plus récente, avec
+  les identifiants seulement (l'auteur par son identifiant, jamais son nom) ;
+  « Imprimer » ouvre `/fr/dashboard/machines/{id}/logbook`, une vue à imprimer
+  ou à enregistrer en PDF par la fenêtre d'impression du navigateur, comme le
+  rapport de séance, avec les mêmes identifiants.
+
+
 ### Mes machines : `/fr/dashboard/my-machines`
 
 Pour tous (c'est la page de lancement des patients). Liste les machines où

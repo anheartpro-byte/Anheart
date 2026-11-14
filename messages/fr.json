@@ -1828,5 +1828,50 @@
       "analyzed": "Analysé",
       "closed": "Clos"
     }
+  },
+  "machineLogbook": {
+    "title": "Carnet de bord",
+    "description": "Ce qui a été fait sur la machine, du plus récent au plus ancien : écrit par le serveur (incidents, revues, fiche variateur, mises à jour) ou à la main.",
+    "empty": "Aucune entrée pour l'instant.",
+    "exportCsv": "Exporter (CSV)",
+    "print": "Imprimer (PDF)",
+    "dueTitle": "Séances programmées fermées",
+    "dueText": "Un défaut variateur non réarmable à la console attend son intervention : clore l'incident et écrire une entrée « Intervention » qui le nomme. Une séance de banc reste possible.",
+    "incident": "Incident {id}",
+    "kindLabel": "Type d'entrée",
+    "incidentLabel": "Incident traité",
+    "incidentNone": "Aucun",
+    "summaryLabel": "Résumé (3 à 200 caractères)",
+    "detailsLabel": "Détails (facultatif)",
+    "fileLabel": "Pièce jointe (PDF, JPEG ou PNG, 10 Mio au plus)",
+    "add": "Ajouter au carnet",
+    "added": "Entrée ajoutée au carnet de bord.",
+    "byServer": "écrit par le serveur",
+    "byUnknown": "compte supprimé",
+    "attachment": "Pièce jointe",
+    "back": "Retour à la machine",
+    "printTitle": "Carnet de bord de la machine",
+    "printMachine": "Machine {id}, identifiants seulement",
+    "printButton": "Imprimer ou enregistrer en PDF",
+    "printHint": "Choisissez « Enregistrer au format PDF » dans la fenêtre d'impression du navigateur.",
+    "printNotAllowed": "L'export du carnet de bord est réservé aux admins Anheart.",
+    "columns": {
+      "at": "Date",
+      "kind": "Type",
+      "summary": "Entrée",
+      "by": "Écrit par",
+      "refs": "Références"
+    },
+    "kinds": {
+      "intervention": "Intervention",
+      "calibration": "Calibration",
+      "part_replaced": "Pièce remplacée",
+      "drive_parameter_change": "Fiche variateur",
+      "software_update": "Mise à jour logicielle",
+      "config_change": "Configuration appliquée",
+      "incident": "Incident",
+      "validation_review": "Revue de validation",
+      "note": "Note"
+    }
   }
 }
