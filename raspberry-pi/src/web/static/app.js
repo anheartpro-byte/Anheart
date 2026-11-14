@@ -68,6 +68,8 @@ var state = {
   profilesDigest: null,  // the digest of the list shown, sent with a start: the console refuses another list's
   roster: null,          // the last /api/roster answer: names live here, in this page's memory only
   rosterShown: null,     // the riders the list shows, as one string: rebuilt only when it changes
+  rosterAt: 0,           // performance.now() when that answer came: the list ages from it on this page
+  rosterOffered: [],     // the riders offered now: none once the list is past its age
   riderLost: false,      // the rider chosen here is no longer in the list
   ecg: [],               // numbers, with nulls marking a discontinuity
   ecgSeq: 0,
@@ -506,6 +508,9 @@ function refreshLiveness() {
   renderStopUnanswered();
   renderDriveFault();
   renderSto();
+  if (state.roster) {
+    showRoster(); // the list ages on this page's clock between two answers
+  }
   markStale(FRAME_FED, !fresh);
   markStale(PANEL_FED, performance.now() - state.panelAt >= PANEL_STALE_MS);
   markStale(STATUS_FED, performance.now() - state.statusAt >= STATUS_STALE_MS);
@@ -3832,9 +3837,31 @@ function rosterAge(seconds) {
 
 function renderRoster(roster) {
   state.roster = roster;
+  state.rosterAt = performance.now();
+  showRoster();
+}
+
+/* How old the list is now, on this page's clock: its age when it came, plus since. */
+function rosterAgeNow(roster) {
+  return roster.age_s + (performance.now() - state.rosterAt) / 1000;
+}
+
+/*
+  The list as it stands now (ANH-239). The page asks for it every ROSTER_MS, and
+  a list read as current may pass its age (max_age_s) before the next answer:
+  from that instant, on the page's own clock, nobody is offered and the page
+  says the list is out of date, in the console's words. The console refuses
+  such a start at the instant itself, whatever the page shows.
+*/
+function showRoster() {
+  var roster = state.roster;
+  var aged =
+    roster.state === "current" && roster.age_s !== null && rosterAgeNow(roster) > roster.max_age_s;
+  var riders = aged ? [] : roster.riders;
+  state.rosterOffered = riders;
   var select = el("rider");
   var chosen = select.value;
-  var shown = roster.riders
+  var shown = riders
     .map(function (rider) {
       return rider.user_id + "\u0000" + rider.name;
     })
@@ -3845,9 +3872,9 @@ function renderRoster(roster) {
     select.textContent = "";
     var none = document.createElement("option");
     none.value = "";
-    none.textContent = roster.riders.length ? "- choisir le passager -" : "- aucun passager propose -";
+    none.textContent = riders.length ? "- choisir le passager -" : "- aucun passager propose -";
     select.appendChild(none);
-    roster.riders.forEach(function (rider) {
+    riders.forEach(function (rider) {
       var option = document.createElement("option");
       option.value = rider.user_id;
       option.textContent = rider.name;
@@ -3862,21 +3889,32 @@ function renderRoster(roster) {
   var note = el("roster-note");
   if (roster.state !== "current") {
     problem(note, roster.detail);
+  } else if (aged) {
+    problem(note, rosterStaleWords(rosterAgeNow(roster), roster.max_age_s));
   } else if (roster.problem) {
     problem(
       note,
-      "liste du tableau de bord recue il y a " + rosterAge(roster.age_s) +
+      "liste du tableau de bord recue il y a " + rosterAge(rosterAgeNow(roster)) +
         " ; derniere demande sans reponse : " + roster.problem
     );
   } else {
-    ok(note, "liste du tableau de bord recue il y a " + rosterAge(roster.age_s));
+    ok(note, "liste du tableau de bord recue il y a " + rosterAge(rosterAgeNow(roster)));
   }
   renderRiderFacts();
 }
 
+/* The console's own words for a list past its age (roster.describe_state, STALE). */
+function rosterStaleWords(age, maxAge) {
+  var whole = Math.ceil(age);
+  return (
+    "liste des passagers perimee : recue il y a " + Math.floor(whole / 60) + " min " + (whole % 60) +
+    " s, au-dela de " + Math.round(maxAge / 60) + " min personne n'est propose"
+  );
+}
+
 function selectedRider(id) {
   var wanted = id === undefined ? el("rider").value : id;
-  var riders = state.roster ? state.roster.riders : [];
+  var riders = state.rosterOffered || [];
   for (var i = 0; i < riders.length; i += 1) {
     if (riders[i].user_id === wanted) {
       return riders[i];

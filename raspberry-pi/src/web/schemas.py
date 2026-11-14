@@ -75,6 +75,7 @@ from src.presence.monitor import (
 from src.remote_launch import LaunchMode, LaunchStage, RemoteLaunchView
 from src.result import Ok
 from src.roster import (
+    ROSTER_MAX_AGE,
     Rider,
     RosterView,
     age_at,
@@ -1376,6 +1377,9 @@ class RosterRow:
     age_s: float | None
     problem: str | None
     riders: tuple[RiderRow, ...]
+    max_age_s: float
+    """How old a list may be and still be offered (``ROSTER_MAX_AGE``): the page ages
+    the list against it between two answers (ANH-239)."""
 
     @classmethod
     def of(cls, view: RosterView, at: UnixMillis) -> RosterRow:
@@ -1386,6 +1390,7 @@ class RosterRow:
             age_s=None if view.age is None else round(float(view.age), 1),
             problem=view.problem,
             riders=tuple(RiderRow.of(rider, at) for rider in view.riders),
+            max_age_s=float(ROSTER_MAX_AGE),
         )
 
 

@@ -1560,7 +1560,12 @@ L'âge de la liste se compte sur l'horloge monotone de la console, jamais sur so
 murale : une heure murale qui saute (poste macOS du banc en avance, Pi sans service de
 temps) ne vieillit ni ne rajeunit la liste. Au-delà de 900 s, la phrase donne cet âge à
 la seconde, arrondi à la seconde supérieure (`recue il y a 15 min 1 s`) : une liste
-périmée ne se lit jamais « 15 min » ou moins. L'âge du **passager**, lui, se compte sur
+périmée ne se lit jamais « 15 min » ou moins. La page relit la liste toutes les 10 s
+et, entre deux réponses, la vieillit sur sa propre horloge à partir de l'âge reçu
+(`age_s`) : l'âge affiché avance, et dès que la liste passe `max_age_s` (900 s) la page
+ne propose plus personne et donne la même phrase, sans attendre la réponse suivante.
+La console refuse un tel départ à l'instant même, quoi que la page montre. L'âge du
+**passager**, lui, se compte sur
 l'heure murale (année de naissance) : sur le Pi, une horloge que personne ne tient
 refuse toute personne à bord ; sur le Mac du banc, qui ne juge pas son horloge
 ([Ligne horloge](#ligne-horloge--lheure-de-la-machine)), une heure en avance vieillit
@@ -2600,7 +2605,7 @@ console.
 | POST | `/api/feedback` | `{"nausea_score", "dizziness_score", "comfort", "free_text"?}` | saisit le retour de la séance de la carte, ou remplace la saisie pas encore envoyée ; mémoire seulement | 202 (même corps que la lecture) ; 400 `malformed_body` ; 422 `invalid_feedback` (le champ nommé, jamais sa valeur) ; 409 `nothing_to_fill` |
 | POST | `/api/feedback/skip` | `{}` | ferme la carte : « non renseigné » si rien n'était saisi, rien n'est envoyé ; un retour saisi part quand même | 200 (même corps) ; 409 `nothing_to_fill` |
 | POST | `/api/remote-launch/confirm` | `{"session_id", "bench_attested"?}` | confirme localement l'offre au nom de l'opérateur connecté ; la route ne fait aucun appel réseau, CloudSync traite ensuite la demande | 202 `{session_id, state}` ; 401 `operator_required` ; 409 (`launch_not_pending`, `launch_in_progress`, `passenger_unavailable`, `launch_refused`) |
-| GET | `/api/roster` | - | la liste des passagers tenue (section 9) : `{state, detail, age_s, problem, riders: [{user_id, name, hr_max, age, programme}]}` ; `programme` vaut `null`, ou la phrase de refus d'une séance programmée pour ce passager | 200 |
+| GET | `/api/roster` | - | la liste des passagers tenue (section 9) : `{state, detail, age_s, problem, riders: [{user_id, name, hr_max, age, programme}], max_age_s}` ; `programme` vaut `null`, ou la phrase de refus d'une séance programmée pour ce passager | 200 |
 | POST | `/api/session/start` | `{"profile_id", "total_duration_s"?, "subject_id", "profiles_digest"}` | démarre une séance programmée pour le passager nommé (identifiant de la liste) ; un `subject_age` est refusé ; `profiles_digest` est le `digest` de la liste que la page a montrée | 202 `{kind, operator, detail, at, request_id}` (`operator` : l'identifiant du compte connecté) ; 401 `operator_required` ; 403 (mouvement ou programmes désactivés) ; 400 (id mal formé) ; 404 ; 422 (dont : sans passager, âge saisi, sans `profiles_digest`) ; 409 (dont : passager refusé, variateur en défaut, `profiles_changed` : les programmes ne sont plus ceux de la liste montrée) ; 412 |
 | POST | `/api/session/stop` | `{"reason"?}`, ou rien | fin sur la rampe mise en service ; **sans connexion** (ANH-152), attribuée à l'opérateur connecté sinon à l'appareil ; jamais refusée pour son corps (absent, vide, pas du JSON, trop long : la raison par défaut) | 202 `{kind, operator, detail, at, request_id}` ; 409 |
 | POST | `/api/session/estop` | `{"reason"?}`, ou rien | verrouille l'arrêt d'urgence, **jamais refusé** pour qui tient un jeton d'appareil, connecté ou non, ni pour son corps ; `operator` est le compte connecté ou `device:<id>` (ANH-152) | 200 `{operator, reason, at, wall_clock, action, rule, detail}` |
