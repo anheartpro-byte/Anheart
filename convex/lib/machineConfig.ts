@@ -311,8 +311,10 @@ function consoleProblems(values: Partial<ConfigValues>): ConfigProblem[] {
   };
   if (values.MOTOR_BACKEND === "serial") add("MOTOR_*", driveLinkProblem(values));
   const source = values.ECG_SOURCE;
-  if (source === "rfcomm" || source === "serial")
-    add("BITALINO_ADDRESS", addressProblem(source, (values.BITALINO_ADDRESS as string | null) ?? ""));
+  const address = values.BITALINO_ADDRESS as string | null | undefined;
+  // Refused for its type (absent here): the console says nothing more of the key.
+  if ((source === "rfcomm" || source === "serial") && address !== undefined)
+    add("BITALINO_ADDRESS", addressProblem(source, address ?? ""));
   const maxRadius = bound("ARM_RADIUS_M", "max");
   const arm = values.ARM_RADIUS_M as number | undefined;
   const armRefused = arm !== undefined && (arm <= 0 || arm > maxRadius);

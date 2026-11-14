@@ -651,6 +651,85 @@
       }
     },
     {
+      "name": "ECG_SOURCE=serial et une adresse mal formee : seul son type est dit",
+      "changes": {
+        "ECG_SOURCE": "serial",
+        "BITALINO_ADDRESS": "98 D3"
+      },
+      "expected": {
+        "verdict": "refused",
+        "problems": [
+          {
+            "key": "BITALINO_ADDRESS",
+            "detail": "attendu 1 a 200 caracteres ASCII imprimables, sans espace, guillemet, apostrophe ni barre oblique inverse"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ECG_SOURCE=rfcomm sans la cle de l'adresse : seule son absence est dite",
+      "changes": {
+        "ECG_SOURCE": "rfcomm"
+      },
+      "remove": [
+        "BITALINO_ADDRESS"
+      ],
+      "expected": {
+        "verdict": "refused",
+        "problems": [
+          {
+            "key": "BITALINO_ADDRESS",
+            "detail": "cle absente"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ARM_RADIUS_M -0.0 est refuse comme 0",
+      "changes": {
+        "ARM_RADIUS_M": -0.0
+      },
+      "expected": {
+        "verdict": "refused",
+        "problems": [
+          {
+            "key": "ARM_RADIUS_M",
+            "detail": "0.0 m hors de ]0, 5.0]"
+          }
+        ]
+      }
+    },
+    {
+      "name": "GEAR_RATIO entier au dela d'un flottant est refuse",
+      "changes": {
+        "GEAR_RATIO": 10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+      },
+      "expected": {
+        "verdict": "refused",
+        "problems": [
+          {
+            "key": "GEAR_RATIO",
+            "detail": "attendu un nombre fini"
+          }
+        ]
+      }
+    },
+    {
+      "name": "MOTOR_MAX_RPM entier au dela d'un flottant est refuse",
+      "changes": {
+        "MOTOR_MAX_RPM": 10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+      },
+      "expected": {
+        "verdict": "refused",
+        "problems": [
+          {
+            "key": "MOTOR_MAX_RPM",
+            "detail": "attendu un nombre entier"
+          }
+        ]
+      }
+    },
+    {
       "name": "UI_PORT 8123, celui du banc, est refuse",
       "changes": {
         "UI_PORT": 8123

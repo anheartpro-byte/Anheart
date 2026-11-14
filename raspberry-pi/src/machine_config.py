@@ -371,9 +371,15 @@ def _whole(raw: object) -> int | None:
 
 
 def _number(raw: object) -> int | float | None:
+    """A finite number, ``-0.0`` read as the ``0`` JavaScript writes; ``None`` otherwise,
+    an integer beyond what a float holds included (JavaScript reads it as infinite)."""
     if isinstance(raw, bool) or not isinstance(raw, int | float):
         return None
-    return raw if math.isfinite(raw) else None
+    try:
+        finite = math.isfinite(raw)
+    except OverflowError:
+        return None
+    return raw + 0 if finite else None
 
 
 def _names(raw: object, spec: KeySpec) -> tuple[str, ...] | None:

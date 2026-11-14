@@ -79,6 +79,7 @@ function view(overrides: Partial<MachineConfigView> = {}): MachineConfigView {
       ARM_RADIUS_M: null,
     },
     validationLevel: "none",
+    locksAboveLevel: [],
     canPropose: "all",
     ...overrides,
   };

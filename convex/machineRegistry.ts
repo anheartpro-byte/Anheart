@@ -45,6 +45,7 @@ import {
 } from "./schema";
 import { endedBeforeStart } from "./sessionReports";
 import { configurationStatusOf } from "./lib/machineConfig";
+import { rejectLocksAbove } from "./machineConfigs";
 
 const configurationStatusValidator = v.union(
   v.literal("unavailable"),
@@ -862,6 +863,8 @@ export const lowerValidationLevel = mutation({
       targetId: args.machineId,
       details: { level: args.level, previousLevel: effectiveLevel },
     });
+    // ANH-141: a lock approved above the new level is not sent any more.
+    await rejectLocksAbove(ctx, state.machine, args.level, state.admin);
     return null;
   },
 });

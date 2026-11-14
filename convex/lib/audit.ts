@@ -289,7 +289,10 @@ export const SENSITIVE_MUTATIONS: Readonly<
     "registry.drive_sheet_attached",
   ],
   "machineRegistry.addValidationReview": ["registry.review_added"],
-  "machineRegistry.lowerValidationLevel": ["registry.level_lowered"],
+  "machineRegistry.lowerValidationLevel": [
+    "registry.level_lowered",
+    "machine_config.rejected",
+  ],
   "machineConfigs.proposeConfig": [
     "machine_config.proposed",
     "machine_config.rejected",

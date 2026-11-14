@@ -621,7 +621,7 @@ function refusalOfConfig(value: unknown): string | undefined | null {
  * -> {status: "applied" | "refused" | "unchanged", server_contract_version}
  *
  * The machine applied a revision, or refused it with why (`refusal`). A
- * revision unknown to this machine, another hash, or a draft: 400
+ * revision unknown to this machine, another hash, or one never approved: 400
  * `invalid_request`. One every 10 s per machine, five ahead.
  */
 http.route({

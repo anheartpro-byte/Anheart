@@ -31,6 +31,7 @@ import { registryUpload } from "./machineRegistry.fixtures";
 import { addSecondAdmin, asSecondAdmin } from "./programmes.fixtures";
 import { as, modules, seedWorld, type World } from "./test.setup";
 import cases from "../contracts/machine-config-cases.json";
+import randomCases from "../contracts/machine-config-random-cases.json";
 import machineApi from "../contracts/machine-api.json";
 
 // The machine routes are rate limited per machine: each request below comes
@@ -62,6 +63,24 @@ describe("ANH-141 EX-2 the validation is the console's", () => {
     const problems = machineConfigProblems(document, c.level ?? "none");
     expect(problems).toEqual(c.expected.problems ?? []);
     expect(c.expected.verdict === "accepted").toBe(problems.length === 0);
+  });
+
+  it("gives the console's verdict on its seeded random proposals", () => {
+    // raspberry-pi/tests/test_machine_config_random.py draws them and pins the file.
+    const drawn = randomCases as unknown as Array<{
+      name: string;
+      changes: Record<string, unknown>;
+      remove: string[];
+      level: MachineValidationLevel;
+      problems: { key: string; detail: string }[];
+    }>;
+    expect(drawn.length).toBe(300);
+    const differ = drawn.filter((c) => {
+      const document = { ...BASE, ...c.changes } as ConfigValues;
+      for (const key of c.remove) delete document[key];
+      return JSON.stringify(machineConfigProblems(document, c.level)) !== JSON.stringify(c.problems);
+    });
+    expect(differ.map((c) => c.name)).toEqual([]);
   });
 
   it.each([
@@ -531,6 +550,85 @@ describe("ANH-141 EX-4 EX-6 the machine's side", () => {
     const again = await machineFetch(w, key, "/api/machine/config/applied", { revision: 1, hash, refusal: "encore" });
     expect(await again.json()).toMatchObject({ status: "unchanged" });
     expect((await auditOf(w, first.configId)).map((entry) => entry.action)).toContain("machine_config.refused");
+  });
+});
+
+describe("ANH-141 review R2: the two-admin rule rests on the site alone", () => {
+  it("A1: never makes applied a revision rejected before any approval, whatever the machine says", async () => {
+    const w = await seedWorld(modules);
+    await setLevel(w, "auto");
+    const key = await machineKey(w);
+    const first = await approvedFirst(w);
+    await applyOnMachine(w, key, 1, (await rowOf(w, first.configId))?.hash ?? "");
+    const risky = await propose(w, { ...BASE, PROGRAMS_ENABLED: true });
+    await asSecondAdmin(w).mutation(api.machineConfigs.rejectConfig, {
+      configId: risky.configId,
+      reason: "pas sans essai",
+    });
+    const seen = await as(w.t, "orgAdmin").query(api.machineConfigs.getMachineConfig, {
+      machineId: w.machine,
+    });
+    const hash = seen?.revisions.find((row) => row.revision === risky.revision)?.hash ?? "";
+    const ack = await machineFetch(w, key, "/api/machine/config/applied", {
+      revision: risky.revision,
+      hash,
+    });
+    expect(ack.status).toBe(400);
+    expect((await rowOf(w, risky.configId))?.status).toBe("rejected");
+    // The same safety value again, with a new place: still two admins.
+    const next = await propose(w, { ...BASE, PROGRAMS_ENABLED: true, location: "Ailleurs" });
+    await expect(
+      as(w.t, "admin").mutation(api.machineConfigs.approveConfig, { configId: next.configId }),
+    ).rejects.toThrow(/machine_config_self_approval/);
+  });
+
+  it("A2: a lowered level rejects an approved lock not yet applied, and says one applied", async () => {
+    const w = await seedWorld(modules);
+    await setLevel(w, "auto");
+    const key = await machineKey(w);
+    const first = await approvedFirst(w, { ...BASE, PROGRAMS_ENABLED: true });
+    await applyOnMachine(w, key, 1, (await rowOf(w, first.configId))?.hash ?? "");
+    const waiting = await propose(w, { ...BASE, PROGRAMS_ENABLED: true, MOTOR_MAX_RPM: 280 });
+    await asSecondAdmin(w).mutation(api.machineConfigs.approveConfig, { configId: waiting.configId });
+    await as(w.t, "admin").mutation(api.machineRegistry.lowerValidationLevel, {
+      machineId: w.machine,
+      level: "bench",
+      reason: "TEST nouvel essai requis",
+    });
+    expect(await rowOf(w, waiting.configId)).toMatchObject({
+      status: "rejected",
+      rejectReason: "machine validée jusqu'au niveau bench : PROGRAMS_ENABLED ne passe plus",
+      rejectedBy: w.admin,
+    });
+    expect(await auditOf(w, waiting.configId)).toContainEqual({
+      action: "machine_config.rejected",
+      fields: ["PROGRAMS_ENABLED"],
+      version: "2",
+    });
+    const view = await as(w.t, "admin").query(api.machineConfigs.getMachineConfig, {
+      machineId: w.machine,
+    });
+    expect(view).toMatchObject({ inForceRevision: 1, locksAboveLevel: ["PROGRAMS_ENABLED"] });
+  });
+
+  it("A3: an author demoted since the proposal no longer counts as the first admin", async () => {
+    const w = await seedWorld(modules);
+    await addSecondAdmin(w);
+    const first = await propose(w, BASE);
+    await w.t.run(async (ctx) => {
+      for (const membership of await ctx.db
+        .query("memberships")
+        .withIndex("by_user", (q) => q.eq("userId", w.admin))
+        .collect())
+        await ctx.db.patch(membership._id, { active: false });
+    });
+    const view = await asSecondAdmin(w).query(api.machineConfigs.getMachineConfig, {
+      machineId: w.machine,
+    });
+    expect(view?.revisions[0].approveBlocked).toBe("machine_config_safety_needs_admins");
+    await expect(
+      asSecondAdmin(w).mutation(api.machineConfigs.approveConfig, { configId: first.configId }),
+    ).rejects.toThrow(/machine_config_safety_needs_admins/);
   });
 });
 

@@ -903,6 +903,13 @@ const SCENARIOS: Record<string, (w: World) => Promise<Doc<"audit_log">[]>> = {
   },
   "machineRegistry.lowerValidationLevel": async (w) => {
     await benchReview(w);
+    // ANH-141: an approved lock the new level no longer allows is rejected with it.
+    const locked = await insertConfigRevision(w, {
+      status: "approved",
+      author: w.admin,
+      revision: 1,
+      values: { ...MACHINE_CONFIG_BASE, PROGRAMS_ENABLED: true },
+    });
     return observe(w, async () => {
       await as(w.t, "admin").mutation(
         api.machineRegistry.lowerValidationLevel,
@@ -922,6 +929,11 @@ const SCENARIOS: Record<string, (w: World) => Promise<Doc<"audit_log">[]>> = {
           w.orgA,
           { level: "none", previousLevel: "bench" },
         ),
+        site(w, "machine_config.rejected", locked, "machine_config", "admin", w.orgA, {
+          machineId: w.machine,
+          version: "1",
+          fields: ["PROGRAMS_ENABLED"],
+        }),
       ];
     });
   },

@@ -29,7 +29,12 @@ import {
   type QueryCtx,
 } from "./_generated/server";
 import { audit, machineActor, userActor } from "./lib/audit";
-import { getCurrentUserOrThrow, requireRole, type CurrentUser } from "./lib/auth";
+import {
+  getCurrentUserOrThrow,
+  isAnheartOrganization,
+  requireRole,
+  type CurrentUser,
+} from "./lib/auth";
 import { refusal } from "./lib/errors";
 import {
   canonicalConfig,
@@ -46,10 +51,12 @@ import {
   type ConfigValues,
 } from "./lib/machineConfig";
 import {
+  configurationLockVerdict,
   effectiveValidationLevel,
   radiiProposal,
   requireConfigurationAllowed,
 } from "./lib/machineRegistry";
+import type { MachineValidationLevel } from "./lib/releaseValidation";
 import { limitUser } from "./lib/rateLimits";
 import { machineValidationLevelValidator } from "./schema";
 
@@ -62,9 +69,18 @@ async function revisionsOf(ctx: QueryCtx, machineId: Id<"machines">): Promise<Re
     .collect();
 }
 
-/** The latest revision of `status` among `rows` (ordered by revision), or null. */
+/**
+ * The latest revision of `status` among `rows` (ordered by revision) that was
+ * approved on the site, or null. A revision never approved is never a baseline
+ * nor what a machine is sent, whatever a machine says of it: the two-admin rule
+ * does not rest on the machine.
+ */
 function latest(rows: readonly Revision[], ...status: Revision["status"][]): Revision | null {
-  return [...rows].reverse().find((row) => status.includes(row.status)) ?? null;
+  return (
+    [...rows]
+      .reverse()
+      .find((row) => status.includes(row.status) && row.approvedAt !== undefined) ?? null
+  );
 }
 
 /** What the machine is sent: the latest revision approved or applied. */
@@ -99,6 +115,48 @@ async function writableMachine(ctx: MutationCtx, user: CurrentUser, machineId: I
   return machine;
 }
 
+/** The lock keys `values` sets true above what `level` allows, in the contract's order. */
+function locksAbove(values: ConfigValues, level: MachineValidationLevel): string[] {
+  return (["PROGRAMS_ENABLED", "OCCUPANCY_OCCUPIED_ENABLED"] as const).filter(
+    (key) => !configurationLockVerdict(level, key, values[key] === true).allowed,
+  );
+}
+
+/**
+ * The validation level of `machine` went down to `level` (ANH-147,
+ * `machineRegistry.lowerValidationLevel`): every revision approved and not
+ * yet applied whose locks it no longer allows is rejected, with why, in the
+ * name of `admin`. One already applied stays the machine's fact; the page
+ * says it is above the level (`locksAboveLevel`), and the console judges it
+ * against the level signed with every answer.
+ */
+export async function rejectLocksAbove(
+  ctx: MutationCtx,
+  machine: Pick<Doc<"machines">, "_id" | "organizationId">,
+  level: MachineValidationLevel,
+  admin: CurrentUser,
+): Promise<void> {
+  const now = Date.now();
+  for (const row of await revisionsOf(ctx, machine._id)) {
+    const keys = row.status === "approved" ? locksAbove(row.values, level) : [];
+    if (keys.length === 0) continue;
+    await ctx.db.patch(row._id, {
+      status: "rejected",
+      rejectedAt: now,
+      rejectedBy: admin._id,
+      rejectReason: `machine validée jusqu'au niveau ${level} : ${keys.join(", ")} ne passe plus`,
+    });
+    await audit(ctx, {
+      source: "site",
+      actor: userActor(admin),
+      organizationId: machine.organizationId,
+      action: "machine_config.rejected",
+      targetId: row._id,
+      details: { machineId: machine._id, version: String(row.revision), fields: keys },
+    });
+  }
+}
+
 function invalid(problems: ReturnType<typeof machineConfigProblems>) {
   return new ConvexError({
     code: "invalid_machine_config",
@@ -107,8 +165,37 @@ function invalid(problems: ReturnType<typeof machineConfigProblems>) {
   });
 }
 
-/** Who may approve `row`, and whether a safety key changes from the revision applied. */
-function approvalOf(user: CurrentUser, row: Revision, rows: readonly Revision[]) {
+/**
+ * Whether `userId` is an Anheart admin now: an active admin membership of the
+ * Anheart organisation, on an account not deleted. Read at approval, so that
+ * an author demoted since the proposal no longer counts as the first admin.
+ */
+async function isAnheartAdmin(ctx: QueryCtx, userId: Id<"users">): Promise<boolean> {
+  const account = await ctx.db.get(userId);
+  if (account === null || account.clerkDeletedAt !== undefined) return false;
+  const memberships = await ctx.db
+    .query("memberships")
+    .withIndex("by_user", (q) => q.eq("userId", userId))
+    .collect();
+  for (const membership of memberships) {
+    if (!membership.active || membership.role !== "admin") continue;
+    const organization = await ctx.db.get(membership.organizationId);
+    if (organization !== null && organization.deletedAt === undefined && isAnheartOrganization(organization))
+      return true;
+  }
+  return false;
+}
+
+/**
+ * Who may approve `row`, and whether a safety key changes from the revision
+ * applied. `authorIsAdmin`: whether its author is an Anheart admin now.
+ */
+function approvalOf(
+  user: CurrentUser,
+  row: Revision,
+  rows: readonly Revision[],
+  authorIsAdmin: boolean,
+) {
   const changed = changedKeys(latest(rows, "applied")?.values ?? null, row.values);
   const safety = changed.some((key) => SAFETY_KEYS.includes(key));
   const fromInForce = changedKeys(inForce(rows)?.values ?? null, row.values);
@@ -116,7 +203,7 @@ function approvalOf(user: CurrentUser, row: Revision, rows: readonly Revision[])
   if (user.role !== "admin" && (safety || fromInForce.some((key) => !ORGANIZATION_KEYS.includes(key))))
     blocked = "machine_config_keys_not_allowed";
   else if (safety && row.proposedBy === user._id) blocked = "machine_config_self_approval";
-  else if (safety && row.proposedByRole !== "admin") blocked = "machine_config_safety_needs_admins";
+  else if (safety && !authorIsAdmin) blocked = "machine_config_safety_needs_admins";
   return { changed, safety, blocked };
 }
 
@@ -176,6 +263,8 @@ export const getMachineConfig = query({
       ),
       defaults: configValuesValidator,
       validationLevel: machineValidationLevelValidator,
+      /** Locks the revision in force sets true above the level now (a level lowered since). */
+      locksAboveLevel: v.array(v.string()),
       canPropose: v.union(v.literal("all"), v.literal("name_location"), v.literal("none")),
     }),
   ),
@@ -196,7 +285,12 @@ export const getMachineConfig = query({
     const shown = rows.slice(-SHOWN_REVISIONS).reverse();
     const revisions = await Promise.all(
       shown.map(async (row) => {
-        const approval = approvalOf(user, row, rows);
+        const approval = approvalOf(
+          user,
+          row,
+          rows,
+          row.status === "draft" && (await isAnheartAdmin(ctx, row.proposedBy)),
+        );
         return {
           ...row,
           proposedBy: await author(row.proposedBy),
@@ -226,6 +320,7 @@ export const getMachineConfig = query({
       configurationStatus: configurationStatus(target, reported),
       defaults,
       validationLevel: level,
+      locksAboveLevel: target === null ? [] : locksAbove(target.values, level),
       canPropose:
         machine.isDeleted === true
           ? ("none" as const)
@@ -329,7 +424,7 @@ export const approveConfig = mutation({
     const { user, row, machine } = await writableRevision(ctx, args.configId);
     if (row.status !== "draft") throw refusal("machine_config_wrong_status");
     const rows = await revisionsOf(ctx, machine._id);
-    const approval = approvalOf(user, row, rows);
+    const approval = approvalOf(user, row, rows, await isAnheartAdmin(ctx, row.proposedBy));
     if (approval.blocked !== null) throw refusal(approval.blocked);
     const { level } = await levelOf(ctx, machine._id);
     const problems = machineConfigProblems(row.values, level);
@@ -438,7 +533,8 @@ export const signedConfig = internalQuery({
 /**
  * What the machine says of a revision (`POST /api/machine/config/applied`):
  * applied (`refusal` absent), or refused with its reason. `unknown`: no such
- * revision of this machine, or another hash; `not_approved`: a draft. A
+ * revision of this machine, or another hash; `not_approved`: a revision never
+ * approved on the site (a draft, or one rejected before any approval). A
  * revision said applied again, or refused once it is no longer approved,
  * changes nothing.
  */
@@ -464,7 +560,9 @@ export const recordApplied = internalMutation({
       )
       .unique();
     if (row === null || row.hash !== args.hash) return "unknown";
-    if (row.status === "draft") return "not_approved";
+    // Only a revision approved on the site: a draft, or one rejected before any
+    // approval, is never made applied by what a machine says.
+    if (row.approvedAt === undefined) return "not_approved";
     const origin = {
       source: "machine" as const,
       actor: machineActor(args.machineId),
