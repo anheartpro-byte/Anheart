@@ -428,7 +428,9 @@ SENSOR_PERIOD: Final[Seconds] = Seconds(1.0)
 """Every sensor window is re-processed once a second, off the loop."""
 
 CLOUD_PERIOD: Final[Seconds] = Seconds(1.0)
-"""One dashboard step a second. What it sends of a session is read back from its record."""
+"""The period of the dashboard step and of the sending's step, each a task of its own
+(:meth:`LocalPanel.cloud_step`, :meth:`LocalPanel.records_step`). Only the second sends
+sessions, read back from their records."""
 
 STOP_WATCH_PERIOD: Final[Seconds] = Seconds(0.05)
 """How often the stop watch looks whether its question is due. The question itself is

@@ -824,15 +824,20 @@ une autre séance la tient (`machine_busy`).
 
 | Tâche | Période | Ce qu'elle fait |
 |---|---|---|
-| `control_step` | 0,2 s (5 Hz, `CONTROL_PERIOD`) | le tic de contrôle (ci-dessous) |
+| `control_cycle` | 0,2 s (5 Hz, `CONTROL_PERIOD`) | le tic de contrôle (`control_step`, ci-dessous), puis le signe de vie au gestionnaire de service |
 | `ecg_step` | 0,2 s (`ECG_PERIOD`) | garde le BITalino connecté (nouvel essai toutes les 5 s au plus, délai de connexion 30 s) et pompe les échantillons vers le traitement ECG (sur un fil de travail) |
 | `sensor_step` | 1 s | retraite la fenêtre de chaque capteur |
 | `presence_step` | 0,05 s (20 Hz) | lit la caméra et applique son verdict |
-| `cloud_step` | 1 s | une étape du lien Convex : battement de cœur, programmes, interrogation des lancements. Elle n'attend ni le disque ni l'envoi des séances |
+| `cloud_step` | 1 s | une étape du lien Convex : battement de cœur, programmes, interrogation des lancements. Elle n'attend pas l'envoi des séances ; seule l'écriture du registre des séances perdues, avant le réseau, attend son tour derrière une lecture de l'envoi en cours : 10 s au plus pendant la liste du démarrage (`SCAN_TIMEOUT`), 2 s sinon, puis 2 s pour sa propre écriture |
 | `records_step` | 1 s | une étape d'envoi des séances, puis des retours des passagers (ANH-239). Ce qu'elle envoie d'une séance est relu sur le disque par un fil `record-io` réservé : la tâche attend ce fil, la boucle non |
+| `roster_step` | 1 s | demande au tableau de bord la liste des passagers quand elle est due (toutes les 60 s au repos, `ROSTER_PERIOD`), jamais pendant une séance ([4.5](#45-le-passager--la-liste-du-tableau-de-bord-anh-84)) |
+| `catalog_step` | 1 s | demande le catalogue signé des programmes au repos, au plus une fois par `CATALOG_PERIOD` (60 s) |
+| `operators_step` | 1 s | demande la liste signée des opérateurs au repos, au plus une fois par `OPERATORS_PERIOD` (60 s) |
 | `cloud_stop_step` | 50 ms | dit la séance en cours au tableau de bord (déclaration ou confirmation du départ), puis pose la question de l'arrêt demandé (toutes les 3 s en séance). Une tâche à elle : elle n'attend ni l'envoi, ni une retenue de l'envoi, ni le disque, et ne lit aucun fichier |
 | `clock_step` | 10 s (`WALL_CLOCK_PERIOD`) | demande au noyau si un service de temps tient l'horloge murale ([12.4](#124-lhorloge-murale-et-le-journal-de-la-console)). Un appel système qui recopie quelques variables du noyau : ni fichier, ni réseau, ni attente. Les portes de départ, l'enregistrement et la page ne lisent que sa dernière réponse, en mémoire |
 | `preflight_step` | 1 s (`PREFLIGHT_PERIOD`) | fait avancer le pré-vol ([4.2](#le-pré-vol-anh-142)) : lit la batterie du BITalino au repos quand une passe la demande (l'acquisition est suspendue le temps de la lecture), puis clôt la passe quand plus aucun contrôle n'est attendu. Les contrôles eux-mêmes sont jugés à la demande, en mémoire |
+| lecture du STO sur le variateur | 0,5 s (`STO_POLL_PERIOD`) | sous `STO_SOURCE=drive_input` seulement : lit l'entrée du relais de sécurité entre deux tics (`sto-poll`) |
+| écriture du démarrage | une fois | après le premier tic, qui a lu le variateur : ce démarrage, pour le processus suivant (`record_start`). Hors des tâches de la console : sa fin n'arrête rien |
 | serveur web | - | uvicorn, sur la même boucle |
 
 Quand une tâche se termine (signal SIGINT/SIGTERM, exception, serveur web qui
@@ -843,9 +848,10 @@ l'arrêt ou plus tôt), 2 (configuration refusée). Sur un Pi installé, systemd
 relance la console après un code 1
 ([3.6](#36-sous-systemd--signe-de-vie-redémarrage-hors-service)).
 
-`cloud_step`, `records_step` et `preflight_step` sont les seules tâches qui
-avalent leurs exceptions : le tableau de bord est un observateur, un bogue de
-report ne doit pas arrêter une séance ; le pré-vol en est un aussi, et la porte d'armement
+Les tâches du lien (`cloud_step`, `records_step`, `cloud_stop_step`,
+`roster_step`, `catalog_step`, `operators_step`) et `preflight_step` sont les
+seules qui avalent leurs exceptions : le tableau de bord est un observateur, un
+bogue de report ne doit pas arrêter une séance ; le pré-vol en est un aussi, et la porte d'armement
 rejuge sa liste à chaque départ, dans la tâche de contrôle.
 `clock_step` n'en lève pas : une lecture de l'horloge qui échoue est rendue
 comme un état (« non vérifiée »), jamais comme une exception.
@@ -3250,7 +3256,9 @@ lequel la même requête serait encore refusée.
   séance en cours et la demande d'arrêt du tableau de bord la leur (8.6). Le
   registre des séances perdues, écrit par l'étape du lien avant qu'elle
   attende le réseau, attend son tour derrière une lecture de l'envoi en cours
-  (2 s au plus) plutôt que d'être refusé pour elle. Le tic, l'arrêt à la console et
+  plutôt que d'être refusé pour elle : le temps de cette lecture, 10 s au plus
+  pendant la liste des enregistrements faite au démarrage (`SCAN_TIMEOUT`),
+  2 s sinon (`READ_TIMEOUT`), puis 2 s au plus pour sa propre écriture. Le tic, l'arrêt à la console et
   le superviseur n'en dépendent pas non plus.
 - Une séance en cours dont l'enregistrement ne peut pas être lié à elle
   (manifeste qui ne se lit pas, lectures du disque qui ne reviennent pas,

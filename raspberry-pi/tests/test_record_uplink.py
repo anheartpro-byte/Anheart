@@ -3864,7 +3864,8 @@ async def test_the_register_waits_its_turn_behind_a_read_of_the_sending_rather_t
     io = _HeldFirstOperation()
     b = bench(tmp_path, io=io)
     listing = asyncio.create_task(b.uplink.step())  # the list of older records: held
-    assert await asyncio.to_thread(io.holding.wait, 5), "the list was never asked for"
+    asked = await asyncio.to_thread(io.holding.wait, 5)
+    assert asked, "the list was never asked for"
     # A session armed and ended with no record meanwhile: its end waits in memory.
     b.uplink.begin(armed(b.clock, remote="k1", kind="auto"))
     b.uplink.finished(RuntimeEnd(failed=True, reason="emergency_stop"))
