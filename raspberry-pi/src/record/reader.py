@@ -10,7 +10,13 @@ from typing import Final
 from pydantic import TypeAdapter
 
 from src.record.codec import ACTOR, Privacy, validate_manifest
-from src.record.ecg import SAMPLE_RATE, RawBlock, decode_block
+from src.record.ecg import (
+    MAX_BLOCK_HEADER_BYTES,
+    MAX_RAW_BLOCK_BYTES,
+    SAMPLE_RATE,
+    RawBlock,
+    decode_block,
+)
 from src.record.journal import RAW_BLOCKS_PER_SECOND
 from src.record.rows import Row, finite
 from src.record.schema import DriveFrame, Event, Manifest, ReadWarning, RecordError
@@ -181,14 +187,17 @@ def read(path: Path) -> Result[Recording, RecordError]:
 def _inflated_size(block: Path) -> int:
     """The size a gzip block says it holds decompressed, from its last four bytes.
 
-    A block whose trailer lies fails its own check when it is decoded (``inflate``):
-    a block that is read holds what it says.
+    Counted for no more than a block can hold: a block cut short while it was being
+    written ends in other bytes than its trailer, and is read as ``truncated``. A block
+    whose trailer lies fails its own check when it is decoded (``inflate``): a block
+    that is read holds what it says.
     """
     with block.open("rb") as content:
         if content.seek(0, io.SEEK_END) < GZIP_SIZE_BYTES:
             return 0
         content.seek(-GZIP_SIZE_BYTES, io.SEEK_END)
-        return int.from_bytes(content.read(GZIP_SIZE_BYTES), "little")
+        said = int.from_bytes(content.read(GZIP_SIZE_BYTES), "little")
+    return min(said, MAX_BLOCK_HEADER_BYTES + MAX_RAW_BLOCK_BYTES)
 
 
 def _raw_above_longest_record(path: Path) -> str | None:
