@@ -1755,6 +1755,61 @@ function doRestoreService() {
 }
 
 /*
+  The machine's configuration from the dashboard (ANH-141), from /api/config: its name and place in
+  the sidebar (or the .env it runs on), and on the safety page a revision that changes a safety key,
+  each change written « KEY : before -> after », with the button an operator signed in presses at
+  rest. A revision refused, and a restart to run one just applied, are said there too.
+*/
+function renderConfig(config) {
+  var where = [config.name, config.location].filter(Boolean).join(", ");
+  pill(
+    el("machine-identity"),
+    where || (config.revision === null ? "configuration .env" : "revision " + config.revision),
+    ""
+  );
+  var pending = config.pending;
+  show(el("config-card"), Boolean(pending) || config.restarting || Boolean(config.refusal));
+  show(el("config-apply"), Boolean(pending) && !config.restarting);
+  var list = el("config-changes");
+  list.textContent = "";
+  if (pending) {
+    pending.changes.forEach(function (change) {
+      list.appendChild(
+        make("li", change.safety ? "warn" : "", change.key + " : " + change.before + " -> " + change.after +
+          (change.safety ? " (surete)" : ""))
+      );
+    });
+  }
+  text(
+    el("config-summary"),
+    config.restarting
+      ? "configuration appliquee : la console redemarre au repos"
+      : pending
+        ? "revision " + pending.revision + " : cles de surete changees, a appliquer par un operateur connecte, au repos"
+        : "configuration refusee, la console garde la sienne : " + config.refusal
+  );
+}
+
+function loadConfig() {
+  return api("/api/config").then(renderConfig).catch(function () {});
+}
+
+function doApplyConfig() {
+  el("config-apply").disabled = true;
+  api("/api/config/apply", { method: "POST" })
+    .then(function (answer) {
+      ok(el("config-note"), "revision " + answer.revision + " appliquee : la console redemarre au repos");
+      loadConfig();
+    })
+    .catch(function (error) {
+      problem(el("config-note"), error);
+    })
+    .then(function () {
+      el("config-apply").disabled = false;
+    });
+}
+
+/*
   The medical parameters the console runs with, from /api/panel: the version
   in the footer of every page, and, when their signature did not verify at
   startup, the red banner of the bench mode. Both standing states: they
@@ -4365,6 +4420,7 @@ function start() {
   el("estop").onclick = doEstop;
   el("ack").onclick = doAcknowledge;
   el("service-restore-button").onclick = doRestoreService;
+  el("config-apply").onclick = doApplyConfig;
   el("attest").onclick = doAttest;
   el("manual-start").onclick = doManualStart;
   el("manual-apply").onclick = doManualApply;
@@ -4403,6 +4459,7 @@ function start() {
   window.setInterval(loadPreflight, PANEL_MS);
   window.setInterval(loadRemoteLaunch, PANEL_MS);
   window.setInterval(loadFeedback, PANEL_MS);
+  window.setInterval(loadConfig, PANEL_MS);
   window.setInterval(loadSensors, SENSORS_MS);
   window.setInterval(loadRoster, ROSTER_MS);
   window.setInterval(refreshProfiles, PROFILES_MS);
@@ -4424,6 +4481,7 @@ function boot() {
   loadPreflight();
   loadRemoteLaunch();
   loadFeedback();
+  loadConfig();
   loadSensors();
   loadRoster();
   loadStatus()

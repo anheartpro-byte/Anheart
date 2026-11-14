@@ -34,6 +34,8 @@ See .claude/skills/anheart-strict-python/SKILL.md.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import math
 import re
 from collections.abc import Mapping, Sequence
@@ -494,6 +496,11 @@ def _locks(values: Mapping[str, ConfigValue], level: ValidationLevel) -> list[Co
     return problems
 
 
+def locks_above(values: Mapping[str, ConfigValue], level: ValidationLevel) -> tuple[str, ...]:
+    """The locks ``values`` sets true that a machine validated to ``level`` may not run."""
+    return tuple(problem.key for problem in _locks(values, level))
+
+
 def _honoured(values: Mapping[str, ConfigValue], config: LocalConfig) -> list[ConfigProblem]:
     """A lock asked true that the console would run false: unsigned medical parameters."""
     asked = (
@@ -541,3 +548,176 @@ def review(
     if problems or isinstance(loaded, Err):
         return Err(problems)
     return Ok(Reviewed(values=read.values, config=loaded.value))
+
+
+# =========================================================================
+# What the console runs with now, and what a proposal changes of it
+# =========================================================================
+
+
+def effective_values(config: LocalConfig) -> dict[str, ConfigValue]:
+    """The values ``config`` runs with, as the dashboard writes them: the console's own
+    ``.env`` read through :func:`~src.local_config.load_local_config`, defaults included.
+
+    ``name`` and ``location`` are not the ``.env``'s: ``None``. The drive link's keys
+    are ``None`` with the simulated drive, which does not read them.
+    """
+    link = config.drive_link
+    settings = None if link is None else link.settings
+    leg = config.leg_tip_radius
+    return {
+        "name": None,
+        "location": None,
+        KEY_SENSORS: tuple(kind.value for kind in config.sensors),
+        KEY_MOTOR_PORT: None if settings is None else settings.port,
+        KEY_MOTOR_SLAVE_ID: None if settings is None else settings.slave_address,
+        KEY_MODBUS_BAUDRATE: None if settings is None else settings.baudrate,
+        KEY_MODBUS_PARITY: None if settings is None else settings.parity.value,
+        KEY_MODBUS_TIMEOUT_S: None if settings is None else float(settings.timeout),
+        KEY_MOTOR_REG_OFFSET: None if link is None else link.registers.offset,
+        KEY_ECG_SOURCE: config.ecg_source.value,
+        KEY_BITALINO_ADDRESS: config.bitalino_address,
+        KEY_PRESENCE_SOURCE: config.camera.value,
+        KEY_UI_PORT: config.web.port,
+        KEY_GEAR_RATIO: float(config.geometry.ratio),
+        KEY_RECORD_RETENTION_DAYS: config.record.retention_days,
+        KEY_MOTOR_BACKEND: config.motor_backend.value,
+        KEY_MOTOR_MAX_RPM: int(config.motor_max_rpm),
+        KEY_ARM_RADIUS_M: float(config.geometry.radius),
+        KEY_LEG_TIP_RADIUS_M: None if leg is None else float(leg),
+        KEY_PROGRAMS_ENABLED: config.programs_enabled,
+        KEY_OCCUPIED_ENABLED: config.occupied_enabled,
+    }
+
+
+@dataclass(frozen=True, slots=True)
+class ConfigChange:
+    """One key a proposal changes: what the console runs with, and what it would."""
+
+    key: str
+    family: Family
+    before: ConfigValue
+    after: ConfigValue
+
+
+def changes_of(
+    current: Mapping[str, ConfigValue], proposed: Mapping[str, ConfigValue]
+) -> tuple[ConfigChange, ...]:
+    """Every key whose value ``proposed`` changes from ``current``, in the contract's order.
+
+    Numbers compare by value (``50`` is ``50.0``); a key ``current`` does not hold
+    changes.
+    """
+    return tuple(
+        ConfigChange(key, spec.family, current.get(key), proposed.get(key))
+        for key, spec in KEYS.items()
+        if key not in current or current[key] != proposed.get(key)
+    )
+
+
+# =========================================================================
+# The signed text the dashboard sends (``machine_config``, contract 1.14)
+# =========================================================================
+
+CONFIG_KIND: Final[str] = "machine_config"
+"""What a signed configuration says it is: never a catalogue nor an operator list."""
+
+_SHA256: Final[re.Pattern[str]] = re.compile(r"[0-9a-f]{64}")
+_IDENTIFIER: Final[re.Pattern[str]] = re.compile(r"[A-Za-z0-9_-]{1,128}")
+_LEVELS: Final[Mapping[str, ValidationLevel]] = {level.value: level for level in ValidationLevel}
+
+
+@dataclass(frozen=True, slots=True)
+class Revision:
+    """A revision approved on the dashboard, its values as sent and as read."""
+
+    number: int
+    digest: str
+    """SHA-256 of ``text``, checked here: the same in the heartbeat and in the ack."""
+
+    text: str
+    """The canonical JSON of the values, as Convex hashed it; never written again here."""
+
+    document: Mapping[str, object]
+
+
+@dataclass(frozen=True, slots=True)
+class ConfigOffer:
+    """One answer of ``GET /api/machine/config``, its signature already verified."""
+
+    machine_id: str
+    issued_at: int
+    level: ValidationLevel
+    revision: Revision | None
+    """``None``: nothing is approved for this machine; the console keeps what it has."""
+
+
+def _object(text: str) -> Mapping[str, object] | None:
+    """The JSON object ``text`` holds; ``None`` when it holds none."""
+    try:
+        parsed: object = json.loads(text)  # pyright: ignore[reportAny]  # narrowed below
+    except ValueError:
+        return None
+    return cast(Mapping[str, object], parsed) if isinstance(parsed, dict) else None
+
+
+def _whole_at_least(value: object, low: int) -> int | None:
+    return (
+        value if isinstance(value, int) and not isinstance(value, bool) and value >= low else None
+    )
+
+
+def _revision(fields: Mapping[str, object]) -> Result[Revision | None, str]:
+    raw, digest, text = fields.get("revision"), fields.get("hash"), fields.get("values")
+    if raw is None and digest is None and text is None:
+        return Ok(None)
+    number = _whole_at_least(raw, 1)
+    if (
+        number is None
+        or not isinstance(digest, str)
+        or _SHA256.fullmatch(digest) is None
+        or not isinstance(text, str)
+    ):
+        return Err("configuration mal formee")
+    try:
+        content = text.encode("utf-8")
+    except UnicodeEncodeError:
+        return Err("configuration mal formee")
+    if hashlib.sha256(content).hexdigest() != digest:
+        return Err(f"revision {number} : l'empreinte n'est pas celle de ses valeurs")
+    values = _object(text)
+    if values is None:
+        return Err(f"revision {number} : valeurs illisibles")
+    return Ok(Revision(number, digest, text, values))
+
+
+def read_offer(text: str, machine_id: str | None) -> Result[ConfigOffer, str]:
+    """The signed text as a :class:`ConfigOffer`, or why it is not one.
+
+    The one place its untyped value enters. ``machine_id``: this machine
+    (``RECORD_MACHINE_ID``), whose configuration alone is taken; ``None`` when it
+    is not set.
+    """
+    fields = _object(text)
+    if fields is None:
+        return Err("texte de la configuration illisible")
+    if fields.get("kind") != CONFIG_KIND:
+        return Err("texte signe qui n'est pas une configuration")
+    listed_for = fields.get("machineId")
+    issued_at = _whole_at_least(fields.get("issuedAt"), 0)
+    level = _LEVELS.get(str(fields.get("validationLevel")))
+    if (
+        not isinstance(listed_for, str)
+        or _IDENTIFIER.fullmatch(listed_for) is None
+        or issued_at is None
+        or level is None
+    ):
+        return Err("configuration mal formee")
+    if machine_id is not None and machine_id != listed_for:
+        return Err(
+            f"configuration d'une autre machine ({listed_for!r}, cette console est {machine_id!r})"
+        )
+    revision = _revision(fields)
+    if isinstance(revision, Err):
+        return revision
+    return Ok(ConfigOffer(listed_for, issued_at, level, revision.value))

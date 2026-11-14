@@ -20,6 +20,7 @@ from __future__ import annotations
 import contextlib
 import sys
 import threading
+from collections.abc import Mapping
 from pathlib import Path
 from unittest import mock
 
@@ -27,6 +28,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src import local_panel
 from src.clock import Clock
+from src.config_sync import AppliedConfig
 from src.local_config import LocalConfig
 from src.local_panel import LocalPanel, ServiceDesk, build_panel
 from src.record.journal import Journal
@@ -58,6 +60,8 @@ def main(root: Path, port: str, mode: str) -> int:
         notify_socket: str | None,
         service: ServiceDesk,
         preflight: bool,
+        applied: AppliedConfig | None = None,
+        local_env: Mapping[str, str] | None = None,
     ) -> LocalPanel:
         # The console's own profile store stays out of the repository's ``data/``.
         panel = build_panel(
@@ -69,6 +73,8 @@ def main(root: Path, port: str, mode: str) -> int:
             notify_socket=notify_socket,
             service=service,
             preflight=preflight,
+            applied=applied,
+            local_env=local_env,
         )
         # The export is an action (ANH-152): the parent signs in on the test list.
         access = panel.services.access

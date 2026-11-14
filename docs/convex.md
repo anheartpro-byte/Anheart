@@ -3698,10 +3698,13 @@ et les clés dans [`contracts/machine-config.json`](../contracts/machine-config.
 - **La date.** `issuedAt`, l'horloge de l'action ; la console refuse un texte
   plus ancien que celui qu'elle tient, et une révision plus ancienne que celle
   qu'elle a appliquée.
-- **Ce que la console en fait.** Elle revalide les valeurs avec ses règles et
+- **Ce que la console en fait** ([raspberry-pi.md, 12.7](raspberry-pi.md#127-la-configuration-tenue-par-le-tableau-de-bord-anh-141)).
+  Elle revalide les valeurs avec ses règles et
   ses clés locales, applique au repos une révision qui ne change que des clés
   d'exploitation, et ne fait passer une clé de sûreté qu'après la confirmation
-  physique d'un opérateur connecté. Elle le dit par
+  physique d'un opérateur connecté. Elle garde la réponse signée dans
+  `data/config.applied.json`, la vérifie de nouveau à chaque démarrage, et
+  redémarre au repos pour l'appliquer. Elle le dit par
   `POST /api/machine/config/applied` ; un refus revient avec sa raison, que la
   fiche de la machine affiche (« refusée par la machine : »).
 - **Non limitée en débit**, comme le catalogue et la liste des opérateurs.

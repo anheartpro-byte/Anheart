@@ -30,6 +30,7 @@ import pytest
 from src import local_config, local_panel
 from src.bitalino_client import BITalinoClient, LinkStats, SampleBatch
 from src.clock import Clock, ManualClock
+from src.config_sync import AppliedConfig
 from src.control_surface import ControlSurface, RunState, StartSession
 from src.ecg_pipeline import EcgBridge, EcgBridgeStats
 from src.local_config import EcgSource, LocalConfig, MotorBackend, load_local_config
@@ -549,6 +550,8 @@ async def test_the_production_console_records_its_sessions_and_stops_its_journal
         notify_socket: str | None,
         service: ServiceDesk,
         preflight: bool,
+        applied: AppliedConfig | None,
+        local_env: Mapping[str, str] | None,
     ) -> LocalPanel:
         panel = real(
             config,
@@ -559,6 +562,8 @@ async def test_the_production_console_records_its_sessions_and_stops_its_journal
             notify_socket=notify_socket,
             service=service,
             preflight=preflight,
+            applied=applied,
+            local_env=local_env,
         )
         built.append(panel)
         return panel
@@ -632,8 +637,14 @@ def test_main_runs_the_console_on_a_good_configuration(monkeypatch: pytest.Monke
     told: list[str | None] = []
 
     async def fake(
-        config: LocalConfig, *, stopped: Callable[[int], object], notify_socket: str | None
+        config: LocalConfig,
+        *,
+        stopped: Callable[[int], object],
+        notify_socket: str | None,
+        applied: AppliedConfig | None = None,
+        local_env: Mapping[str, str] | None = None,
     ) -> int:
+        del applied, local_env
         seen.append(config)
         handed.append(stopped)  # kept, never called: it would end this very process
         told.append(notify_socket)
@@ -655,8 +666,14 @@ def test_main_refuses_shipped_profiles_it_cannot_read_as_a_configuration_problem
     refuses them, no local store): code 2, one line, and the service stays down."""
 
     async def refused(
-        _config: LocalConfig, *, stopped: Callable[[int], object], notify_socket: str | None
+        _config: LocalConfig,
+        *,
+        stopped: Callable[[int], object],
+        notify_socket: str | None,
+        applied: AppliedConfig | None = None,
+        local_env: Mapping[str, str] | None = None,
     ) -> int:
+        del applied, local_env
         del stopped, notify_socket
         raise ProfilesUnusableError("the profile store cannot start: shipped profiles refused")
 
@@ -762,8 +779,14 @@ def test_ex3_main_says_the_bench_mode_when_it_starts_in_it(
     seen: list[LocalConfig] = []
 
     async def fake(
-        config: LocalConfig, *, stopped: Callable[[int], object], notify_socket: str | None
+        config: LocalConfig,
+        *,
+        stopped: Callable[[int], object],
+        notify_socket: str | None,
+        applied: AppliedConfig | None = None,
+        local_env: Mapping[str, str] | None = None,
     ) -> int:
+        del applied, local_env
         del stopped, notify_socket
         seen.append(config)
         return EXIT_OK

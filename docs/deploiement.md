@@ -1457,6 +1457,44 @@ fin de ligne.
 Toutes les clés sont décrites dans
 [raspberry-pi.md](raspberry-pi.md#12-la-configuration-env).
 
+**La configuration centralisée (contrat 1.15, ANH-141).** Une fois la
+machine liée, la configuration se règle sur sa fiche du site et la console
+l'applique au repos dans `/var/lib/anheart/data/config.applied.json`
+([raspberry-pi.md, 12.7](raspberry-pi.md#127-la-configuration-tenue-par-le-tableau-de-bord-anh-141)).
+Le `.env` reste la source des clés locales (lien, réseau, câblage STO,
+identité des enregistrements), et de tout tant que rien n'est appliqué.
+
+**Migration d'un banc existant.** Rien n'est à faire à la mise à jour : sans
+`config.applied.json`, la console tourne sur son `.env` comme avant, et rien
+ne bloque un banc.
+
+1. Déployer Convex 1.15 d'abord (section 3.4), puis l'image du Pi.
+2. Sur la fiche de la machine, un admin Anheart reporte les valeurs du `.env`
+   en service dans une première révision (le formulaire part des valeurs par
+   défaut du contrat). Une clé de sûreté qui change la fait approuver par un
+   second admin Anheart.
+3. Au repos suivant, la console applique d'elle même ce qui ne change que des
+   clés d'exploitation ; une clé de sûreté qui change attend qu'un opérateur
+   connecté appuie sur « Appliquer la configuration de sûreté » à la console,
+   page Sécurité.
+4. La fiche affiche « configuration appliquée ≠ approuvée » tant que la
+   console n'a pas dit avoir appliqué la révision en vigueur.
+
+Une clé du tableau de bord laissée dans le `.env` est ensuite ignorée, et le
+journal le dit au démarrage ; la retirer du `.env` n'est pas obligatoire.
+
+**Revenir au `.env`.** `sudo systemctl stop anheart`, retirer
+`/var/lib/anheart/data/config.applied.json` (et `config.level.json` à côté
+s'il est là), `sudo systemctl start anheart`.
+C'est aussi le geste quand la console refuse de démarrer sur ce fichier
+(`configuration: data/config.applied.json ... : le retirer pour revenir aux
+cles du .env`, code 2) : un fichier abîmé, ou signé par une autre clé que
+celle de l'image. **Une rotation de la clé du catalogue** fait ce second cas
+sur toute console qui a appliqué une révision : la nouvelle image ne vérifie
+plus le fichier signé par l'ancienne clé. Retirer le fichier au moment de
+mettre l'image à jour ; la révision en vigueur, signée par la nouvelle clé,
+redescend au repos suivant.
+
 ### 7.5 Vérifier, puis démarrer
 
 ```sh

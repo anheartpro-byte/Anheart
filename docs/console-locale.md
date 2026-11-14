@@ -368,6 +368,7 @@ pas que le bras est arrêté : seule la vitesse mesurée renseigne sur son mouve
 | **Securite** | action de sécurité en cours : `none`, `freeze`, `reduce`, `ramp_down`, `quick_stop`, `go_silent` (vert, orange, rouge). Un `freeze` ou un `reduce` non verrouillé se lève seul, et la vitesse d'un bras qui tourne remonte alors sans clic : le bandeau orange `REPRISE AUTOMATIQUE POSSIBLE` le dit tant que c'est le cas ; `ramp_down`, `quick_stop` et `go_silent` terminent la séance (section 11). `freeze` ne veut pas dire que la consigne ne bouge plus : elle descend sous un `freeze` après un STOP (section 5) et, pour un programme, à partir de sa phase `cooldown` (section 11) | l'instantané |
 | **Console** | `mouvement actif`, `LECTURE SEULE`, `pas de console` | `/api/panel` |
 | **Serveur** | `joignable`, `injoignable`, `incompatible`, `cle refusee`, `en erreur`, `en attente`, `non configure` : le lien de la console avec le tableau de bord ([détail plus bas](#pastille-serveur--le-lien-avec-le-tableau-de-bord)) | `/api/panel` (`dashboard`) |
+| **Machine** | le nom et le lieu de la révision de configuration appliquée (ANH-141), `revision N` sans nom, `configuration .env` sans révision | `/api/config` |
 | **Version** | la version du logiciel de la console, par exemple `pi-0.0.0-dev` ; `pi-unknown` si le fichier `VERSION` manque ou est mal formé | `/api/panel` (`software_version`) |
 | **Service** | `en service` (vert) ou `HORS SERVICE` (rouge) : la console arme-t-elle quoi que ce soit ([détail plus bas](#pastille-service--en-service-ou-hors-service)) | `/api/panel` (`service`) |
 
@@ -2012,6 +2013,27 @@ rien et n'acquitte rien : un départ demande toujours l'attestation de ce démar
 verdicts acquittés, puis un départ. Elle est écrite dans le journal hors séance sous
 l'alias de l'opérateur, jamais son nom. Ce n'est pas un geste de routine : une console
 qui redémarre en boucle est une machine à faire vérifier.
+
+### Carte « Configuration du tableau de bord » (ANH-141)
+
+Sous la remise en service, la carte n'apparaît que lorsqu'une révision de
+configuration attend, qu'un refus est à dire ou que la console va redémarrer
+(`/api/config`, [raspberry-pi.md, 12.7](raspberry-pi.md#127-la-configuration-tenue-par-le-tableau-de-bord-anh-141)).
+Une révision qui change une clé de sûreté y est listée changement par
+changement (`MOTOR_MAX_RPM : 300 -> 400 (surete)`), avec le bouton
+`Appliquer la configuration de sûreté`, pour l'opérateur connecté
+(`POST /api/config/apply`).
+
+| Résultat | Ce que la page écrit |
+|---|---|
+| appliquée | `revision N appliquee : la console redemarre au repos` sous le bouton ; la console redémarre dès qu'elle est au repos |
+| console pas au repos (séance, départ en attente, lancement du site) | le refus de la console, sous le bouton (409) ; rien n'est appliqué |
+| la révision n'est plus celle du site, ou son niveau ne la permet plus | le refus de la console (409) ; la carte suit la réponse suivante |
+| aucun opérateur connecté | 401 `operator_required`, comme toute action |
+| révision refusée par la console | `configuration refusee, la console garde la sienne : ...`, sans bouton |
+
+Une révision qui ne change que des clés d'exploitation n'y attend pas : la
+console l'applique d'elle même au repos.
 
 ### Carte « Cablage de l'arret d'urgence » (l'attestation en deux cases)
 

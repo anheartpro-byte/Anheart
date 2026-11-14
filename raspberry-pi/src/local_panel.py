@@ -183,6 +183,15 @@ from src.cloud_sync import (
     StartedSession,
     end_is_failure,
 )
+from src.config_sync import (
+    APPLIED_FILE,
+    AppliedConfig,
+    ConfigSync,
+    applied_environment,
+    held_to_level,
+    load_applied,
+    view_of,
+)
 from src.console_access import AccessNote, ConsoleAccess, OperatorList, load_failures, load_list
 from src.contract import SoftwareVersion, read_software_version
 from src.control_surface import (
@@ -208,6 +217,7 @@ from src.health_system import cpu_temperature
 from src.link_state import NOT_CONFIGURED, LinkHealth
 from src.local_config import (
     KEY_DEVICE_TOKEN,
+    KEY_RECORD_MACHINE_ID,
     KEY_UI_TLS_CERT,
     KEY_UI_TLS_KEY,
     KEY_UI_TOKEN,
@@ -222,6 +232,7 @@ from src.local_config import (
     load_local_config,
     retired_keys,
 )
+from src.machine_config import effective_values
 from src.motor.atv320 import (
     AUXILIARY_READ_BUDGET,
     ATV320Drive,
@@ -491,6 +502,12 @@ class Armable:
 EXIT_OK: Final[int] = 0
 EXIT_FAILED: Final[int] = 1
 EXIT_CONFIG: Final[int] = 2
+EXIT_RESTART: Final[int] = 75
+"""A controlled restart at rest, to run a configuration just applied (ANH-141).
+
+Its stop is clean, written as such like an exit 0, so the next start is not counted
+towards the out of service state; systemd starts the console again because the code
+is not 0 (``Restart=on-failure``) and not 2 (``RestartPreventExitStatus``)."""
 
 
 class ProfilesUnusableError(ValueError):
@@ -1184,6 +1201,7 @@ class LocalPanel:
         "_hub",
         "_last_measured",
         "_listener",
+        "_machine_config",
         "_on_board",
         "_operators",
         "_preflight",
@@ -1191,6 +1209,7 @@ class LocalPanel:
         "_recorded_presence",
         "_recorder",
         "_reporter",
+        "_restart",
         "_roster",
         "_runtime",
         "_sensors",
@@ -1200,6 +1219,7 @@ class LocalPanel:
         "_stalled_at_stop",
         "_sto",
         "_sto_gate",
+        "_stop",
         "_store",
         "_surface",
         "_ticked",
@@ -1278,6 +1298,11 @@ class LocalPanel:
         self._catalog: ProgrammeCatalog | None = None
         # The signed operator list (ANH-152): asked for only with a dashboard link.
         self._operators: OperatorSync | None = None
+        # The machine's configuration from the dashboard (ANH-141): only with a link.
+        self._machine_config: ConfigSync | None = None
+        # A configuration was applied: the console restarts at its next rest.
+        self._restart: bool = False
+        self._stop: asyncio.Event | None = None
         self._last_measured: MotorRpm = MotorRpm(0)
         # The rider's feedback after a session with somebody on board (ANH-146),
         # memory only; and how to find, later, the dashboard's identifier of
@@ -1354,6 +1379,7 @@ class LocalPanel:
         health: HealthWatch | None,
         catalog: ProgrammeCatalog | None = None,
         operators: OperatorSync | None = None,
+        machine_config: ConfigSync,
     ) -> None:
         """Finish wiring the dashboard after construction, once its panel preflight exists."""
         self._listener = cloud
@@ -1362,6 +1388,7 @@ class LocalPanel:
         self._health = health
         self._catalog = catalog
         self._operators = operators
+        self._machine_config = machine_config
         self._services = replace(
             self._services,
             remote_launch_current=cloud.current_remote_launch,
@@ -1369,6 +1396,8 @@ class LocalPanel:
             stop_acknowledge=self.acknowledge_lost_stops,
             # Only a linked console offers it: the feedback has nowhere else to go.
             feedback=self._feedback,
+            config_view=machine_config.view,
+            config_confirm=machine_config.confirm,
         )
 
     async def acknowledge_lost_stops(self, operator: str) -> Result[tuple[str, ...], str]:
@@ -2149,6 +2178,33 @@ class LocalPanel:
         except Exception:  # as cloud_step: an observer must not stop the machine
             _logger.exception("operator list step failed; the list in force is unchanged")
 
+    async def config_step(self) -> None:
+        """Ask for the machine's configuration when it is due (ANH-141); restart when one
+        was applied and the machine is at rest. No-op without a link.
+
+        A task of its own, fenced as :meth:`catalog_step`: a bug in it leaves the
+        configuration in force as it was, and stops nothing.
+        """
+        stop = self._stop
+        if self._restart and stop is not None and self.catalog_at_rest():
+            stop.set()
+            return
+        machine_config = self._machine_config
+        if machine_config is None:
+            return
+        try:
+            await machine_config.step()
+        except Exception:  # as cloud_step: an observer must not stop the machine
+            _logger.exception("machine configuration step failed; the configuration is unchanged")
+
+    def request_restart(self) -> None:
+        """Restart the console to run a configuration just written (ANH-141).
+
+        Taken at the next rest by :meth:`config_step`: never during a session, never
+        with a start waiting. The stop is the console's ordinary controlled stop.
+        """
+        self._restart = True
+
     def catalog_at_rest(self) -> bool:
         """Whether the programmes may change now (ANH-138 EX-2, EX-5).
 
@@ -2212,6 +2268,7 @@ class LocalPanel:
 
     async def run(self, stop: asyncio.Event, web: WebRunner) -> int:
         """Run until ``stop`` is set or a task ends; then stop everything. Returns an exit code."""
+        self._stop = stop
         if self._recorder is not None:
             self._recorder.journal.start()
         control = asyncio.create_task(self._every(CONTROL_PERIOD, self.control_cycle, stop))
@@ -2224,6 +2281,7 @@ class LocalPanel:
             asyncio.create_task(self._every(CLOUD_PERIOD, self.roster_step, stop)),
             asyncio.create_task(self._every(CLOUD_PERIOD, self.catalog_step, stop)),
             asyncio.create_task(self._every(CLOUD_PERIOD, self.operators_step, stop)),
+            asyncio.create_task(self._every(CLOUD_PERIOD, self.config_step, stop)),
             asyncio.create_task(self._every(WALL_CLOCK_PERIOD, self.clock_step, stop)),
             asyncio.create_task(self._every(PREFLIGHT_PERIOD, self.preflight_step, stop)),
         )
@@ -2240,7 +2298,9 @@ class LocalPanel:
             if not self._ticked.is_set():
                 started.cancel()
             await asyncio.gather(started, return_exceptions=True)
-        return EXIT_FAILED if failed or self._stalled_at_stop else EXIT_OK
+        if failed or self._stalled_at_stop:
+            return EXIT_FAILED
+        return EXIT_RESTART if self._restart else EXIT_OK
 
     async def _record_start(self) -> None:
         """Once the first tick has read the drive: write this start, off the loop."""
@@ -2540,6 +2600,8 @@ def build_panel(  # noqa: PLR0915  # one statement per wired part
     roster: Roster | None = None,
     preflight: bool = False,
     access: ConsoleAccess | None = None,
+    applied: AppliedConfig | None = None,
+    local_env: Mapping[str, str] | None = None,
 ) -> LocalPanel:
     """Wire everything, in the plan's order. Opens no port and starts no task.
 
@@ -2787,6 +2849,9 @@ def build_panel(  # noqa: PLR0915  # one statement per wired part
         roster=riders,
         preflight=monitor,
         access=access,
+        config_view=functools.partial(
+            view_of, applied, effective_values(config) if applied is None else applied.values
+        ),
     )
     panel = LocalPanel(
         clock=clock,
@@ -2861,6 +2926,20 @@ def build_panel(  # noqa: PLR0915  # one statement per wired part
             say=say,
             machine_id=machine_id,
         )
+        machine_config = ConfigSync(
+            clock=clock,
+            transport=link,
+            public_key=public_key,
+            path=profiles_path.parent / APPLIED_FILE,
+            at_rest=panel.catalog_at_rest,
+            say=say,
+            machine_id=machine_id,
+            local={} if local_env is None else local_env,
+            medical=config.medical,
+            current=effective_values(config) if applied is None else applied.values,
+            applied=applied,
+            restart=panel.request_restart,
+        )
         cloud = CloudSync(
             clock=clock,
             transport=link,
@@ -2888,12 +2967,21 @@ def build_panel(  # noqa: PLR0915  # one statement per wired part
             ),
             roster=riders,
             catalog_fields=catalog.wire_fields,
+            config_hash=None if applied is None else applied.revision.digest,
         )
         panel.attach_cloud(
-            cloud=cloud, transport=owned, health=health, catalog=catalog, operators=operators
+            cloud=cloud,
+            transport=owned,
+            health=health,
+            catalog=catalog,
+            operators=operators,
+            machine_config=machine_config,
         )
     return panel
 
+
+APPLIED_CONFIG_PATH: Final[Path] = LOCAL_PROFILES_PATH.parent / APPLIED_FILE
+"""``data/config.applied.json``: the dashboard's configuration this console applied (ANH-141)."""
 
 OPERATORS_FILE: Final[str] = "operators.json"
 """The signed operator list accepted last, next to the programmes (ANH-152)."""
@@ -3482,6 +3570,8 @@ async def run_console(
     stop: asyncio.Event | None = None,
     stopped: Callable[[int], object] | None = None,
     notify_socket: str | None = None,
+    applied: AppliedConfig | None = None,
+    local_env: Mapping[str, str] | None = None,
 ) -> int:
     """Build the console on the real clock and run it until a signal.
 
@@ -3497,8 +3587,8 @@ async def run_console(
     ``notify_socket``: the service manager's socket, when one started this
     process (``NOTIFY_SOCKET``).
 
-    A stop with exit code 0 is the only clean one, and is written as such
-    last of all, once the drive is stopped, the record closed and the exit
+    A stop with exit code 0, or :data:`EXIT_RESTART`, is the only clean one,
+    and is written as such last of all, once the drive is stopped, the record closed and the exit
     deadline armed: a process that does not get that far is what the next
     start counts as an unclean stop (:mod:`src.service_state`).
     """
@@ -3522,6 +3612,8 @@ async def run_console(
         notify_socket=notify_socket,
         service=service,
         preflight=True,
+        applied=applied,
+        local_env=local_env,
     )
     undo = install_stop_signals(event)
     code = EXIT_FAILED
@@ -3531,7 +3623,7 @@ async def run_console(
         undo()
         if stopped is not None:
             stopped(code)
-    if code == EXIT_OK:
+    if code in (EXIT_OK, EXIT_RESTART):
         service.guard.stopped()
     return code
 
@@ -3592,12 +3684,40 @@ def main(environ: Mapping[str, str] | None = None) -> int:
             KEY_UI_TOKEN,
             KEY_DEVICE_TOKEN,
         )
-    loaded = load_local_config(env)
+    machine_id = env.get(KEY_RECORD_MACHINE_ID, "").strip()
+    kept = load_applied(
+        APPLIED_CONFIG_PATH,
+        read_public_key(),
+        None if machine_id in ("", UNASSIGNED) else machine_id,
+    )
+    if isinstance(kept, Err):
+        _logger.error(
+            "configuration: data/%s %r : le retirer pour revenir aux cles du .env",
+            APPLIED_FILE,
+            kept.error,
+        )
+        return EXIT_CONFIG
+    applied = kept.value
+    merged, ignored = applied_environment(env, applied)
+    for key in ignored:
+        _logger.warning(
+            "configuration: %r du .env ignoree : la configuration appliquee (data/%s) la fixe",
+            key,
+            APPLIED_FILE,
+        )
+    loaded = load_local_config(merged)
     if isinstance(loaded, Err):
         for problem in loaded.error:
             _logger.error("configuration: %s: %s", problem.key, problem.detail)
         return EXIT_CONFIG
-    config = loaded.value
+    config, held = held_to_level(
+        loaded.value if applied is None else replace(loaded.value, machine_config=applied.ref),
+        applied,
+    )
+    for key in held:
+        _logger.warning(
+            "configuration: %r au dessus du niveau de validation signe : mis a faux", key
+        )
     unserved = tls_problem(config)
     if unserved is not None:
         _logger.error("configuration: %s: %s", unserved.key, unserved.detail)
@@ -3608,7 +3728,13 @@ def main(environ: Mapping[str, str] | None = None) -> int:
         _logger.error("medical parameters: %s", unsigned)
     try:
         return asyncio.run(
-            run_console(config, stopped=bound_exit, notify_socket=env.get(NOTIFY_SOCKET))
+            run_console(
+                config,
+                stopped=bound_exit,
+                notify_socket=env.get(NOTIFY_SOCKET),
+                applied=applied,
+                local_env=env,
+            )
         )
     except ProfilesUnusableError as unusable:
         refused = unusable

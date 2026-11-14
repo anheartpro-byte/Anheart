@@ -326,6 +326,15 @@ class RecordConfig:
 DEFAULT_RECORD_CONFIG: Final[RecordConfig] = RecordConfig()
 
 
+@dataclass(frozen=True, slots=True)
+class MachineConfigRef:
+    """The revision of the dashboard's configuration this console runs with (ANH-141)."""
+
+    revision: int
+    digest: str
+    """SHA-256 of its canonical values: ``config_hash`` of the heartbeat."""
+
+
 @dataclass(frozen=True, slots=True, kw_only=True)
 class LocalConfig:
     """Everything the local console needs, validated. Build with :func:`load_local_config`."""
@@ -373,6 +382,10 @@ class LocalConfig:
     bitalino_min_battery: Percent = DEFAULT_MIN_BATTERY
     """``BITALINO_MIN_BATTERY_PCT``: below it the pre-flight refuses a person on board
     and warns at the bench (ANH-142)."""
+
+    machine_config: MachineConfigRef | None = None
+    """The dashboard's revision the keys came from (``data/config.applied.json``,
+    :mod:`src.config_sync`); ``None``: they are the ``.env``'s."""
 
     def __post_init__(self) -> None:
         """Refuse a configuration that would let unsigned medical parameters near a person.

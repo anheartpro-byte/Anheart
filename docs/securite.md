@@ -318,12 +318,17 @@ préalables :
    `OCCUPANCY_OCCUPIED_ENABLED` au dessous du niveau `occupied`, à la
    proposition et à l'approbation (ANH-141,
    [convex.md](convex.md#machineconfigsts--configuration-des-machines-anh-141)) ;
-   la console le revérifie à l'application, une fois sa couche livrée. Un
-   niveau qui descend refuse les révisions approuvées et pas encore appliquées
-   dont un verrou ne passe plus ; une révision déjà appliquée au dessus du
-   niveau est signalée sur la fiche, et c'est la console, qui reçoit le niveau
-   signé avec chaque réponse, qui reste l'arrêt ferme. Une clé de sûreté change
-   à deux comptes admin Anheart distincts, l'auteur puis un autre : une même
+   la console le revérifie contre le niveau signé avec chaque réponse, à
+   l'application comme pour une révision déjà appliquée, et tient à faux au
+   démarrage un verrou que ce niveau ne permet pas
+   ([raspberry-pi.md, 12.7](raspberry-pi.md#127-la-configuration-tenue-par-le-tableau-de-bord-anh-141)).
+   Un niveau qui descend refuse les révisions approuvées et pas encore
+   appliquées dont un verrou ne passe plus ; une révision déjà appliquée au
+   dessus du niveau est signalée sur la fiche, et c'est la console qui reste
+   l'arrêt ferme. **Une clé de sûreté change à deux, et sur place** : deux
+   comptes admin Anheart distincts sur le site, l'auteur puis un autre, puis
+   un opérateur connecté à la console, au repos, qui voit ce qui change avant
+   de l'appliquer ; rien d'autre ne l'applique. Pour les deux comptes : une même
    personne qui tiendrait deux comptes admin passerait seule ce contrôle,
    limite propre à toute règle « deux comptes nommés », que seule la gestion
    des comptes admin (un compte par personne) couvre. Aucun verrou lié au

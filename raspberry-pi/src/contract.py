@@ -102,10 +102,11 @@ without one (:mod:`src.console_access`).
 Since 1.15 the machine's configuration, held in Convex, comes down signed on
 the same channel (``GET /api/machine/config``, ``machine_config`` of the shared
 file), and the heartbeat's ``config_hash`` is the hash of the configuration
-applied. This build announces 1.15 and still runs from its ``.env``: it never
-asks for the route, and its ``config_hash`` stays ``null``
-(:mod:`src.machine_config` holds the rules it will revalidate a proposal
-with). A dashboard before 1.15 answers 404.
+applied (``null`` on a ``.env``). The console asks for it at rest, revalidates
+it, applies it with a controlled restart, holds a safety key until an operator
+at the console confirms it, and says what it applied or refused
+(``POST /api/machine/config/applied``, :mod:`src.config_sync`). A dashboard
+before 1.15 answers 404: the console keeps its configuration.
 
 One exchange is outside this rule on purpose: **a stop**. It means the same
 under every contract, so the dashboard answers the status request whatever
