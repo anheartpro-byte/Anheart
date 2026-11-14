@@ -7,6 +7,7 @@ import zlib
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from types import MappingProxyType
 from typing import Final
 
 from pydantic import TypeAdapter
@@ -48,10 +49,10 @@ six channels at two bytes (2 400 bytes) and its header line (512 allowed), 39 00
 = 113 568 000 bytes. A real six-channel record of 2 h 10 min holds 39 000 x 2 635, about
 102.8 MB.
 
-The reader keeps every decoded block, and a decoded block takes at most about twenty
-times its bytes in memory (16.6 measured): a record at this bound needs at most about
-2.3 GB for its ECG, as a real one of that length does. With the files of
-:data:`FILE_BOUNDS`, at most about 4 GB for the whole record."""
+The reader keeps every decoded block, and a decoded block keeps about eighteen times
+its bytes in memory when its samples are numbers the interpreter does not share, as a
+real ECG's mostly are (measured, ``tracemalloc``): about 2 GB at this bound, nearly as
+much for a real record of that length. The whole record: :data:`FILE_BOUNDS`."""
 
 GZIP_SIZE_BYTES: Final[int] = 4
 """The trailer field of a gzip member that gives its decompressed size (ISIZE)."""
@@ -60,14 +61,20 @@ LARGEST_BLOCK_FILE: Final[int] = MAX_BLOCK_HEADER_BYTES + MAX_RAW_BLOCK_BYTES + 
 """The largest a raw block's file can be: what it can hold, and room for gzip's overhead,
 which on data that does not compress is a few bytes per 16 KiB."""
 
-FILE_BOUNDS: Final[Mapping[str, int]] = {
-    "manifest.json": 2 * 1024 * 1024,
-    "checksums.sha256": (MAX_RAW_BLOCKS + 16) * 128,
-    "ticks.csv": LONGEST_RECORD_S * 5 * 512,
-    "sensors.csv": LONGEST_RECORD_S * len(SensorKind) * 128,
-    "events.jsonl": LONGEST_RECORD_S * 20 * 512,
-    "drive_frames.jsonl": LONGEST_RECORD_S * 128 * 256,
-}
+METRICS_PER_CHANNEL: Final[int] = 4
+"""The metrics a channel reports each second, each its own row of ``sensors.csv``:
+four for every one of the six (``src.sensors``)."""
+
+FILE_BOUNDS: Final[Mapping[str, int]] = MappingProxyType(
+    {
+        "manifest.json": 2 * 1024 * 1024,
+        "checksums.sha256": (MAX_RAW_BLOCKS + 16) * 128,
+        "ticks.csv": LONGEST_RECORD_S * 5 * 512,
+        "sensors.csv": LONGEST_RECORD_S * len(SensorKind) * METRICS_PER_CHANNEL * 128,
+        "events.jsonl": LONGEST_RECORD_S * 20 * 512,
+        "drive_frames.jsonl": LONGEST_RECORD_S * 128 * 256,
+    }
+)
 """The files the reader reads whole, each no larger than the longest record makes it.
 
 * ``manifest.json``: 2 MiB, what the deposit accepts;
@@ -75,25 +82,54 @@ FILE_BOUNDS: Final[Mapping[str, int]] = {
   other file, 4 994 048 bytes;
 * ``ticks.csv``: five rows a second, 512 bytes allowed each (344 is the longest written,
   every column filled), 19 968 000 bytes;
-* ``sensors.csv``: a row a second for each of the six channels, 128 bytes allowed each (61
-  the longest written), 5 990 400 bytes;
+* ``sensors.csv``: a row a second for each metric of each of the six channels
+  (:data:`METRICS_PER_CHANNEL`), 128 bytes allowed each (62 the longest written in a
+  session, 78 the longest any metric can make), 23 961 600 bytes;
 * ``events.jsonl``: twenty events a second, 512 bytes allowed each (126 the longest
   written; a console makes about five a second at its busiest), 79 872 000 bytes;
 * ``drive_frames.jsonl``: 128 frames a second, 256 bytes allowed each (106 the longest
   written): the native driver makes about 30 a second, and about 120 with the SDK's
   transport calls kept, the bench diagnostic of the link; 255 590 400 bytes.
 
-Each over 7 800 s (:data:`LONGEST_RECORD_S`). Read, a tick or a sensor row takes at most
-about ten times its bytes in memory, an event or a frame about four: at these bounds,
-about 200, 60, 320 and 1 020 MB, and the ECG about 2 300 (:data:`MAX_RAW_BYTES`), at most
-about 4 GB in all. A real record of this length without the link's diagnostic takes
-much less."""
+Each over 7 800 s (:data:`LONGEST_RECORD_S`). The simulation's records are held by the
+same bounds as the console's: both are written by the same writer, which keeps one
+instant of sensors a second, a row per metric.
+
+What a record at these bounds takes in memory is measured, not reckoned. Each file
+filled with the valid line that keeps the most memory per byte read keeps, measured
+with ``tracemalloc``: ``ticks.csv`` about ten times its bytes (its shortest row),
+``sensors.csv`` sixteen (its shortest, seven bytes), ``events.jsonl`` three,
+``drive_frames.jsonl`` two of its shortest frame and 12.5 of frames of two whole reads
+(:data:`MODBUS_READ_REGISTERS` numbers each, ``-6``, the shortest the interpreter does
+not share), and the ECG eighteen (:data:`MAX_RAW_BYTES`). A record with every file at
+its bound so filled, and its ECG at its bound, took 6.7 GB at the peak of the process
+that read it, 3.2 for the frames and 2 for the ECG: its peak memory footprint,
+compressed memory counted (``/usr/bin/time -l``). Filled with the shortest line of each
+file, 4.5 GB. At most about 7 GB, then, which the machine that replays must have. A
+real record of this length takes about 2 GB, nearly all of it its ECG."""
+
+LONGEST_LINE: Final[int] = 64 * 1024
+"""The longest line ``read`` parses, in characters, in every file it reads whole.
+
+A line is parsed whole before it is judged, a frame's numbers before they are counted:
+a longer one is refused unparsed. Unbounded, one line of numbers filling
+``drive_frames.jsonl`` took more than 3 GB to parse. Far above any line written (344
+the longest, a tick row; a frame of a whole read, its registers, values and bytes,
+about 2 100), and below what the CSV module allows a field (128 KiB)."""
+
+MODBUS_READ_REGISTERS: Final[int] = 125
+"""The most registers one Modbus read returns (function 3, the protocol's own limit):
+the most a frame's ``register`` or ``value`` holds."""
 
 RAW_BLOCKS_ABOVE_LONGEST_RECORD: Final[str] = "raw_blocks_above_longest_record"
 RAW_BYTES_ABOVE_LONGEST_RECORD: Final[str] = "raw_bytes_above_longest_record"
 FILE_ABOVE_ITS_BOUND: Final[str] = "file_above_its_bound"
 NOT_A_REGULAR_FILE: Final[str] = "not_a_regular_file"
-"""Why ``read`` refuses a record before reading it, as the ``detail`` of its error."""
+LINE_ABOVE_ITS_BOUND: Final[str] = "line_above_its_bound"
+REGISTERS_ABOVE_A_MODBUS_READ: Final[str] = "registers_above_a_modbus_read"
+"""Why ``read`` refuses a record, as the ``detail`` of its error: the first four before
+reading it, a line too long before parsing it, a frame of too many registers as soon
+as it is parsed."""
 
 CSV_TEXT_COLUMNS: Final = frozenset(
     {
@@ -136,16 +172,35 @@ class Recording:
     warnings: tuple[ReadWarning, ...]
 
 
+class _RefusalError(ValueError):
+    """A record ``read`` refuses for a reason it names, the ``detail`` of its error."""
+
+
 def complete_lines(path: Path, warnings: list[ReadWarning]) -> list[str]:
     raw = path.read_bytes()
     if raw and not raw.endswith(b"\n"):
         warnings.append(ReadWarning(path.name, "truncated"))
         raw = raw[: raw.rfind(b"\n") + 1]
-    return raw.decode("utf-8").splitlines()
+    lines = raw.decode("utf-8").splitlines()
+    # A line is parsed whole before it is judged: one far longer than any written is not.
+    if any(len(line) > LONGEST_LINE for line in lines):
+        raise _RefusalError(LINE_ABOVE_ITS_BOUND)
+    return lines
 
 
 def _jsonl[T](path: Path, adapter: TypeAdapter[T], warnings: list[ReadWarning]) -> tuple[T, ...]:
     return tuple(adapter.validate_json(line) for line in complete_lines(path, warnings))
+
+
+def _frame(line: str) -> DriveFrame:
+    """One drive frame, refused as soon as it is parsed if it holds more than a read."""
+    frame = FRAME.validate_json(line)
+    if any(
+        isinstance(said, tuple) and len(said) > MODBUS_READ_REGISTERS
+        for said in (frame.register, frame.value)
+    ):
+        raise _RefusalError(REGISTERS_ABOVE_A_MODBUS_READ)
+    return frame
 
 
 def _csv[T](
@@ -218,12 +273,14 @@ def read(path: Path) -> Result[Recording, RecordError]:
             manifest,
             rows,
             events,
-            _jsonl(path / "drive_frames.jsonl", FRAME, warnings),
+            tuple(map(_frame, complete_lines(path / "drive_frames.jsonl", warnings))),
             _raw(path / "ecg_raw", warnings),
             sensors,
             tuple(warnings),
         )
-    except (OSError, ValueError, EOFError, zlib.error) as error:
+    except _RefusalError as refused:
+        return Err(RecordError("read", str(refused)))
+    except (OSError, ValueError, EOFError, zlib.error, csv.Error) as error:
         return Err(RecordError("read", type(error).__name__))
     return Ok(recording)
 

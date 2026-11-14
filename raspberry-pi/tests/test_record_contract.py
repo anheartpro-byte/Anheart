@@ -45,6 +45,7 @@ from src.record.schema import (
 from src.record.writer import MANIFEST, TICK_COLUMNS, Writer
 from src.result import Err, Ok
 from src.sensors.base import Metric, SensorKind, SensorReading
+from src.sensors.registry import processor_for
 from src.training.types import SignalQuality
 from src.units import Monotonic, Seconds, UnixMillis
 from tests.record_support import manifest, row, writer
@@ -484,7 +485,7 @@ def test_the_file_bounds_hold_a_real_record_of_the_longest_length() -> None:
     longest = reader.LONGEST_RECORD_S
     real = {
         "ticks.csv": 5 * 344,
-        "sensors.csv": len(SensorKind) * 61,
+        "sensors.csv": len(SensorKind) * reader.METRICS_PER_CHANNEL * 78,
         "events.jsonl": 5 * 126,
         "drive_frames.jsonl": 120 * 106,
     }
@@ -494,10 +495,74 @@ def test_the_file_bounds_hold_a_real_record_of_the_longest_length() -> None:
         "manifest.json": 2_097_152,
         "checksums.sha256": 4_994_048,
         "ticks.csv": 19_968_000,
-        "sensors.csv": 5_990_400,
+        "sensors.csv": 23_961_600,
         "events.jsonl": 79_872_000,
         "drive_frames.jsonl": 255_590_400,
     }
+
+
+def test_every_channel_reports_no_more_metrics_than_the_sensors_bound_counts() -> None:
+    """``sensors.csv`` holds a row a second per metric of each channel, the simulation's
+    record as the console's: the bound counts four for each."""
+    for kind in SensorKind:
+        reading = processor_for(kind).process((), 1000, Monotonic(1.0))
+        assert len(reading.metrics) <= reader.METRICS_PER_CHANNEL, kind
+
+
+@pytest.mark.parametrize(
+    "name", ["checksums.sha256", "ticks.csv", "sensors.csv", "events.jsonl", "drive_frames.jsonl"]
+)
+def test_a_line_longer_than_any_written_is_refused_before_it_is_parsed(
+    tmp_path: Path, name: str
+) -> None:
+    """Parsed, a line of ``x`` would be malformed: refused for its length, it never was."""
+    path = _closed_record(tmp_path)
+    with (path / name).open("a") as file:
+        file.write("x" * (reader.LONGEST_LINE + 1) + "\n")
+    assert read(path) == Err(RecordError("read", reader.LINE_ABOVE_ITS_BOUND))
+
+
+def test_a_line_as_long_as_the_bound_is_read(tmp_path: Path) -> None:
+    path = _closed_record(tmp_path)
+    line = '{"t":0.2,"kind":"warning","detail":"%s"}'
+    padded = line % ("x" * (reader.LONGEST_LINE - len(line % "")))
+    assert len(padded) == reader.LONGEST_LINE
+    with (path / "events.jsonl").open("a") as file:
+        file.write(padded + "\n")
+    loaded = read(path)
+    assert isinstance(loaded, Ok)
+    assert loaded.value.events[-1].detail == "x" * (reader.LONGEST_LINE - len(line % ""))
+
+
+def test_a_frame_holding_more_registers_than_a_modbus_read_is_refused(tmp_path: Path) -> None:
+    """A Modbus read returns 125 registers at most: a frame that holds more is none a
+    console wrote, refused as soon as it is parsed."""
+    whole = tuple(range(reader.MODBUS_READ_REGISTERS))
+    frame = DriveFrame(
+        t=0.1, kind="read_status", register=whole, value=whole, ok=True, latency_ms=0
+    )
+    read_whole = writer(tmp_path / "whole")
+    assert isinstance(read_whole.frame(frame), Ok)
+    loaded = read(read_whole.path)
+    assert isinstance(loaded, Ok)
+    assert loaded.value.frames == (frame,)
+    for name, above in (
+        ("register", replace(frame, register=(*whole, 0))),
+        ("value", replace(frame, value=(*whole, None))),
+    ):
+        recording = writer(tmp_path / name)
+        assert isinstance(recording.frame(above), Ok)
+        refusal = RecordError("read", reader.REGISTERS_ABOVE_A_MODBUS_READ)
+        assert read(recording.path) == Err(refusal), name
+
+
+def test_a_quoted_field_longer_than_the_csv_module_allows_is_refused(tmp_path: Path) -> None:
+    """Every line short, one quoted field across them all: the CSV module's own error is a
+    refusal like any other, never an exception out of the reader."""
+    path = _closed_record(tmp_path)
+    with (path / "ticks.csv").open("a") as file:
+        file.write('"' + "x\n" * 70_000)
+    assert read(path) == Err(RecordError("read", "Error"))
 
 
 def test_ex7_configured_sensor_metrics_are_published_at_one_hz(tmp_path: Path) -> None:
