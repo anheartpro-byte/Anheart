@@ -4426,8 +4426,11 @@ invalide, une erreur de décompression, ou une erreur de valeur ou d'index que
 aussi l'ECG avant de le décoder, pour l'import, le rejeu `--replay` et le
 jugement de bibliothèque : 39 000 blocs et `MAX_RAW_BYTES` (113 568 000
 octets) décompressés au plus, ce que tient la séance la plus longue, à six
-voies. Un enregistrement à cette borne demande environ 2,3 Go de mémoire pour
-être rejoué, comme un vrai de cette durée.
+voies, et chaque fichier lu en entier est borné de même avant d'être lu
+(`FILE_BOUNDS`), un lien, un tube ou un périphérique refusé. Un enregistrement
+à ces bornes demande au plus environ 4 Go de mémoire pour être rejoué, dont
+2,3 pour l'ECG ; un `ticks.csv` gonflé de ses propres lignes est refusé avec
+quelques Mio (test de `test_real_records.py`).
 Le compte des membres et leurs tailles effectives sont vérifiés avant
 d'écrire le membre suivant. L'import, le rejeu,
 le jugement de bibliothèque et le visualiseur utilisent cette même extraction.

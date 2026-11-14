@@ -36,7 +36,13 @@ from simulation.replay_report import ReplayReport
 from src.clock import ManualClock
 from src.record.codec import JSON, Privacy, document, encode
 from src.record.containment import resolve_under
-from src.record.reader import Recording, read
+from src.record.reader import (
+    FILE_ABOVE_ITS_BOUND,
+    RAW_BLOCKS_ABOVE_LONGEST_RECORD,
+    RAW_BYTES_ABOVE_LONGEST_RECORD,
+    Recording,
+    read,
+)
 from src.record.writer import EVENT, MANIFEST, Writer
 from src.result import Err, Ok, Result
 from src.units import UnixMillis
@@ -104,13 +110,14 @@ def _publish(files: tuple[tuple[Path, Path], ...]) -> None:
         raise
 
 
-_ECG_REFUSALS: Final[Mapping[str, str]] = {
-    "raw_blocks_above_longest_record": (
+_SIZE_REFUSALS: Final[Mapping[str, str]] = {
+    RAW_BLOCKS_ABOVE_LONGEST_RECORD: (
         "the source record holds more ECG blocks than the longest record"
     ),
-    "raw_bytes_above_longest_record": "the source record holds more ECG than the longest record",
+    RAW_BYTES_ABOVE_LONGEST_RECORD: "the source record holds more ECG than the longest record",
+    FILE_ABOVE_ITS_BOUND: "the source record holds a file larger than the longest record",
 }
-"""The reader's refusals of more ECG than the longest record (``src.record.reader``)."""
+"""The reader's refusals of more than the longest record holds (``src.record.reader``)."""
 
 
 def _load_source(source: Path) -> Result[Recording, str]:  # noqa: PLR0911  # one return per refusal
@@ -138,7 +145,7 @@ def _load_source(source: Path) -> Result[Recording, str]:  # noqa: PLR0911  # on
         return Err("the source record contains an entry outside schema 2")
     loaded = read(source)
     if isinstance(loaded, Err):
-        return Err(_ECG_REFUSALS.get(loaded.error.detail, "the source record cannot be read"))
+        return Err(_SIZE_REFUSALS.get(loaded.error.detail, "the source record cannot be read"))
     recording = loaded.value
     if recording.manifest.ended_at is None or recording.manifest.end_reason is None:
         return Err("the source record is not closed")

@@ -66,7 +66,7 @@ from simulation.tests.replay_support import (
     with_largest_zero_blocks,
 )
 from src.record.codec import JSON, mapping
-from src.record.reader import Recording, read
+from src.record.reader import FILE_BOUNDS, Recording, read
 from src.record.rows import JsonValue
 from src.record.schema import EventKind, Manifest, Profile
 from src.result import Err, Ok
@@ -555,6 +555,32 @@ def test_a_replay_and_the_library_refuse_more_ecg_than_the_longest_record_unread
     assert replayed == Err(ReplayError(RAW_ABOVE))
     assert folder == Err(ReplayError(RAW_ABOVE))
     assert judged == RAW_ABOVE
+    assert peak < 64 * 1024 * 1024, f"held {peak} bytes"
+
+
+def test_a_replay_refuses_a_stream_longer_than_the_longest_record_unread(
+    session: Path, tmp_path: Path
+) -> None:
+    """ticks.csv padded with one of its own rows past its bound, a few hundred kilobytes
+    compressed: the reader kept it all, parsed, over a gigabyte. Refused from its size."""
+    hostile = copy(session, tmp_path / "hostile")
+    ticks = hostile / "ticks.csv"
+    last = ticks.read_bytes().splitlines(keepends=True)[-1]
+    bound = FILE_BOUNDS["ticks.csv"]
+    with ticks.open("ab") as padded:
+        padded.write(last * (bound // len(last) + 1))
+    assert ticks.stat().st_size > bound
+    reseal(hostile)
+    archive = tmp_path / "hostile.tar.gz"
+    pack(hostile, archive)
+    assert archive.stat().st_size < 4 * 1024 * 1024
+    tracemalloc.start()
+    try:
+        replayed = replay_path(archive)
+        _now, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert replayed == Err(ReplayError("the record cannot be read (file_above_its_bound)"))
     assert peak < 64 * 1024 * 1024, f"held {peak} bytes"
 
 

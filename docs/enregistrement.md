@@ -1076,9 +1076,7 @@ seconde, six voies de deux octets et 512 octets d'en-tête par bloc
 (`MAX_RAW_BYTES`, 39 000 × 2 912 = 113 568 000 octets ; un vrai enregistrement
 de six voies de cette durée en tient environ 102,8 Mo, avec ses en-têtes de
 235 octets). Le refus est `raw_blocks_above_longest_record` ou
-`raw_bytes_above_longest_record`. Un bloc décodé prend environ vingt fois ses
-octets en mémoire : lire un enregistrement à cette borne demande environ
-2,3 Go, comme un vrai de cette durée. L'import retire ensuite sa copie
+`raw_bytes_above_longest_record`. Chaque fichier que le lecteur lit en entier est d'abord jugé sur ce que dit le système de fichiers, avant qu'un octet n'en soit lu : un fichier ordinaire, jamais un lien, un tube ou un périphérique (`not_a_regular_file`, ce qu'un dossier donné tel quel peut contenir, une archive jamais), et pas plus grand que ce qu'en fait la séance la plus longue (`FILE_BOUNDS`, `file_above_its_bound`) : 2 Mio pour le manifeste, 19 968 000 octets pour `ticks.csv` (cinq lignes par seconde de 512 octets au plus, 344 pour la plus longue écrite), 5 990 400 pour `sensors.csv`, 79 872 000 pour `events.jsonl` (vingt par seconde de 512 octets), 255 590 400 pour `drive_frames.jsonl` (128 trames par seconde de 256 octets : le diagnostic du lien en écrit environ 120, le pilote seul environ 30), 4 994 048 pour `checksums.sha256`, et un bloc ECG pas plus grand que ce qu'un bloc peut tenir. Lu, un bloc décodé prend au plus environ vingt fois ses octets en mémoire (16,6 mesuré), un tic ou une ligne de capteur environ dix, un événement ou une trame environ quatre : à ces bornes, au plus environ 2,3 Go pour l'ECG et 4 Go pour l'enregistrement entier, et la machine du rejeu doit les avoir ; un vrai enregistrement de cette durée sans le diagnostic du lien en prend bien moins. Aucune archive, si petite soit-elle, ne demande plus. L'import retire ensuite sa copie
 temporaire. Le serveur utilise le reader
 partagé et le viewer affiche les avertissements de complétude dans sa zone
 source existante. `/?trace=out/ancienne-trace.jsonl` garde la lecture du
