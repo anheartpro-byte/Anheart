@@ -62,9 +62,16 @@ from scripts.drive_link import BuiltDrive
 from src.clock import Clock
 from src.local_config import DriveLink, load_local_config
 from src.motor.atv320 import ATV320Drive, ModbusMaster
-from src.motor.drive import BadResponse, CommTimeout, DriveError, DriveLimits, DriveStatus
+from src.motor.drive import (
+    BadResponse,
+    CommTimeout,
+    DriveError,
+    DriveLimits,
+    DriveState,
+    DriveStatus,
+)
 from src.result import Err, Ok, Result
-from src.units import Seconds
+from src.units import Amperes, MotorRpm, Seconds, StatusWord
 
 NO_ANSWER: Final[CommTimeout] = CommTimeout(after=Seconds(0.1))
 
@@ -265,6 +272,46 @@ async def test_an_unarmed_console_refuses_the_motion_routes_before_any_exit(
     assert [answer.status_code for answer in refused] == [HTTPStatus.CONFLICT] * 2
     assert all("console non armee" in answer.text for answer in refused)
     assert queued == []
+
+
+def test_a_fault_with_no_name_read_is_never_reset_and_says_so(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A FAULT whose LFT was not read: the real driver never returns one (it reads LFT in
+    every FAULT, or fails the whole status), so a stand-in drive does. No name is no
+    evidence the fault is benign: the reset is refused, nothing written, and the page shows
+    the fault as unnamed."""
+    rig = _rig(monkeypatch)
+    unnamed = DriveStatus(
+        state=DriveState.FAULT,
+        status_word=StatusWord(0x0008),
+        setpoint_echo_rpm=MotorRpm(0),
+        output_rpm=MotorRpm(0),
+        current=Amperes(0.0),
+        fault=None,
+        fault_code=None,
+    )
+
+    async def read_status() -> Result[DriveStatus, DriveError]:
+        return Ok(unnamed)
+
+    monkeypatch.setattr(rig.drive, "read_status", read_status)
+    worker = rig.worker
+    worker.submit(bench.Command("fault_reset"))
+    worker.start()
+    try:
+        deadline = time.monotonic() + 5.0
+        while not worker.snap.last_action.startswith("fault_reset: ECHEC"):
+            assert time.monotonic() < deadline, worker.snap.last_action
+            time.sleep(0.01)
+    finally:
+        worker.shutdown()
+        worker.join(10)
+    assert worker.snap.last_action == (
+        "fault_reset: ECHEC: reset refuse (defaut non nomme (LFT non lu)); rien n'est ecrit"
+    )
+    assert worker.snap.fault == "defaut (LFT non lu)"
+    assert rig.drive.stops == 1
 
 
 type _Dispatch = Callable[[bench.BusWorker, bench.Command], Awaitable[str]]

@@ -2474,7 +2474,12 @@ la console d'abord (voir §3.4 et §14).
 
 `Acquitter défaut` suit la règle de la console : sinon rien n'est écrit et la dernière
 action le dit, `fault_reset: ECHEC: reset refuse (...)`, avec la raison (aucun défaut,
-arbre non lu à l'arrêt, défaut non nommé ou non réarmable, état illisible). Sur un
+arbre non lu à l'arrêt, défaut non nommé ou non réarmable, état illisible). L'outil suit
+donc aussi la table des défauts de la console
+([raspberry-pi.md, 6.3](../raspberry-pi.md#63-réarmement--jamais-plus-permissif-que-le-manuel)) :
+SLF, CnF, ObF, USF, OHF et OLF, entre autres, s'acquittent encore depuis l'outil ; OCF, SOF,
+SCF et les autres défauts que la table dit non réarmables (`defaut OCF non rearmable depuis
+la console`) s'effacent au clavier du variateur ou en coupant son alimentation. Sur un
 variateur en marche, ces deux mots couperaient l'étage de puissance : l'arbre finirait
 en roue libre. La page grise le bouton tant que son dernier état reçu ne montre pas un
 défaut et RFRD à 0 ; le refus de l'outil reste la barrière. Limite, la même que pour la
