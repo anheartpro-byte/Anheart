@@ -393,6 +393,24 @@ def test_a_0_from_before_the_restart_is_orange_until_a_poll_says_it_again() -> N
         assert refusal_of(judge(CONTROLS, kept, occupancy)) is None
 
 
+def test_an_incidents_count_from_before_the_restart_holds_as_one_just_read() -> None:
+    """ANH-149: kept across a restart, a serious incident refuses a person on board, and a
+    0 is orange until a poll says it again; a stop the dashboard has not counted holds."""
+    restored = UnixMillis(1_700_000_000_000)
+    held = _green(incidents_open_high=1, incidents_restored=restored)
+    refused = refusal_of(judge(CONTROLS, held, Occupancy.OCCUPIED))
+    assert refused is not None
+    assert refused.control == "incidents"
+    assert refused.reason.endswith(f"par un admin Anheart ({BEFORE_RESTART})")
+    assert _result(held, "incidents", Occupancy.BENCH).state is ControlState.WARN
+    none = _result(_green(incidents_open_high=0, incidents_restored=restored), "incidents")
+    assert none.state is ControlState.WARN
+    assert none.detail == f"aucun incident grave ouvert ({BEFORE_RESTART})"
+    words = "seance terminee sur emergency_stop pas encore recue par le tableau de bord"
+    unsent = _green(incidents_open_high=0, incidents_restored=restored, unreported_stop=words)
+    assert _result(unsent, "incidents").state is ControlState.BLOCK
+
+
 def test_what_the_server_cannot_judge_is_orange_never_red() -> None:
     unannounced = _green(
         incidents_open_high=None,

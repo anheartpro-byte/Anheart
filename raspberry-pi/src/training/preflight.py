@@ -129,6 +129,10 @@ class PreflightInputs:
     incidents_open_high: int | None = None
     """As the dashboard last announced it; ``None``: not announced."""
 
+    incidents_restored: UnixMillis | None = None
+    """When that count was announced, when it is one kept from before this start
+    (:class:`~src.cloud_sync.KeptCount`, ANH-149); ``None``: announced since."""
+
     drive_interventions_due: int | None = None
     """The drive faults waiting for their intervention in the dashboard's logbook, as it
     last announced them (contract 1.16, ANH-149); ``None``: not announced."""
@@ -315,13 +319,18 @@ def _incidents(inputs: PreflightInputs) -> Result[str, Finding]:
         return Err(Failed(f"{unreported} : son incident n'est pas encore compte"))
     if count is None:
         return Err(Unjudged("incidents graves ouverts : non annonces par le tableau de bord"))
+    restored = inputs.incidents_restored
+    before = "" if restored is None else f" ({before_restart(restored)})"
     if count > 0:
         return Err(
             Failed(
                 f"{count} incident(s) grave(s) ouvert(s) sur cette machine : aucune personne "
-                "a bord avant leur cloture par un admin Anheart"
+                f"a bord avant leur cloture par un admin Anheart{before}"
             )
         )
+    if restored is not None:
+        # None was open then; one opened since is not counted until a poll says it again.
+        return Err(Unjudged(f"aucun incident grave ouvert{before}"))
     return Ok("aucun incident grave ouvert")
 
 

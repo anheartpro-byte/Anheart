@@ -17,7 +17,9 @@ plus une seconde avec une vitesse mesurée positive aux deux extrémités.
 La batterie BITalino, l'état thermique du variateur et le dernier préflight
 restent inconnus tant que leurs producteurs ne les fournissent pas.
 `incidents_open_high` reprend le dernier poll compatible qui fournit un entier
-positif ou nul; sans ce champ il reste inconnu. Le pré-vol lit de même
+positif ou nul; une réponse sans ce champ, ou d'une valeur illisible, garde le
+dernier, que la console garde aussi sur le disque (`data/incidents_open_high.json`,
+ANH-149) ; jamais lu, il reste inconnu. Le pré-vol lit de même
 `drive_interventions_due` (contrat 1.16), qui ne part pas dans le heartbeat.
 Le nombre d'enregistrements en attente ne baisse qu'après confirmation de dépôt, pas après l'envoi de télémétrie.
 La carte distante affiche ces inconnues et l'ancienneté du rapport explicitement.
@@ -3107,7 +3109,11 @@ interruption après la reprise de l'acquisition. Une batterie lue il y a plus de
   enregistrement d'une exécution précédente dont la fin n'est pas encore reçue,
   ou une fin reçue sans poll depuis (`fin d'une seance terminee sur un arret
   recue par le tableau de bord, compte des incidents pas encore relu`). Hors
-  ligne, il le reste jusqu'au retour du lien. Une séance que le tableau de
+  ligne, il le reste jusqu'au retour du lien. Depuis ANH-149, le dernier
+  compte lu est gardé sur le disque : après un redémarrage, un compte non nul
+  reste rouge avec une personne à bord, et la raison dit `(compte annonce
+  avant le redemarrage, le ... UTC, pas encore relu)` ; un 0 d'avant le
+  redémarrage est orange avec la même mention, jusqu'au poll suivant. Une séance que le tableau de
   bord ne recevra jamais le retient, même après un redémarrage, jusqu'à
   l'acquittement de l'opérateur
   (ci-dessus).

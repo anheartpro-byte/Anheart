@@ -40,6 +40,7 @@ from src.cloud_sync import (
     DRIVE_INTERVENTIONS_FILE,
     FINAL_CODES,
     HEARTBEAT_PERIOD,
+    INCIDENTS_FILE,
     LAUNCH_GIVEN_UP,
     LAUNCH_TIMEOUT,
     POLL_PERIOD,
@@ -319,6 +320,7 @@ def rig(
     with_roster: bool = True,
     sto_source: str = "sim_ready",
     preflight: bool = False,
+    counts_dir: Path | None = None,
 ) -> Rig:
     """A real simulated panel's surface and store, with a stub runtime and a scripted link."""
     clock = ManualClock(Monotonic(10.0), UnixMillis(1_700_000_000_000))
@@ -350,6 +352,7 @@ def rig(
         preflight_start=panel.preflight_remote_start,
         records=records,
         roster=panel.roster if with_roster else None,
+        counts_dir=counts_dir,
     )
     return Rig(
         clock=clock,
@@ -2511,6 +2514,75 @@ async def test_a_kept_count_that_cannot_be_read_or_written_is_said(
     assert f"{DRIVE_INTERVENTIONS_FILE} unreadable" in caplog.text
     assert kept.held == HeldCount(2, ANNOUNCED), "held for this run all the same"
     assert f"{DRIVE_INTERVENTIONS_FILE} not written" in caplog.text
+
+
+def incidents_count(sync: CloudSync) -> int | None:
+    """Read afresh: a checker keeps a property's narrowing across an ``await``."""
+    return sync.incidents_open_high
+
+
+@pytest.mark.parametrize("unreadable", ["1", -1, True, 1.5, None])
+async def test_the_incidents_count_is_lifted_only_by_a_count_read(
+    tmp_path: Path, unreadable: JsonValue
+) -> None:
+    """ANH-149: as the drive interventions' count, an answer that carries none it can read
+    (a dashboard rolled back below 1.10, a value it cannot read) keeps the last one."""
+    r = rig(tmp_path)
+
+    def answer(count: JsonValue) -> Reply:
+        return ok(
+            {SERVER_VERSION_FIELD: CONTRACT_VERSION, "session": None, "incidents_open_high": count}
+        )
+
+    r.dashboard.answer(POLL_PATH, answer(2))
+    await r.step()
+    assert incidents_count(r.sync) == 2
+    r.dashboard.answer(POLL_PATH, answer(unreadable))
+    await r.step(float(POLL_PERIOD))
+    assert incidents_count(r.sync) == 2
+    r.dashboard.answer(POLL_PATH, ok({SERVER_VERSION_FIELD: "1.9", "session": None}))
+    await r.step(float(POLL_PERIOD))
+    assert incidents_count(r.sync) == 2
+    r.dashboard.answer(POLL_PATH, answer(0))
+    await r.step(float(POLL_PERIOD))
+    assert incidents_count(r.sync) == 0
+
+
+async def test_an_incidents_count_kept_from_before_the_start_is_not_one_asked_after_a_stop(
+    tmp_path: Path,
+) -> None:
+    """ANH-149: a count read back at startup was asked before any end this run sent: the
+    hold of a session ended on a stop is lifted by a count read since, as before."""
+    (tmp_path / INCIDENTS_FILE).write_text(
+        '{"schema_version": 1, "count": 0, "read_at": 1700000000000}', encoding="utf-8"
+    )
+    r = rig(tmp_path, counts_dir=tmp_path)
+    assert r.sync.incidents == HeldCount(0, ANNOUNCED, restored=True)
+    r.dashboard.answer("/api/machine/training/local", ok({"sessionId": "cloud-1"}))
+    r.dashboard.answer("/api/machine/training/status", status_answer())
+    r.runtime.state = RuntimeState.RUNNING
+    r.sync.session_started(manual(r.clock))
+    for _ in range(3):
+        await r.step()
+    r.runtime.state = RuntimeState.FINISHED
+    r.runtime.end_reason = EndReason.EMERGENCY_STOP
+    await r.step()
+    assert r.dashboard.to(ENDED)[-1]["reason"] == "emergency_stop"
+    assert unreported(r.sync) == STOP_NOT_COUNTED
+    # The unscripted poll carries no count: the count kept and the hold both stand.
+    await r.step(float(POLL_PERIOD))
+    assert incidents_count(r.sync) == 0
+    assert unreported(r.sync) == STOP_NOT_COUNTED
+    r.dashboard.answer(
+        POLL_PATH,
+        ok({SERVER_VERSION_FIELD: CONTRACT_VERSION, "session": None, "incidents_open_high": 1}),
+    )
+    await r.step(float(POLL_PERIOD))
+    assert unreported(r.sync) is None
+    assert r.sync.incidents == HeldCount(1, r.clock.unix_millis())
+    assert KeptCount(tmp_path / INCIDENTS_FILE).held == HeldCount(
+        1, r.clock.unix_millis(), restored=True
+    )
 
 
 async def test_an_auto_session_registers_its_programme(tmp_path: Path) -> None:

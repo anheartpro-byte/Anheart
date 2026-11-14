@@ -4973,7 +4973,10 @@ ouvert lui refuse aussi une séance de banc, du côté sûr, jusqu'à sa mise à
 jour. Entre le déploiement de Convex et celui de l'image du Pi, une seule
 exception du tic au banc ferme donc le banc de cette console jusqu'à ce qu'un
 admin Anheart close l'incident ([deploiement.md](deploiement.md#34-ordre-de-mise-à-jour-entre-convex-et-les-consoles)). Une console `1.10` face à un serveur `1.9` ne reçoit pas le champ : le
-contrôle reste orange « non annoncé », comme avant.
+contrôle reste orange « non annoncé », comme avant, tant qu'elle n'a jamais
+lu de compte ; depuis ANH-149, une console qui en a lu un le garde,
+redémarrage compris, et un compte non nul la tient fermée aux départs avec
+une personne à bord.
 
 **Défaut variateur (1.16).** Une console `1.15` ou antérieure ignore
 `drive_interventions_due` : seul le serveur la protège, en refusant le

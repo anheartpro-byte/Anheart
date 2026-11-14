@@ -12,7 +12,7 @@ import asyncio
 import json
 import logging
 from collections.abc import Callable, Mapping
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from http import HTTPStatus
 from pathlib import Path
 from typing import Final, cast
@@ -22,7 +22,7 @@ import pytest
 
 from src import local_panel
 from src.clock import ManualClock
-from src.cloud_sync import DRIVE_INTERVENTIONS_FILE, CloudSync
+from src.cloud_sync import DRIVE_INTERVENTIONS_FILE, INCIDENTS_FILE, CloudSync
 from src.contract import CONTRACT_VERSION, SERVER_VERSION_FIELD
 from src.health import HealthWatch
 from src.health_system import Celsius, SystemHealth
@@ -50,6 +50,7 @@ from src.training.plan import JsonValue
 from src.training.preflight import (
     BATTERY_WAIT,
     CONTROLS,
+    ControlResult,
     ControlState,
     PreflightMonitor,
     PreflightRefused,
@@ -606,10 +607,71 @@ KEPT_BEFORE: Final[str] = (
 )
 
 
-async def _power_cycle(tmp_path: Path, due: int) -> Linked:
+@dataclass(frozen=True, slots=True)
+class Kept:
+    """One of the counts the poll announces and the console keeps across a restart."""
+
+    control: str
+    field: str
+    file: str
+    refusal: str
+    """The refusal at a count of 1, as read this run."""
+
+    none: str
+    """What the control says at 0."""
+
+    before: str
+    """A dashboard contract that carries no such count."""
+
+
+KEPT: Final[tuple[object, ...]] = (
+    pytest.param(
+        Kept(
+            "drive_interventions",
+            "drive_interventions_due",
+            DRIVE_INTERVENTIONS_FILE,
+            DRIVE_INTERVENTION_REFUSAL,
+            "aucun defaut variateur en attente d'intervention",
+            "1.15",
+        ),
+        id="drive-interventions",
+    ),
+    pytest.param(
+        Kept(
+            "incidents",
+            "incidents_open_high",
+            INCIDENTS_FILE,
+            "pre-vol : 1 incident(s) grave(s) ouvert(s) sur cette machine : aucune personne a "
+            "bord avant leur cloture par un admin Anheart",
+            "aucun incident grave ouvert",
+            "1.9",
+        ),
+        id="incidents",
+    ),
+)
+
+
+def _counts(kept: Kept, due: JsonValue) -> Reply:
+    """A poll answer of this contract: ``due`` for ``kept``, 0 for the other count."""
+    document: dict[str, JsonValue] = {
+        "session": None,
+        SERVER_VERSION_FIELD: CONTRACT_VERSION,
+        "incidents_open_high": 0,
+        "drive_interventions_due": 0,
+    }
+    document[kept.field] = due
+    return ok(document)
+
+
+def _state(monitor: PreflightMonitor, control: str, occupancy: Occupancy) -> ControlResult:
+    report = judge(CONTROLS, monitor.inputs(), occupancy)
+    return next(r for r in report.results if r.id == control)
+
+
+async def _power_cycle(tmp_path: Path, kept: Kept, due: int) -> Linked:
     """A console that read ``due`` from its dashboard, then started again with none."""
     first = linked(tmp_path, preflight=True)
-    first.dashboard.answer(POLL_PATH, _interventions(None, due))
+    first.dashboard.answer(POLL_PATH, _counts(kept, due))
     await first.run(13.0)
     await first.panel.close()
     again = linked(tmp_path, preflight=True)
@@ -618,57 +680,67 @@ async def _power_cycle(tmp_path: Path, due: int) -> Linked:
     return again
 
 
+@pytest.mark.parametrize("kept", KEPT)
 async def test_a_count_kept_across_a_power_cycle_holds_a_person_on_board_until_a_poll_says_0(
-    tmp_path: Path,
+    tmp_path: Path, kept: Kept
 ) -> None:
-    """ANH-149: the likely sequence. A drive fault the console cannot reset, the machine
-    switched off and on again: the count read before holds, offline and through answers
-    that carry none, until the dashboard says 0."""
-    rig_ = await _power_cycle(tmp_path, 1)
+    """ANH-149: the likely sequence. A drive fault the console cannot reset (or a serious
+    incident), the machine switched off and on again: the count read before holds,
+    offline and through answers that carry none it can read, until the dashboard says 0."""
+    rig_ = await _power_cycle(tmp_path, kept, 1)
     monitor = rig_.panel.preflight
     assert monitor is not None
     on_board = monitor.refusal(Occupancy.OCCUPIED)
     assert on_board is not None
-    assert on_board.control == "drive_interventions"
-    assert on_board.detail == DRIVE_INTERVENTION_REFUSAL + KEPT_BEFORE
+    assert on_board.control == kept.control
+    assert on_board.detail == kept.refusal + KEPT_BEFORE
     occupied = await rig_.panel.runtime.start_manual(Occupancy.OCCUPIED, OPERATOR, MotorRpm(300))
     assert isinstance(occupied, Err)
     assert occupied.error == on_board
-    assert _interventions_state(monitor, Occupancy.BENCH) is ControlState.WARN
+    assert _state(monitor, kept.control, Occupancy.BENCH).state is ControlState.WARN
     assert monitor.refusal(Occupancy.BENCH) is None
-    # A dashboard rolled back below 1.16 says no count: it lifts nothing.
-    rig_.dashboard.answer(POLL_PATH, ok({SERVER_VERSION_FIELD: "1.15", "session": None}))
+    # A dashboard rolled back to before the count, or a value it cannot read: nothing lifts.
+    for answer in (
+        ok({SERVER_VERSION_FIELD: kept.before, "session": None}),
+        _counts(kept, "1"),
+    ):
+        rig_.dashboard.answer(POLL_PATH, answer)
+        await rig_.run(4.0)
+        still = monitor.refusal(Occupancy.OCCUPIED)
+        assert still is not None
+        assert still.control == kept.control
+    rig_.dashboard.answer(POLL_PATH, _counts(kept, 0))
     await rig_.run(4.0)
-    still = monitor.refusal(Occupancy.OCCUPIED)
-    assert still is not None
-    assert still.control == "drive_interventions"
-    rig_.dashboard.answer(POLL_PATH, _interventions(None, 0))
-    await rig_.run(4.0)
-    assert _interventions_state(monitor, Occupancy.OCCUPIED) is ControlState.OK
-    lifted = monitor.refusal(Occupancy.OCCUPIED)
-    assert lifted is None or lifted.control != "drive_interventions"
+    lifted = _state(monitor, kept.control, Occupancy.OCCUPIED)
+    assert lifted.state is ControlState.OK
+    assert lifted.detail == kept.none
+    refused = monitor.refusal(Occupancy.OCCUPIED)
+    assert refused is None or refused.control != kept.control
     await rig_.panel.close()
 
 
-async def test_a_0_kept_across_a_power_cycle_is_orange_with_its_date(tmp_path: Path) -> None:
-    rig_ = await _power_cycle(tmp_path, 0)
+@pytest.mark.parametrize("kept", KEPT)
+async def test_a_0_kept_across_a_power_cycle_is_orange_with_its_date(
+    tmp_path: Path, kept: Kept
+) -> None:
+    rig_ = await _power_cycle(tmp_path, kept, 0)
     monitor = rig_.panel.preflight
     assert monitor is not None
-    report = judge(CONTROLS, monitor.inputs(), Occupancy.OCCUPIED)
-    kept = next(r for r in report.results if r.id == "drive_interventions")
-    assert kept.state is ControlState.WARN
-    assert kept.detail == "aucun defaut variateur en attente d'intervention" + KEPT_BEFORE
+    result = _state(monitor, kept.control, Occupancy.OCCUPIED)
+    assert result.state is ControlState.WARN
+    assert result.detail == kept.none + KEPT_BEFORE
     await rig_.panel.close()
 
 
+@pytest.mark.parametrize("kept", KEPT)
 @pytest.mark.parametrize("content", [None, b"{not json"], ids=["no-file", "corrupt"])
 async def test_a_count_never_kept_or_unreadable_is_orange(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture, content: bytes | None
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, kept: Kept, content: bytes | None
 ) -> None:
     """ANH-149: never known, it is unknown, as before; a file that does not parse is
     unknown too, and said in the log: never taken for 0."""
     if content is not None:
-        (tmp_path / DRIVE_INTERVENTIONS_FILE).write_bytes(content)
+        (tmp_path / kept.file).write_bytes(content)
     with caplog.at_level(logging.WARNING, logger="src.cloud_sync"):
         rig_ = linked(tmp_path, preflight=True)
     rig_.dashboard.answer(POLL_PATH, DOWN)
@@ -676,8 +748,8 @@ async def test_a_count_never_kept_or_unreadable_is_orange(
     monitor = rig_.panel.preflight
     assert monitor is not None
     for occupancy in Occupancy:
-        assert _interventions_state(monitor, occupancy) is ControlState.WARN
-    said = f"{DRIVE_INTERVENTIONS_FILE} is not a count this console wrote" in caplog.text
+        assert _state(monitor, kept.control, occupancy).state is ControlState.WARN
+    said = f"{kept.file} is not a count this console wrote" in caplog.text
     assert said is (content is not None)
     await rig_.panel.close()
 

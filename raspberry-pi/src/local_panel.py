@@ -2732,6 +2732,7 @@ def build_panel(  # noqa: PLR0915  # one statement per wired part
         room = None if storage is None else storage()
         sampled = None if health is None else health.last
         interventions = None if cloud is None else cloud.drive_interventions
+        incidents = None if cloud is None else cloud.incidents
         return PreflightInputs(
             at=now,
             snapshot=runtime.snapshot(),
@@ -2746,7 +2747,10 @@ def build_panel(  # noqa: PLR0915  # one statement per wired part
             medical_version=config.medical.version,
             software_version=version,
             # Read from the link itself: the poll every few seconds, not the heartbeat.
-            incidents_open_high=None if cloud is None else cloud.incidents_open_high,
+            incidents_open_high=None if incidents is None else incidents.count,
+            incidents_restored=(
+                incidents.read_at if incidents is not None and incidents.restored else None
+            ),
             drive_interventions_due=None if interventions is None else interventions.count,
             drive_interventions_restored=(
                 interventions.read_at

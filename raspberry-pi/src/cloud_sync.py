@@ -994,7 +994,7 @@ class CloudSync:
         "_drive_interventions",
         "_health",
         "_health_context",
-        "_incidents_open_high",
+        "_incidents",
         "_incompatible",
         "_last_heartbeat",
         "_last_poll",
@@ -1075,7 +1075,9 @@ class CloudSync:
         self._health: HealthWatch | None = health
         self._health_context: Callable[[], HealthContext] = health_context
         self._last_rtt: Seconds | None = None
-        self._incidents_open_high: int | None = None
+        self._incidents: KeptCount = KeptCount(
+            None if counts_dir is None else counts_dir / INCIDENTS_FILE
+        )
         self._drive_interventions: KeptCount = KeptCount(
             None if counts_dir is None else counts_dir / DRIVE_INTERVENTIONS_FILE
         )
@@ -1198,8 +1200,16 @@ class CloudSync:
     @property
     def incidents_open_high(self) -> int | None:
         """The serious incidents of this machine open or analysed, as the last compatible
-        poll announced them (contract 1.10); ``None``: not announced."""
-        return self._incidents_open_high
+        poll that said a count announced them (contract 1.10), before this start included;
+        ``None``: never announced."""
+        held = self._incidents.held
+        return None if held is None else held.count
+
+    @property
+    def incidents(self) -> HeldCount | None:
+        """:attr:`incidents_open_high` with when it was announced, and whether before this
+        start (ANH-149)."""
+        return self._incidents.held
 
     @property
     def drive_interventions(self) -> HeldCount | None:
@@ -1550,7 +1560,7 @@ class CloudSync:
                     snapshot,
                     self._health_context(),
                     self._last_rtt,
-                    self._incidents_open_high,
+                    self.incidents_open_high,
                 ),
             )
         began = self._clock.monotonic()
@@ -1686,10 +1696,12 @@ class CloudSync:
             self._refuse_server(refusal, launch)
             return
         self._incompatible = None
-        incidents = _count_of(polled.value.get("incidents_open_high"))
-        self._incidents_open_high = incidents
-        if incidents is not None:
-            # Only a count read is one asked after a stop's end: an unreadable one is none.
+        counted = await self._incidents.read(
+            _count_of(polled.value.get("incidents_open_high")), self._clock.unix_millis()
+        )
+        if counted:
+            # Only a count read is one asked after a stop's end: an unreadable one is none,
+            # and one kept from before this start never is.
             self._counted_at = now
         await self._drive_interventions.read(
             _count_of(polled.value.get("drive_interventions_due")), self._clock.unix_millis()
@@ -2232,6 +2244,9 @@ def _safe_launch_refusal(detail: str, launch: Launch | None) -> str:
 DRIVE_INTERVENTIONS_FILE: Final[str] = "drive_interventions_due.json"
 """Next to the programmes (``data/``): the last count of drive interventions read."""
 
+INCIDENTS_FILE: Final[str] = "incidents_open_high.json"
+"""Next to the programmes (``data/``): the last count of serious incidents read."""
+
 
 @dataclass(frozen=True, slots=True)
 class HeldCount:
@@ -2298,22 +2313,24 @@ class KeptCount:
         """The last count read, before this start included; ``None``: never read."""
         return self._held
 
-    async def read(self, count: int | None, at: UnixMillis) -> None:
-        """What a poll of this contract said at ``at``; ``None``: no count it can read."""
+    async def read(self, count: int | None, at: UnixMillis) -> bool:
+        """What a poll of this contract said at ``at``; ``None``: no count it can read.
+        Whether it said one."""
         if count is None:
-            return
+            return False
         held = self._held
         if held is not None and held.count == count:
             self._held = HeldCount(count, held.read_at)
-            return
+            return True
         self._held = HeldCount(count, at)
         path = self._path
         if path is None:
-            return
+            return True
         content = STORED_COUNT.dump_json(StoredCount(count=count, read_at=int(at))) + b"\n"
         written = await anyio.to_thread.run_sync(partial(replace_file, path, content))
         if isinstance(written, Err):
             _logger.warning("%s not written (%s): a restart forgets it", path.name, written.error)
+        return True
 
 
 def _count_of(value: object) -> int | None:
