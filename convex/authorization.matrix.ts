@@ -4342,7 +4342,9 @@ function machineConfigEntries(): Entry[] {
       cases: machineConfigWriteCases(/machine_not_found/),
       build: async (w, actor) => {
         if (actor === "orgAdmin") await insertConfigRevision(w, { status: "applied", author: w.admin, revision: 1 });
-        return { machineId: w.machine, values: actor === "orgAdmin" ? { ...MACHINE_CONFIG_BASE, location: "TEST ailleurs" } : MACHINE_CONFIG_BASE };
+        return actor === "orgAdmin"
+          ? { machineId: w.machine, values: { ...MACHINE_CONFIG_BASE, location: "TEST ailleurs" }, basedOn: 1 }
+          : { machineId: w.machine, values: MACHINE_CONFIG_BASE, basedOn: null };
       },
       onSuccess: async (res, w, actor) => {
         const { configId } = res as { configId: Id<"machine_configs"> };

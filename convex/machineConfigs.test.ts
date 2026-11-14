@@ -235,8 +235,33 @@ async function setLevel(w: World, level: MachineValidationLevel, machineId = w.m
   });
 }
 
-const propose = (w: World, values: ConfigValues, actor: "admin" | "orgAdmin" = "admin") =>
-  as(w.t, actor).mutation(api.machineConfigs.proposeConfig, { machineId: w.machine, values });
+/** The revision in force, as a form opened now starts from it. */
+const inForceOf = (w: World) =>
+  w.t.run(async (ctx) => {
+    const rows = await ctx.db
+      .query("machine_configs")
+      .withIndex("by_machine_and_revision", (q) => q.eq("machineId", w.machine))
+      .collect();
+    const held = [...rows]
+      .reverse()
+      .find(
+        (row) =>
+          (row.status === "approved" || row.status === "applied") && row.approvedAt !== undefined,
+      );
+    return held?.revision ?? null;
+  });
+
+const propose = async (
+  w: World,
+  values: ConfigValues,
+  actor: "admin" | "orgAdmin" = "admin",
+  basedOn?: number | null,
+) =>
+  as(w.t, actor).mutation(api.machineConfigs.proposeConfig, {
+    machineId: w.machine,
+    values,
+    basedOn: basedOn === undefined ? await inForceOf(w) : basedOn,
+  });
 
 const rowOf = (w: World, configId: Id<"machine_configs">) =>
   w.t.run((ctx) => ctx.db.get(configId));
@@ -367,6 +392,22 @@ describe("ANH-141 EX-2 EX-3 propose and approve", () => {
     await expect(
       asSecondAdmin(w).mutation(api.machineConfigs.approveConfig, { configId: renamed.configId }),
     ).rejects.toThrow(/machine_config_safety_needs_admins/);
+  });
+
+  it("B3: refuses a proposal edited from another revision than the one in force", async () => {
+    const w = await seedWorld(modules);
+    const key = await machineKey(w);
+    const first = await approvedFirst(w);
+    await applyOnMachine(w, key, 1, (await rowOf(w, first.configId))?.hash ?? "");
+    // Another admin's safety change, approved, waits for the machine.
+    const safety = await propose(w, { ...BASE, MOTOR_MAX_RPM: 400 });
+    await asSecondAdmin(w).mutation(api.machineConfigs.approveConfig, { configId: safety.configId });
+    // A form opened on revision 1 and left open proposes only a new place.
+    await expect(propose(w, { ...BASE, location: "Ailleurs" }, "admin", 1)).rejects.toThrow(
+      /machine_config_stale/,
+    );
+    await expect(propose(w, BASE, "admin", null)).rejects.toThrow(/machine_config_stale/);
+    expect((await rowOf(w, safety.configId))?.status).toBe("approved");
   });
 
   it("refuses a revision equal to the one in force", async () => {

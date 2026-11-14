@@ -253,6 +253,9 @@ export const getMachineConfig = query({
       revisions: v.array(revisionValidator),
       appliedRevision: v.union(v.number(), v.null()),
       inForceRevision: v.union(v.number(), v.null()),
+      /** The values of those two revisions, whether or not they are among `revisions`. */
+      appliedValues: v.union(configValuesValidator, v.null()),
+      inForceValues: v.union(configValuesValidator, v.null()),
       reportedHash: v.union(v.string(), v.null()),
       hashMatches: v.union(v.boolean(), v.null()),
       configurationStatus: v.union(
@@ -315,6 +318,8 @@ export const getMachineConfig = query({
       revisions,
       appliedRevision: applied?.revision ?? null,
       inForceRevision: target?.revision ?? null,
+      appliedValues: applied?.values ?? null,
+      inForceValues: target?.values ?? null,
       reportedHash: reported,
       hashMatches: target === null ? null : reported === target.hash,
       configurationStatus: configurationStatus(target, reported),
@@ -334,11 +339,18 @@ export const getMachineConfig = query({
 /**
  * Propose a revision. Every problem the console would raise is refused at
  * once (`invalid_machine_config`, with `problems`); a revision equal to the
- * one in force is refused (`machine_config_unchanged`). A draft waiting is
- * replaced: it is rejected, "remplacée par la révision N".
+ * one in force is refused (`machine_config_unchanged`). `basedOn`: the
+ * revision in force the values were edited from, `null` without one; another
+ * than the one in force now is refused (`machine_config_stale`), so that a
+ * form left open never reverts what was approved meanwhile. A draft waiting
+ * is replaced: it is rejected, "remplacée par la révision N".
  */
 export const proposeConfig = mutation({
-  args: { machineId: v.id("machines"), values: configValuesValidator },
+  args: {
+    machineId: v.id("machines"),
+    values: configValuesValidator,
+    basedOn: v.union(v.number(), v.null()),
+  },
   returns: v.object({ configId: v.id("machine_configs"), revision: v.number() }),
   handler: async (ctx, args) => {
     await limitUser(ctx);
@@ -352,6 +364,7 @@ export const proposeConfig = mutation({
     const canonical = canonicalConfig(values);
     const hash = await configHash(canonical);
     const target = inForce(rows);
+    if (args.basedOn !== (target?.revision ?? null)) throw refusal("machine_config_stale");
     if (target?.hash === hash) throw refusal("machine_config_unchanged");
     if (
       user.role !== "admin" &&

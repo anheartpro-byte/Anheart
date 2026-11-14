@@ -69,6 +69,8 @@ function view(overrides: Partial<MachineConfigView> = {}): MachineConfigView {
     revisions: [],
     appliedRevision: null,
     inForceRevision: null,
+    appliedValues: null,
+    inForceValues: null,
     reportedHash: null,
     hashMatches: null,
     configurationStatus: "unavailable",
@@ -101,7 +103,23 @@ const form = () => within(screen.getByRole("form", { name: t.form }));
 const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const field = (key: string) =>
   form().getByLabelText(new RegExp(`^${escape(t.keys[key as keyof typeof t.keys])} ${key}`));
-const group = (key: string) => form().getByRole("group", { name: key });
+const group = (key: string) =>
+  form().getByRole("group", {
+    name: new RegExp(`^${escape(t.keys[key as keyof typeof t.keys])} ${key}`),
+  });
+
+/** A machine running revision 1, the shared base, and sending it. */
+const running = (overrides: Partial<MachineConfigView> = {}) =>
+  view({
+    revisions: [revision(1, "applied")],
+    appliedRevision: 1,
+    inForceRevision: 1,
+    appliedValues: BASE,
+    inForceValues: BASE,
+    configurationStatus: "applied",
+    hashMatches: true,
+    ...overrides,
+  });
 const problems = () =>
   within(screen.getByRole("list", { name: t.problemList }))
     .getAllByRole("listitem")
@@ -141,16 +159,7 @@ describe("ANH-141 the configuration card", () => {
   });
 
   it("proposes the values the console accepts, and says the diff with the applied revision", async () => {
-    const applied = revision(1, "applied");
-    await card(
-      view({
-        revisions: [applied],
-        appliedRevision: 1,
-        inForceRevision: 1,
-        configurationStatus: "applied",
-        hashMatches: true,
-      }),
-    );
+    await card(running());
     expect(screen.getByRole("button", { name: t.propose })).toHaveProperty("disabled", true);
     expect(screen.getByText(t.unchanged)).toBeTruthy();
     fireEvent.change(field("location"), { target: { value: "Atelier 2" } });
@@ -174,6 +183,7 @@ describe("ANH-141 the configuration card", () => {
     expect(propose.mock.calls[0][0]).toEqual({
       machineId,
       values: { ...BASE, location: "Atelier 2", MOTOR_MAX_RPM: 400 },
+      basedOn: 1,
     });
     await vi.waitFor(() =>
       expect(feedbackShown()).toContainEqual({
@@ -203,20 +213,64 @@ describe("ANH-141 the configuration card", () => {
     expect(screen.getByText(/^MOTOR_\* : Modbus slave address 0/, { selector: "p" })).toBeTruthy();
   });
 
-  it("lets an organisation admin edit the name and the place only", async () => {
-    await card(
-      view({
-        revisions: [revision(1, "applied")],
-        appliedRevision: 1,
-        inForceRevision: 1,
-        canPropose: "name_location",
-      }),
-      "org_admin",
-    );
+  it("lets an organisation admin edit the name and the place only, and says why", async () => {
+    await card(running({ canPropose: "name_location" }), "org_admin");
     expect(field("name")).toHaveProperty("disabled", false);
     expect(field("location")).toHaveProperty("disabled", false);
     expect(field("MOTOR_MAX_RPM")).toHaveProperty("disabled", true);
     expect(field("MOTOR_BACKEND")).toHaveProperty("disabled", true);
+    const note = screen.getByText(t.organizationOnly);
+    expect(field("MOTOR_MAX_RPM").getAttribute("aria-describedby")).toBe(note.id);
+    expect(field("name").getAttribute("aria-describedby")).toBeNull();
+  });
+
+  it("B2: starts from the revision in force and diffs the applied one, even out of the revisions shown", async () => {
+    const inForce = { ...BASE, location: "Hors liste" };
+    await card(running({ revisions: [], inForceValues: inForce }));
+    expect(field("location")).toHaveProperty("value", "Hors liste");
+    const diff = within(screen.getByRole("list", { name: t.diff }));
+    expect(diff.getAllByRole("listitem").map((item) => item.textContent)).toEqual([
+      "location : Atelier Anheart → Hors liste",
+    ]);
+  });
+
+  it("B3: says a form left open is stale, holds Propose, and reloads", async () => {
+    const shown = await card(running());
+    fireEvent.change(field("location"), { target: { value: "Ailleurs" } });
+    answer(
+      api.machineConfigs.getMachineConfig,
+      running({ inForceRevision: 2, inForceValues: { ...BASE, MOTOR_MAX_RPM: 400 } }),
+    );
+    await shown.refresh();
+    expect(screen.getByText(t.stale.replace("{revision}", "2"))).toBeTruthy();
+    expect(screen.getByRole("button", { name: t.propose })).toHaveProperty("disabled", true);
+    fireEvent.click(screen.getByRole("button", { name: t.reload }));
+    expect(screen.queryByText(t.stale.replace("{revision}", "2"))).toBeNull();
+    expect(field("location")).toHaveProperty("value", "Atelier Anheart");
+    expect(field("MOTOR_MAX_RPM")).toHaveProperty("value", "400");
+  });
+
+  it.each(["0x1F4", " 12 ", "+5", "1e2.5"])(
+    "B4: refuses %j in a number field as the console would",
+    async (typed) => {
+      await card(running());
+      fireEvent.change(field("MOTOR_MAX_RPM"), { target: { value: typed } });
+      expect(problems()).toEqual(["MOTOR_MAX_RPM : attendu un nombre entier"]);
+    },
+  );
+
+  it("B4: reads a decimal written plainly or with an exponent", async () => {
+    await card(running());
+    fireEvent.change(field("ARM_RADIUS_M"), { target: { value: "1.25e0" } });
+    fireEvent.change(field("GEAR_RATIO"), { target: { value: "0x10" } });
+    expect(problems()).toEqual(["GEAR_RATIO : attendu un nombre fini"]);
+  });
+
+  it("R1-b2: a group of boxes is a fieldset named by its legend, invalid when refused", async () => {
+    await card(running());
+    fireEvent.click(within(group("SENSORS")).getByRole("checkbox", { name: "ECG" }));
+    expect(group("SENSORS").tagName).toBe("FIELDSET");
+    expect(group("SENSORS").getAttribute("aria-invalid")).toBe("true");
   });
 
   it("holds Approve for the author of a safety change, and says why", async () => {
@@ -236,19 +290,60 @@ describe("ANH-141 the configuration card", () => {
         ],
         appliedRevision: 1,
         inForceRevision: 1,
+        appliedValues: BASE,
+        inForceValues: BASE,
         configurationStatus: "mismatch",
         hashMatches: false,
       }),
     );
     expect(screen.getByText(t.mismatch)).toBeTruthy();
     const draft = within(screen.getByRole("listitem", { name: "Révision 2" }));
-    expect(draft.getByRole("button", { name: t.approve })).toHaveProperty("disabled", true);
-    expect(draft.getByText(t.blocked.machine_config_self_approval)).toBeTruthy();
+    const button = draft.getByRole("button", { name: t.approve });
+    expect(button).toHaveProperty("disabled", true);
+    const why = draft.getByText(t.blocked.machine_config_self_approval);
+    expect(button.getAttribute("aria-describedby")).toBe(why.id);
     expect(draft.getByText(t.safetyChange)).toBeTruthy();
-    expect(draft.getByText(/MOTOR_MAX_RPM/)).toBeTruthy();
     const applied = within(screen.getByRole("listitem", { name: "Révision 1" }));
     expect(applied.queryByRole("button", { name: t.approve })).toBeNull();
     expect(applied.getByText(/TEST-other/)).toBeTruthy();
+  });
+
+  it("B1: shows the approver each changed value against the applied one", async () => {
+    await card(
+      running({
+        revisions: [
+          revision(2, "draft", {
+            values: { ...BASE, MOTOR_MAX_RPM: 600, PROGRAMS_ENABLED: true },
+            changedFromApplied: ["MOTOR_MAX_RPM", "PROGRAMS_ENABLED"],
+            safetyChange: true,
+          }),
+          revision(1, "applied"),
+        ],
+      }),
+    );
+    const changes = within(screen.getByRole("list", { name: t.changes.replace("{revision}", "2") }));
+    expect(changes.getAllByRole("listitem").map((item) => item.textContent)).toEqual([
+      `MOTOR_MAX_RPM : 300 → 600${t.safety}`,
+      `PROGRAMS_ENABLED : false → true${t.safety}`,
+    ]);
+  });
+
+  it("R1-b: waits for the machine without a red alert, and says a lock above the level", async () => {
+    await card(
+      running({
+        configurationStatus: "pending",
+        hashMatches: false,
+        locksAboveLevel: ["PROGRAMS_ENABLED"],
+        validationLevel: "bench",
+      }),
+    );
+    expect(screen.getByText(t.status.pending)).toBeTruthy();
+    expect(screen.queryByText(t.mismatch)).toBeNull();
+    expect(
+      screen.getByText(
+        t.locksAbove.replace("{keys}", "PROGRAMS_ENABLED").replace("{level}", "bench"),
+      ),
+    ).toBeTruthy();
   });
 
   it("approves a draft the caller may approve, and rejects one with a reason", async () => {
@@ -266,6 +361,7 @@ describe("ANH-141 the configuration card", () => {
     const reject = mutation(api.machineConfigs.rejectConfig).mockResolvedValue(null);
     const button = draft.getByRole("button", { name: t.reject });
     expect(button).toHaveProperty("disabled", true);
+    expect(button.getAttribute("aria-describedby")).toBe(draft.getByText(t.reasonNeeded).id);
     fireEvent.change(draft.getByLabelText(t.reason), { target: { value: "trop tôt" } });
     fireEvent.click(button);
     await vi.waitFor(() =>
@@ -295,6 +391,13 @@ describe("ANH-141 the configuration card", () => {
         name: t.reject,
       }),
     ).toBeNull();
+  });
+
+  it("R1-b3: says on the English page that the errors are the console's words", async () => {
+    await card(view(), "admin", "en");
+    expect(screen.getByText(en.machineConfig.consoleWords)).toBeTruthy();
+    const list = within(screen.getByRole("list", { name: en.machineConfig.problemList }));
+    expect(list.getAllByRole("listitem")[0].textContent).toBe("ECG_SOURCE : obligatoire");
   });
 
   it("speaks English and keeps a deleted machine read only", async () => {

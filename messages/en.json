@@ -340,7 +340,6 @@
     "proposedBy": "proposed by {name} on {at}",
     "approvedBy": "approved by {names} on {at}",
     "appliedAt": "applied by the machine on {at}",
-    "changed": "Keys changed from the applied revision: {keys}",
     "rejectReason": "Reason: {reason}",
     "mismatch": "Applied configuration ≠ approved: the machine does not report running the revision in force.",
     "statuses": {
@@ -383,7 +382,15 @@
       "LEG_TIP_RADIUS_M": "Foot tip radius (m)",
       "PROGRAMS_ENABLED": "Programmed sessions",
       "OCCUPANCY_OCCUPIED_ENABLED": "Person on board"
-    }
+    },
+    "stale": "The configuration in force changed since the form was opened (revision {revision}): reload before proposing.",
+    "reload": "Reload the configuration in force",
+    "organizationOnly": "An organisation admin changes only the machine's name and location: the other fields are greyed out.",
+    "consoleWords": "The errors are written in the console's own words, in French.",
+    "changedFromApplied": "What this revision changes from the applied revision:",
+    "changes": "Changes of revision {revision}",
+    "reasonNeeded": "Give a reason of at least 3 characters to reject.",
+    "locksAbove": "The revision in force enables {keys} above the machine's validation level ({level}): the console refuses it, propose a revision that disables them."
   },
   "errors": {
     "invalid_registry_field": "Invalid machine registry value.",
@@ -404,6 +411,7 @@
     "machine_config_self_approval": "A safety key changes: an Anheart admin other than the author must approve.",
     "machine_config_safety_needs_admins": "A safety key changes: the revision must be proposed by an Anheart admin.",
     "machine_config_reason_required": "Give a reason of 3 to 500 characters.",
+    "machine_config_stale": "The configuration in force changed since the form was opened: reload it before proposing.",
     "programme_not_found": "Programme not found.",
     "programme_wrong_status": "The programme is no longer in the state this step needs. Reload the page.",
     "programme_refused": "The Pi's validation refuses this programme.",

@@ -943,6 +943,7 @@ const SCENARIOS: Record<string, (w: World) => Promise<Doc<"audit_log">[]>> = {
       const { configId } = await as(w.t, "admin").mutation(api.machineConfigs.proposeConfig, {
         machineId: w.machine,
         values: { ...MACHINE_CONFIG_BASE, location: "synthetic-private-postal-address" },
+        basedOn: null,
       });
       const details = { machineId: w.machine };
       return [

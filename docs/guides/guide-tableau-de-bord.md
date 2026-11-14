@@ -915,9 +915,12 @@ refuser.
    que la machine applique.
 4. **Proposer** crée une révision en brouillon. Elle remplace un brouillon qui
    attendait.
-5. **Approuver** : si une clé de sûreté change, un autre admin Anheart que
-   l'auteur doit approuver (le bouton est grisé pour l'auteur, avec la raison).
-   Sinon l'auteur peut approuver lui-même.
+5. **Approuver** : la ligne de la révision montre chaque valeur changée face à
+   la valeur appliquée ; vérifiez-les avant d'approuver. Si une clé de sûreté
+   change, un autre admin Anheart que l'auteur doit approuver (le bouton est
+   grisé pour l'auteur, avec la raison). Sinon l'auteur peut approuver
+   lui-même. Si la configuration en vigueur change pendant que le formulaire
+   est ouvert, la carte le dit : rechargez avant de proposer.
 6. La machine applique la révision approuvée quand elle est au repos. Une clé
    de sûreté n'est appliquée qu'après qu'un opérateur connecté à la console l'a
    confirmée sur place. Une révision refusée par la machine affiche « refusée

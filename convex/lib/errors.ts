@@ -263,6 +263,8 @@ export const DASHBOARD_ERRORS = {
     "A revision that changes a safety key is approved by another Anheart admin than its author.",
   machine_config_safety_needs_admins:
     "A revision that changes a safety key is proposed by an Anheart admin: an organisation admin's cannot be approved.",
+  machine_config_stale:
+    "The values were edited from another revision than the one in force now: reload them before proposing.",
   machine_config_reason_required:
     "Rejecting a revision requires a reason of 3 to 500 characters.",
 

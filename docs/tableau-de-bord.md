@@ -451,16 +451,36 @@ rayons du registre et du nom et du lieu de la machine.
   le site dit que toutes les clés sont nouvelles et qu'une clé de sûreté
   change.
 - **L'admin d'organisation** ne peut modifier que le nom et le lieu ; les
-  autres champs sont grisés, et le serveur refuse le reste.
+  autres champs sont grisés, une note dit pourquoi (liée à chaque champ
+  grisé), et le serveur refuse le reste.
+- **Les nombres** se tapent comme la console les lit : entier ou décimal,
+  exposant permis ; une écriture hexadécimale, une espace ou un `+` sont
+  refusés comme une valeur du mauvais type.
+- **Un formulaire resté ouvert** part de la révision en vigueur à son
+  ouverture et l'envoie avec la proposition (`basedOn`). Si une autre
+  révision passe en vigueur entre temps, la carte le dit, grise
+  **Proposer** et offre **Recharger la configuration en vigueur** ; le
+  serveur refuse de toute façon une proposition périmée
+  (`machine_config_stale`).
 - **Les révisions** : numéro, état (brouillon, approuvée et en attente de la
   machine, appliquée, refusée), auteur et date, approbateurs, date
-  d'application, clés changées par rapport à la révision appliquée, motif d'un
+  d'application, chaque clé changée par rapport à la révision appliquée
+  avec sa valeur appliquée et sa valeur proposée (le badge **sûreté** sur les
+  six clés de sûreté), ce que l'approbateur voit avant d'approuver, motif d'un
   refus (« refusée par la machine : » suivi de sa raison pour un refus de la
   console). **Approuver** est grisé quand le serveur dit que l'appelant ne
   peut pas approuver ce brouillon, avec la raison : l'auteur d'une révision qui
   change une clé de sûreté, l'admin d'organisation hors du nom et du lieu.
   **Refuser** exige un motif de 3 à 500 caractères ; l'admin d'organisation ne
-  refuse que ses propres brouillons.
+  refuse que ses propres brouillons. La raison d'un bouton grisé est liée au
+  bouton (`aria-describedby`).
+- **Les alertes** : « Configuration appliquée ≠ approuvée » quand la machine
+  dit tourner sur une autre révision que la révision appliquée
+  (`configurationStatus` `mismatch`), jamais pendant l'attente d'une
+  révision approuvée ; et les verrous qu'une révision en vigueur active au
+  dessus du niveau de validation, après une descente de niveau
+  (`locksAboveLevel`). Les erreurs restent les mots de la console, en
+  français, et la page anglaise le dit.
 
 Le site ne fait que proposer : la machine revalide chaque révision, et une
 clé de sûreté ne passe qu'après la confirmation d'un opérateur connecté à la

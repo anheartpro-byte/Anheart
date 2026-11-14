@@ -340,7 +340,6 @@
     "proposedBy": "proposée par {name} le {at}",
     "approvedBy": "approuvée par {names} le {at}",
     "appliedAt": "appliquée par la machine le {at}",
-    "changed": "Clés changées par rapport à la révision appliquée : {keys}",
     "rejectReason": "Motif : {reason}",
     "mismatch": "Configuration appliquée ≠ approuvée : la machine ne dit pas tourner sur la révision en vigueur.",
     "statuses": {
@@ -383,7 +382,15 @@
       "LEG_TIP_RADIUS_M": "Rayon de la pointe du pied (m)",
       "PROGRAMS_ENABLED": "Séances programmées",
       "OCCUPANCY_OCCUPIED_ENABLED": "Personne à bord"
-    }
+    },
+    "stale": "La configuration en vigueur a changé depuis l'ouverture du formulaire (révision {revision}) : rechargez avant de proposer.",
+    "reload": "Recharger la configuration en vigueur",
+    "organizationOnly": "Un administrateur d'organisation ne modifie que le nom et le lieu de la machine : les autres champs sont grisés.",
+    "consoleWords": "Les erreurs sont écrites dans les mots de la console.",
+    "changedFromApplied": "Ce que cette révision change par rapport à la révision appliquée :",
+    "changes": "Changements de la révision {revision}",
+    "reasonNeeded": "Indiquez un motif de 3 caractères au moins pour refuser.",
+    "locksAbove": "La révision en vigueur active {keys} au dessus du niveau de validation de la machine ({level}) : la console la refuse, proposez une révision qui les désactive."
   },
   "errors": {
     "invalid_registry_field": "Valeur invalide dans le registre machine.",
@@ -404,6 +411,7 @@
     "machine_config_self_approval": "Une clé de sûreté change : un autre administrateur Anheart que l'auteur doit approuver.",
     "machine_config_safety_needs_admins": "Une clé de sûreté change : la révision doit être proposée par un administrateur Anheart.",
     "machine_config_reason_required": "Indiquez un motif de 3 à 500 caractères.",
+    "machine_config_stale": "La configuration en vigueur a changé depuis l'ouverture du formulaire : rechargez-la avant de proposer.",
     "programme_not_found": "Programme introuvable.",
     "programme_wrong_status": "Le programme n'est plus dans l'état que demande cette étape. Rechargez la page.",
     "programme_refused": "La validation du Pi refuse ce programme.",

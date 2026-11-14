@@ -43,11 +43,21 @@ export type MachineConfigView = NonNullable<
 >;
 type Revision = MachineConfigView["revisions"][number];
 
-/** A value as the console would read it, from what a field holds. */
+/** A whole number, and a decimal one, as typed: no hexadecimal, no space, no sign `+`. */
+const WHOLE = /^-?\d+$/;
+const DECIMAL = /^-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?$/;
+
+/**
+ * A value as the console would read it, from what a field holds. A number
+ * typed in another form stays text, which the validation refuses as the
+ * server and the console do.
+ */
 function valueOf(spec: ConfigKeySpec, raw: string | boolean | string[]): ConfigValue {
   if (typeof raw === "boolean" || Array.isArray(raw)) return raw;
   if (raw === "") return null;
-  return spec.type === "integer" || spec.type === "number" ? Number(raw) : raw;
+  if (spec.type === "integer") return WHOLE.test(raw) ? Number(raw) : raw;
+  if (spec.type === "number") return DECIMAL.test(raw) ? Number(raw) : raw;
+  return raw;
 }
 
 /** What a field holds for a value. */
@@ -70,36 +80,51 @@ function ConfigField({
   onChange,
   disabled,
   problems,
+  lockedNote,
 }: {
   name: string;
   value: string | boolean | string[];
   onChange: (value: string | boolean | string[]) => void;
   disabled: boolean;
   problems: ConfigProblem[];
+  /** The note that says why a greyed field is greyed. */
+  lockedNote?: string;
 }) {
   const t = useTranslations("machineConfig");
   const id = useId();
   const spec = CONFIG_KEYS[name];
   const errorId = `${id}-error`;
   const invalid = problems.length > 0;
-  const label = (
-    <Label htmlFor={id}>
+  const words = (
+    <>
       {t(`keys.${name}`)} <code className="text-xs">{name}</code>
       {spec.family === "safety" && (
         <Badge variant="destructive" className="ml-2">
           {t("safety")}
         </Badge>
       )}
-    </Label>
+    </>
   );
-  const described = invalid ? { "aria-invalid": true, "aria-describedby": errorId } : {};
-  let control;
+  const notes = [invalid ? errorId : undefined, disabled ? lockedNote : undefined]
+    .filter((note) => note !== undefined)
+    .join(" ");
+  const described = {
+    ...(invalid ? { "aria-invalid": true } : {}),
+    ...(notes === "" ? {} : { "aria-describedby": notes }),
+  };
+  const error = invalid && (
+    <p id={errorId} className="text-sm text-destructive">
+      {problems.map((problem) => problem.detail).join(" ; ")}
+    </p>
+  );
   if (spec.type === "boolean" || spec.type === "enum_list") {
     const names = spec.type === "boolean" ? [name] : (spec.values ?? []);
     const held = Array.isArray(value) ? value : value === true ? [name] : [];
-    control = (
-      <div id={id} role="group" aria-label={name} className="flex flex-wrap gap-3" {...described}>
-        {names.map((option) => (
+    return (
+      <fieldset className="space-y-1" {...described}>
+        <legend className="text-sm font-medium">{words}</legend>
+        <div className="flex flex-wrap gap-3">
+          {names.map((option) => (
           <label key={option} className="flex items-center gap-1 text-sm">
             <input
               type="checkbox"
@@ -117,10 +142,14 @@ function ConfigField({
             />
             {spec.type === "boolean" ? t("enabled") : option}
           </label>
-        ))}
-      </div>
+          ))}
+        </div>
+        {error}
+      </fieldset>
     );
-  } else if (spec.type === "enum") {
+  }
+  let control;
+  if (spec.type === "enum") {
     control = (
       <Select
         value={typeof value === "string" ? value : ""}
@@ -153,13 +182,9 @@ function ConfigField({
   }
   return (
     <div className="space-y-1">
-      {label}
+      <Label htmlFor={id}>{words}</Label>
       {control}
-      {invalid && (
-        <p id={errorId} className="text-sm text-destructive">
-          {problems.map((problem) => problem.detail).join(" ; ")}
-        </p>
-      )}
+      {error}
     </div>
   );
 }
@@ -167,14 +192,15 @@ function ConfigField({
 function ConfigForm({ view, machineId }: { view: MachineConfigView; machineId: Id<"machines"> }) {
   const t = useTranslations("machineConfig");
   const propose = useMutationWithFeedback(api.machineConfigs.proposeConfig);
-  const byNumber = (revision: number | null) =>
-    view.revisions.find((row) => row.revision === revision)?.values ?? null;
-  const applied = byNumber(view.appliedRevision);
-  const inForce = byNumber(view.inForceRevision);
-  const start: ConfigValues = inForce ?? view.defaults;
-  const [fields, setFields] = useState(() =>
-    Object.fromEntries(CONFIG_KEY_NAMES.map((key) => [key, fieldOf(CONFIG_KEYS[key], start[key])])),
-  );
+  const lockedId = useId();
+  const applied = view.appliedValues;
+  const inForce = view.inForceValues;
+  const fieldsOf = (start: ConfigValues) =>
+    Object.fromEntries(CONFIG_KEY_NAMES.map((key) => [key, fieldOf(CONFIG_KEYS[key], start[key])]));
+  const [fields, setFields] = useState(() => fieldsOf(inForce ?? view.defaults));
+  // The revision in force the fields were filled from: another one now makes the form stale.
+  const [basedOn, setBasedOn] = useState(view.inForceRevision);
+  const stale = basedOn !== view.inForceRevision;
   const [busy, setBusy] = useState(false);
   const values: ConfigValues = Object.fromEntries(
     CONFIG_KEY_NAMES.map((key) => [key, valueOf(CONFIG_KEYS[key], fields[key])]),
@@ -191,11 +217,11 @@ function ConfigForm({ view, machineId }: { view: MachineConfigView; machineId: I
       className="space-y-4"
       onSubmit={async (event) => {
         event.preventDefault();
-        if (busy || problems.length > 0 || unchanged) return;
+        if (busy || problems.length > 0 || unchanged || stale) return;
         setBusy(true);
         try {
           await propose(
-            { machineId, values },
+            { machineId, values, basedOn },
             { success: (result) => t("proposed", { revision: result.revision }) },
           );
         } finally {
@@ -206,10 +232,34 @@ function ConfigForm({ view, machineId }: { view: MachineConfigView; machineId: I
       <p className="text-sm text-muted-foreground">
         {t("level", { level: view.validationLevel })}
       </p>
+      {stale && (
+        <Alert variant="destructive">
+          <AlertDescription>
+            <p>{t("stale", { revision: view.inForceRevision ?? "-" })}</p>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={() => {
+                setFields(fieldsOf(inForce ?? view.defaults));
+                setBasedOn(view.inForceRevision);
+              }}
+            >
+              {t("reload")}
+            </Button>
+          </AlertDescription>
+        </Alert>
+      )}
+      {view.canPropose === "name_location" && (
+        <p id={lockedId} className="text-sm text-muted-foreground">
+          {t("organizationOnly")}
+        </p>
+      )}
       {problems.length > 0 && (
         <Alert variant="destructive">
           <AlertDescription>
             <p className="font-medium">{t("problems", { count: problems.length })}</p>
+            <p>{t("consoleWords")}</p>
             <ul aria-label={t("problemList")} className="list-disc pl-5">
               {problems.map((problem) => (
                 <li key={`${problem.key}:${problem.detail}`}>
@@ -227,6 +277,7 @@ function ConfigForm({ view, machineId }: { view: MachineConfigView; machineId: I
             name={key}
             value={fields[key]}
             disabled={!editable(key)}
+            lockedNote={lockedId}
             problems={problems.filter((problem) => problem.key === key)}
             onChange={(value) => setFields((held) => ({ ...held, [key]: value }))}
           />
@@ -256,7 +307,7 @@ function ConfigForm({ view, machineId }: { view: MachineConfigView; machineId: I
           ))}
         </ul>
       </div>
-      <Button type="submit" disabled={busy || problems.length > 0 || unchanged}>
+      <Button type="submit" disabled={busy || problems.length > 0 || unchanged || stale}>
         {t("propose")}
       </Button>
       {unchanged && <p className="text-sm text-muted-foreground">{t("unchanged")}</p>}
@@ -264,10 +315,20 @@ function ConfigForm({ view, machineId }: { view: MachineConfigView; machineId: I
   );
 }
 
-function RevisionRow({ revision, canReject }: { revision: Revision; canReject: boolean }) {
+function RevisionRow({
+  revision,
+  applied,
+  canReject,
+}: {
+  revision: Revision;
+  applied: ConfigValues | null;
+  canReject: boolean;
+}) {
   const t = useTranslations("machineConfig");
   const locale = useLocale();
   const reasonId = useId();
+  const blockedId = useId();
+  const shortId = useId();
   const [reason, setReason] = useState("");
   const approve = useMutationWithFeedback(api.machineConfigs.approveConfig);
   const reject = useMutationWithFeedback(api.machineConfigs.rejectConfig);
@@ -292,9 +353,19 @@ function RevisionRow({ revision, canReject }: { revision: Revision; canReject: b
           ` ; ${t("approvedBy", { names: revision.approvedBy.map(name).join(", "), at: date(revision.approvedAt) })}`}
         {revision.appliedAt !== undefined && ` ; ${t("appliedAt", { at: date(revision.appliedAt) })}`}
       </p>
-      <p className="text-sm text-muted-foreground">
-        {t("changed", { keys: revision.changedFromApplied.join(", ") || "-" })}
-      </p>
+      <p className="text-sm text-muted-foreground">{t("changedFromApplied")}</p>
+      <ul aria-label={t("changes", { revision: revision.revision })} className="text-sm">
+        {revision.changedFromApplied.map((key) => (
+          <li key={key}>
+            <code>{key}</code> : {shown(applied?.[key])} → {shown(revision.values[key])}
+            {CONFIG_KEYS[key].family === "safety" && (
+              <Badge variant="destructive" className="ml-2">
+                {t("safety")}
+              </Badge>
+            )}
+          </li>
+        ))}
+      </ul>
       {revision.rejectReason !== undefined && (
         <p className="text-sm">{t("rejectReason", { reason: revision.rejectReason })}</p>
       )}
@@ -303,6 +374,7 @@ function RevisionRow({ revision, canReject }: { revision: Revision; canReject: b
           <Button
             size="sm"
             disabled={revision.approveBlocked !== null}
+            aria-describedby={revision.approveBlocked === null ? undefined : blockedId}
             onClick={() =>
               approve(
                 { configId: revision._id },
@@ -313,7 +385,7 @@ function RevisionRow({ revision, canReject }: { revision: Revision; canReject: b
             {t("approve")}
           </Button>
           {revision.approveBlocked !== null && (
-            <p className="text-sm text-muted-foreground">
+            <p id={blockedId} className="text-sm text-muted-foreground">
               {t(`blocked.${revision.approveBlocked}`)}
             </p>
           )}
@@ -332,6 +404,7 @@ function RevisionRow({ revision, canReject }: { revision: Revision; canReject: b
             size="sm"
             variant="outline"
             disabled={reason.trim().length < 3}
+            aria-describedby={reason.trim().length < 3 ? shortId : undefined}
             onClick={() =>
               reject(
                 { configId: revision._id, reason },
@@ -341,6 +414,11 @@ function RevisionRow({ revision, canReject }: { revision: Revision; canReject: b
           >
             {t("reject")}
           </Button>
+          {reason.trim().length < 3 && (
+            <p id={shortId} className="text-sm text-muted-foreground">
+              {t("reasonNeeded")}
+            </p>
+          )}
         </div>
       )}
     </li>
@@ -380,9 +458,19 @@ export function MachineConfigCard({
           <div className="flex flex-wrap gap-2">
             <Badge variant="outline">{t(`status.${view.configurationStatus}`)}</Badge>
           </div>
-          {view.hashMatches === false && (
+          {view.configurationStatus === "mismatch" && (
             <Alert variant="destructive">
               <AlertDescription>{t("mismatch")}</AlertDescription>
+            </Alert>
+          )}
+          {view.locksAboveLevel.length > 0 && (
+            <Alert variant="destructive">
+              <AlertDescription>
+                {t("locksAbove", {
+                  keys: view.locksAboveLevel.join(", "),
+                  level: view.validationLevel,
+                })}
+              </AlertDescription>
             </Alert>
           )}
           {view.canPropose !== "none" && <ConfigForm view={view} machineId={machineId} />}
@@ -391,6 +479,7 @@ export function MachineConfigCard({
               <RevisionRow
                 key={revision._id}
                 revision={revision}
+                applied={view.appliedValues}
                 canReject={
                   isAnheartAdmin(role) ||
                   (revision.status === "draft" && revision.proposedBy.userId === userId)
