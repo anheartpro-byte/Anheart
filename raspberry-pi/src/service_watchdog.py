@@ -107,6 +107,14 @@ class WatchdogStatus:
     last_error: str | None
     """The last failure, as the system named it; ``None`` when there was none."""
 
+    late_tick: Seconds | None = None
+    """The longest time between two completed ticks past the bound, since this process
+    started; ``None`` while none was. Kept for good: such a process never leaves as a
+    clean stop (:meth:`ServiceWatchdog.stalled`)."""
+
+    bound: Seconds | None = None
+    """The bound a tick that late went past; ``None`` with no watchdog at all."""
+
 
 def datagram_socket() -> socket.socket:
     """A local datagram socket that never waits. Raises ``OSError``."""
@@ -238,6 +246,8 @@ class ServiceWatchdog:
             sent=self._sent,
             failed=self._failed,
             last_error=self._last_error,
+            late_tick=self._lapsed,
+            bound=self._overdue,
         )
 
     def _send(self, state: bytes) -> bool:

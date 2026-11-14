@@ -116,8 +116,8 @@ const IN_SERVICE = {
   persisted: true,
 };
 const OUT_OF_SERVICE = { ...IN_SERVICE, out_of_service: true, unclean_starts: 3, unclean_stop: true };
-const UNWATCHED = { enabled: false, sent: 0, failed: 0, last_error: null };
-const WATCHED = { enabled: true, sent: 1200, failed: 0, last_error: null };
+const UNWATCHED = { enabled: false, sent: 0, failed: 0, last_error: null, late_tick_s: null, bound_s: null };
+const WATCHED = { enabled: true, sent: 1200, failed: 0, last_error: null, late_tick_s: null, bound_s: 3 };
 
 function panelRow(service = IN_SERVICE, watchdog = UNWATCHED) {
   return {
@@ -231,6 +231,16 @@ test("the line under the chips says what the last start found, and nothing when 
   );
   // A console nobody watches has nothing to say about a watchdog, whatever its counters.
   assert.equal(line(IN_SERVICE, { ...UNWATCHED, failed: 4 }), "");
+  // A tick that came back late is said, watched or not: nothing unsays it (ANH-162).
+  assert.equal(
+    line(IN_SERVICE, { ...WATCHED, late_tick_s: 10.0912 }),
+    "boucle de controle : 10.09 s entre deux tics (borne 3.00 s), cette console ne s'arretera pas proprement",
+  );
+  assert.equal(
+    line({ ...IN_SERVICE, persisted: false }, { ...UNWATCHED, late_tick_s: 4, bound_s: 3 }),
+    "etat des redemarrages non enregistre sur le disque · " +
+      "boucle de controle : 4.00 s entre deux tics (borne 3.00 s), cette console ne s'arretera pas proprement",
+  );
 });
 
 test("a record name that carries markup is written as text", () => {
