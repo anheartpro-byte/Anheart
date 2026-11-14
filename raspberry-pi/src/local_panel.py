@@ -185,11 +185,13 @@ from src.cloud_sync import (
 )
 from src.config_sync import (
     APPLIED_FILE,
+    MACHINE_UNASSIGNED,
     AppliedConfig,
     ConfigSync,
     applied_environment,
     held_to_level,
     load_applied,
+    running_values,
     view_of,
 )
 from src.console_access import AccessNote, ConsoleAccess, OperatorList, load_failures, load_list
@@ -367,6 +369,7 @@ from src.training.runtime import (
     ResetForbidden,
     ResetUndelivered,
     ResetWhileCommanded,
+    RestartPending,
     RiseHold,
     RuntimeLimits,
     RuntimeState,
@@ -502,6 +505,9 @@ class Armable:
 EXIT_OK: Final[int] = 0
 EXIT_FAILED: Final[int] = 1
 EXIT_CONFIG: Final[int] = 2
+RESTART_PENDING: Final[str] = "redemarrage pour la nouvelle configuration en cours"
+"""Why every start is refused between a configuration written and the restart that runs it."""
+
 EXIT_RESTART: Final[int] = 75
 """A controlled restart at rest, to run a configuration just applied (ANH-141).
 
@@ -1379,7 +1385,7 @@ class LocalPanel:
         health: HealthWatch | None,
         catalog: ProgrammeCatalog | None = None,
         operators: OperatorSync | None = None,
-        machine_config: ConfigSync,
+        machine_config: ConfigSync | None = None,
     ) -> None:
         """Finish wiring the dashboard after construction, once its panel preflight exists."""
         self._listener = cloud
@@ -1396,9 +1402,13 @@ class LocalPanel:
             stop_acknowledge=self.acknowledge_lost_stops,
             # Only a linked console offers it: the feedback has nowhere else to go.
             feedback=self._feedback,
-            config_view=machine_config.view,
-            config_confirm=machine_config.confirm,
         )
+        if machine_config is not None:
+            self._services = replace(
+                self._services,
+                config_view=machine_config.view,
+                config_confirm=machine_config.confirm,
+            )
 
     async def acknowledge_lost_stops(self, operator: str) -> Result[tuple[str, ...], str]:
         """The operator, named, releases the sessions the dashboard will never have that
@@ -2000,10 +2010,15 @@ class LocalPanel:
         return Ok(Armable(program=program, rider=admitted.value))
 
     def _service_refusal(self) -> str | None:
-        """Why a console out of service refuses every start; ``None`` when it is in service."""
+        """Why the console refuses every start before its gates: out of service, or a
+        restart for a configuration just applied (ANH-141); ``None`` when neither. The
+        runtime refuses the arming again on the same restart."""
         service = self._service
         refusal = None if service is None else service.refusal()
-        return None if refusal is None else f"demarrage refuse : {refusal}"
+        if refusal is not None:
+            return f"demarrage refuse : {refusal}"
+        held = self._runtime.restart_hold
+        return None if held is None else describe_start_refusal(held)
 
     def _start_refused(self, refusal: StartRefusal) -> str:
         """:func:`describe_start_refusal` in this console's mode, which its STO source says."""
@@ -2850,7 +2865,10 @@ def build_panel(  # noqa: PLR0915  # one statement per wired part
         preflight=monitor,
         access=access,
         config_view=functools.partial(
-            view_of, applied, effective_values(config) if applied is None else applied.values
+            view_of,
+            applied,
+            effective_values(config) if applied is None else running_values(applied),
+            refusal=MACHINE_UNASSIGNED if config.cloud is not None and machine_id is None else None,
         ),
     )
     panel = LocalPanel(
@@ -2926,20 +2944,29 @@ def build_panel(  # noqa: PLR0915  # one statement per wired part
             say=say,
             machine_id=machine_id,
         )
-        machine_config = ConfigSync(
-            clock=clock,
-            transport=link,
-            public_key=public_key,
-            path=profiles_path.parent / APPLIED_FILE,
-            at_rest=panel.catalog_at_rest,
-            say=say,
-            machine_id=machine_id,
-            local={} if local_env is None else local_env,
-            medical=config.medical,
-            current=effective_values(config) if applied is None else applied.values,
-            applied=applied,
-            restart=panel.request_restart,
+        # A console whose machine is not named cannot tell its configuration from another
+        # machine's, signed by the same key: it asks for none, and says so once.
+        machine_config = (
+            None
+            if machine_id is None
+            else ConfigSync(
+                clock=clock,
+                transport=link,
+                public_key=public_key,
+                path=profiles_path.parent / APPLIED_FILE,
+                at_rest=panel.catalog_at_rest,
+                say=say,
+                machine_id=machine_id,
+                local={} if local_env is None else local_env,
+                medical=config.medical,
+                current=effective_values(config) if applied is None else running_values(applied),
+                applied=applied,
+                hold=runtime.hold_for_restart,
+                restart=panel.request_restart,
+            )
         )
+        if machine_config is None:
+            say(MACHINE_UNASSIGNED)
         cloud = CloudSync(
             clock=clock,
             transport=link,
@@ -3211,7 +3238,7 @@ def describe_start_refusal(refusal: StartRefusal, *, bridged: bool = False) -> s
     return f"demarrage refuse : {_start_refusal_reason(refusal, bridged=bridged)}"
 
 
-def _start_refusal_reason(  # noqa: PLR0911  # one return per refusal
+def _start_refusal_reason(  # noqa: PLR0911, PLR0912  # one return per refusal
     refusal: StartRefusal, *, bridged: bool
 ) -> str:
     """Why the start was refused, without the words that say it was."""
@@ -3242,6 +3269,8 @@ def _start_refusal_reason(  # noqa: PLR0911  # one return per refusal
             return BRIDGED_BENCH_ONLY
         case PreflightRefused():
             return refusal.detail
+        case RestartPending():
+            return RESTART_PENDING
     raise assert_never(refusal)
 
 

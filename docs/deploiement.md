@@ -1468,7 +1468,10 @@ identité des enregistrements), et de tout tant que rien n'est appliqué.
 `config.applied.json`, la console tourne sur son `.env` comme avant, et rien
 ne bloque un banc.
 
-1. Déployer Convex 1.15 d'abord (section 3.4), puis l'image du Pi.
+1. Déployer Convex 1.15 d'abord (section 3.4), puis l'image du Pi. Poser
+   `RECORD_MACHINE_ID` (l'identifiant de la machine sur le site) dans
+   `/etc/anheart/anheart.env` : sans lui, la console ne demande aucune
+   configuration et le dit.
 2. Sur la fiche de la machine, un admin Anheart reporte les valeurs du `.env`
    en service dans une première révision (le formulaire part des valeurs par
    défaut du contrat). Une clé de sûreté qui change la fait approuver par un

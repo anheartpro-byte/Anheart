@@ -14,7 +14,7 @@ import json
 from collections.abc import Callable, Mapping
 from dataclasses import replace
 from pathlib import Path
-from typing import cast
+from typing import Final, cast
 
 import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -22,7 +22,7 @@ from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
 from src import local_panel
 from src.clock import ManualClock
-from src.config_sync import AppliedConfig, ConfigSync, load_applied
+from src.config_sync import MACHINE_UNASSIGNED, AppliedConfig, ConfigSync, load_applied
 from src.local_config import LocalConfig
 from src.local_panel import (
     EXIT_CONFIG,
@@ -49,6 +49,9 @@ from tests.test_local_panel import (
     config_from,
     sim_panel,
 )
+
+NAMED: Final[Mapping[str, str]] = {**BASE_ENV, "RECORD_MACHINE_ID": "machine-1"}
+"""A console whose machine is named: the one whose configuration :func:`payload` signs."""
 
 
 def write_applied(path: Path, text: str) -> bytes:
@@ -89,7 +92,7 @@ def test_main_runs_the_revision_applied_and_leaves_out_the_env_s_keys_for_it(
     monkeypatch.setattr(local_panel, "APPLIED_CONFIG_PATH", path)
     monkeypatch.setattr(local_panel, "read_public_key", lambda: public)
     seen = capture(monkeypatch)
-    assert main({**BASE_ENV, "MOTOR_MAX_RPM": "999"}) == EXIT_OK
+    assert main({**NAMED, "MOTOR_MAX_RPM": "999"}) == EXIT_OK
     config, applied, local_env = seen[0]
     assert int(config.motor_max_rpm) == 280
     assert config.machine_config is not None
@@ -109,7 +112,7 @@ def test_main_holds_a_lock_its_signed_level_does_not_allow(
     monkeypatch.setattr(local_panel, "APPLIED_CONFIG_PATH", path)
     monkeypatch.setattr(local_panel, "read_public_key", lambda: public)
     seen = capture(monkeypatch)
-    assert main(BASE_ENV) == EXIT_OK
+    assert main(NAMED) == EXIT_OK
     assert seen[0][0].programs_enabled is False
     assert "'PROGRAMS_ENABLED' au dessus du niveau de validation signe : mis a faux" in caplog.text
 
@@ -127,9 +130,27 @@ def test_main_refuses_to_start_on_a_file_that_does_not_verify(
         lambda: other.public_bytes(Encoding.PEM, PublicFormat.SubjectPublicKeyInfo),
     )
     seen = capture(monkeypatch)
-    assert main(BASE_ENV) == EXIT_CONFIG
+    assert main(NAMED) == EXIT_CONFIG
     assert seen == []
     assert "le retirer pour revenir aux cles du .env" in caplog.text
+
+
+def test_r2_main_on_an_unnamed_machine_runs_its_env_whatever_file_is_there(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """R2: no ``RECORD_MACHINE_ID``, a signed file of another machine with both locks at
+    ``occupied``: never read, the .env runs, and the journal says why."""
+    path = tmp_path / "config.applied.json"
+    values = {**BASE, "PROGRAMS_ENABLED": True, "OCCUPANCY_OCCUPIED_ENABLED": True}
+    public = write_applied(path, payload(values, level="occupied", machine="machine-OTHER"))
+    monkeypatch.setattr(local_panel, "APPLIED_CONFIG_PATH", path)
+    monkeypatch.setattr(local_panel, "read_public_key", lambda: public)
+    seen = capture(monkeypatch)
+    assert main(BASE_ENV) == EXIT_OK
+    config, applied, _ = seen[0]
+    assert (config.machine_config, applied) == (None, None)
+    assert (config.programs_enabled, config.occupied_enabled) == (False, False)
+    assert MACHINE_UNASSIGNED in caplog.text
 
 
 def test_main_without_a_file_runs_the_env_as_before(
@@ -173,7 +194,7 @@ async def test_a_failing_configuration_step_stops_nothing(
         raise RuntimeError("injected")
 
     panel = build_panel(
-        config_from({**BASE_ENV, "MACHINE_API_KEY": "k", "CONVEX_URL": "http://localhost"}),
+        config_from({**NAMED, "MACHINE_API_KEY": "k", "CONVEX_URL": "http://localhost"}),
         clock=ManualClock(),
         profiles_path=tmp_path / "p.json",
     )
@@ -206,7 +227,7 @@ def test_the_record_carries_the_revision_it_runs(tmp_path: Path) -> None:
     it always was on a console that never applied one."""
     path = tmp_path / "config.applied.json"
     public = write_applied(path, payload(BASE, revision=5))
-    loaded = load_applied(path, public, None)
+    loaded = load_applied(path, public, "machine-1")
     assert isinstance(loaded, Ok)
     assert isinstance(loaded.value, AppliedConfig)
     ref = loaded.value.ref

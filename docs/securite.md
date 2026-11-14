@@ -322,6 +322,14 @@ préalables :
    l'application comme pour une révision déjà appliquée, et tient à faux au
    démarrage un verrou que ce niveau ne permet pas
    ([raspberry-pi.md, 12.7](raspberry-pi.md#127-la-configuration-tenue-par-le-tableau-de-bord-anh-141)).
+   Ce verrou ne revient pas de lui même quand le niveau remonte : le rendre est
+   un changement de clé de sûreté, confirmé par un opérateur au repos ; une
+   révision qui met un verrou à faux passe aussi par cette confirmation. Seul
+   le niveau abaissé, qui est la barrière et non un changement, tient un verrou
+   à faux sans confirmation. Limites : une console hors ligne garde le dernier
+   niveau signé reçu, sans âge maximal ; une console qui tourne sur son `.env`
+   n'a pas cette barrière ; une console sans `RECORD_MACHINE_ID` ne prend
+   aucune configuration du site.
    Un niveau qui descend refuse les révisions approuvées et pas encore
    appliquées dont un verrou ne passe plus ; une révision déjà appliquée au
    dessus du niveau est signalée sur la fiche, et c'est la console qui reste

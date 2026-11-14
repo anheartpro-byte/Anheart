@@ -101,6 +101,7 @@ from src.training.runtime import (
     NotAttested,
     PlanUnusable,
     RecordStorageLow,
+    RestartPending,
     RuntimeLimits,
     RuntimeState,
     SafetyStanding,
@@ -130,6 +131,7 @@ from src.training.safety import (
 )
 from src.training.types import (
     HeartRateSample,
+    Occupancy,
     Phase,
     SafetyAction,
     SafetyVerdict,
@@ -1116,6 +1118,23 @@ async def test_a_start_after_shutdown_is_refused() -> None:
     assert isinstance(refusal.error, AlreadyStarted)
 
 
+async def test_anh141_a_restart_held_refuses_every_arming_until_a_failed_write_lifts_it() -> None:
+    """A configuration about to be written: neither a programme nor a manual session arms
+    on the values the console is leaving, the drive untouched."""
+    rig = _rig()
+    assert rig.runtime.restart_hold is None
+    rig.runtime.hold_for_restart(True)
+    programme = await rig.start()
+    assert is_err(programme)
+    assert programme.error == RestartPending()
+    manual = await rig.runtime.start_manual(Occupancy.BENCH, OPERATOR, MotorRpm(300))
+    assert is_err(manual)
+    assert manual.error == RestartPending()
+    assert rig.state() is RuntimeState.IDLE
+    rig.runtime.hold_for_restart(False)
+    assert is_ok(await rig.start(attest=False))
+
+
 async def test_a_standing_verdict_refuses_a_start_until_it_is_acknowledged() -> None:
     """No automatic resumption of motion, anywhere: a latch needs a name against it."""
     rig = _rig()
@@ -1402,6 +1421,7 @@ def test_every_start_refusal_is_handled_somewhere() -> None:
         StoNotReady(state=StoState.OPEN, detail="relay open"),
         StoBridgedOnBoard(),
         PreflightRefused("bitalino", "batterie BITalino 20 % < 30 %"),
+        RestartPending(),
     )
     assert len({_classify_refusal(case) for case in cases}) == len(cases)
 
@@ -1435,6 +1455,8 @@ def _classify_refusal(refusal: StartRefusal) -> str:  # noqa: PLR0911, PLR0912  
             return "sto_bridged_on_board"
         case PreflightRefused():
             return "preflight_refused"
+        case RestartPending():
+            return "restart_pending"
     raise assert_never(refusal)
 
 

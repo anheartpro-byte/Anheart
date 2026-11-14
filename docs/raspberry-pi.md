@@ -4168,10 +4168,16 @@ changent pas.
    ([securite.md, 6](securite.md#6-avant-la-première-personne-à-bord), point 8).
 2. La console interroge `GET /api/machine/config` **au repos seulement**
    (aucune séance, aucun départ en attente, aucun lancement du site en main),
-   à son démarrage puis au plus une fois par minute.
+   à son démarrage puis au plus une fois par minute, et **seulement quand
+   `RECORD_MACHINE_ID` est posé** : sans lui, elle ne saurait pas distinguer sa
+   configuration de celle d'une autre machine, signée par la même clé. Elle ne
+   demande, n'applique ni ne relit alors aucune configuration, tourne sur son
+   `.env`, et le dit une fois au journal et sur la carte de la page Sécurité
+   (`RECORD_MACHINE_ID non pose : aucune configuration du site n'est demandee
+   ni appliquee, la console tourne sur son .env`).
 3. Elle vérifie la signature avec la clé publique du catalogue avant de lire
-   quoi que ce soit, puis le texte : une configuration, de cette machine
-   (quand `RECORD_MACHINE_ID` est posé), pas plus ancienne que la dernière
+   quoi que ce soit, puis le texte : une configuration, de cette machine, pas
+   plus ancienne que la dernière
    prise, dont l'empreinte est celle de ses valeurs, et pas une révision plus
    ancienne que celle qu'elle applique.
 4. Elle revalide chaque valeur avec `load_local_config` et ses clés locales,
@@ -4191,7 +4197,13 @@ changent pas.
 6. Appliquer, c'est écrire la réponse telle qu'elle est venue, signature
    comprise, dans `data/config.applied.json` (sur le Pi
    `/var/lib/anheart/data/config.applied.json`) en un remplacement atomique
-   (fichier privé, `fsync`, renommage), puis redémarrer la console au repos :
+   (fichier privé, `fsync`, renommage), si la console est encore au repos une
+   fois la réponse reçue. Dès avant l'écriture et jusqu'au redémarrage, tout
+   départ est refusé, manuel, de banc, programmé ou lancé du site
+   (`demarrage refuse : redemarrage pour la nouvelle configuration en cours`,
+   un lancement du site finit en échec avec cette raison) : aucune séance ne
+   s'arme sur les valeurs que la console quitte. Une écriture qui échoue lève
+   ce refus. Puis la console redémarre au repos :
    code de sortie 75, écrit comme un arrêt propre, que le service relance
    (`Restart=on-failure`). Le processus qui démarre sur la révision le dit au
    site (`POST /api/machine/config/applied {revision, hash}`) et en porte
@@ -4214,12 +4226,26 @@ Anheart.
 * Un verrou au dessus du niveau signé avec le fichier est mis à faux
   (`configuration: 'PROGRAMS_ENABLED' au dessus du niveau de validation signe :
   mis a faux`). Chaque réponse porte le niveau du registre, quelle que soit la
-  révision qu'elle porte : quand ce niveau change ce que la révision appliquée
-  peut verrouiller (un niveau abaissé, puis relevé), la console garde cette
-  réponse à côté, dans `data/config.level.json`, et redémarre au repos sur le
-  niveau le plus récent, verrous tenus à faux s'il ne les permet pas ; la
-  révision appliquée reste la même. Un `config.level.json` qui ne se vérifie
-  pas tient les deux verrous à faux.
+  révision qu'elle porte : quand ce niveau ne permet plus un verrou de la
+  révision appliquée (un niveau abaissé), la console garde cette réponse à
+  côté, dans `data/config.level.json`, et redémarre au repos, ce verrou tenu à
+  faux ; la révision appliquée reste la même. C'est la barrière, pas un
+  changement de configuration : elle seule tient un verrou à faux sans
+  confirmation. Un `config.level.json` qui ne se vérifie pas tient les deux
+  verrous à faux.
+* Un verrou tenu à faux **ne revient jamais de lui même** quand le registre
+  relève le niveau : le rendre, c'est changer une clé de sûreté
+  (`PROGRAMS_ENABLED : false -> true`), qui attend la confirmation d'un
+  opérateur connecté, au repos, comme toute autre. De même, une révision qui
+  met un verrou à faux change une clé de sûreté : elle attend aussi cette
+  confirmation.
+* Une console hors ligne n'apprend pas qu'un niveau a été abaissé : ses
+  verrous restent au dernier niveau signé qu'elle a reçu, jusqu'à la réponse
+  suivante. Aucun âge maximal de ce niveau n'est imposé aujourd'hui.
+* Une console qui tourne sur son `.env` (aucune révision appliquée) n'a pas
+  cette barrière : ses verrous sont ceux de son `.env`, que le niveau signé ne
+  borne pas. C'était déjà le cas avant ANH-141 ; elle la reçoit avec la
+  première révision appliquée.
 
 **Ce que la page lit.** `GET /api/config` donne la révision appliquée et son
 empreinte, le nom et le lieu (pastille **Machine** de la barre latérale,
@@ -4232,8 +4258,9 @@ son `.env` comme avant, et rien ne la bloque :
 * son démarrage ne change pas, son heartbeat dit `config_hash: null`, et la
   fiche du site affiche « configuration appliquée ≠ approuvée » tant qu'une
   révision approuvée n'est pas appliquée ;
-* sans lien (`MACHINE_API_KEY` vide), sans révision approuvée, ou face à un
-  serveur antérieur à 1.15 (404), rien ne descend ;
+* sans lien (`MACHINE_API_KEY` vide), sans `RECORD_MACHINE_ID`, sans
+  révision approuvée, ou face à un serveur antérieur à 1.15 (404), rien ne
+  descend ;
 * la première révision approuvée est comparée à ce que la console applique de
   son `.env` : les clés d'exploitation qui changent passent d'elles mêmes au
   repos, une clé de sûreté qui change attend un opérateur à la console ;

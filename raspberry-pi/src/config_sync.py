@@ -42,11 +42,13 @@ without a person at the machine. A dashboard that signs nothing, does not know
 the route or does not answer leaves the configuration as it is.
 
 Every answer carries the registry's level, whatever revision it is for: when
-it changes what the revision applied may lock, the answer is kept next to the
-file (:data:`LEVEL_FILE`) and the console restarts at rest on that level, a
-lock it does not allow run false. The files are verified again at every start
-(:func:`load_applied`): the console's account may write its data, it cannot
-sign for Anheart.
+it no longer allows a lock of the revision applied, the answer is kept next to
+the file (:data:`LEVEL_FILE`) and the console restarts at rest on that level,
+the lock run false. A level raised again gives it back only as a safety change
+an operator confirms. A console whose machine is not named
+(``RECORD_MACHINE_ID``) takes no configuration at all (:data:`MACHINE_UNASSIGNED`).
+The files are verified again at every start (:func:`load_applied`): the
+console's account may write its data, it cannot sign for Anheart.
 
 See .claude/skills/anheart-strict-python/SKILL.md.
 """
@@ -118,6 +120,13 @@ LEVEL_FILE: Final[str] = "config.level.json"
 """Next to it: the newest answer whose signed level changed what the revision applied may
 lock, whatever revision that answer was for (:meth:`ConfigSync._relevel`)."""
 
+MACHINE_UNASSIGNED: Final[str] = (
+    "RECORD_MACHINE_ID non pose : aucune configuration du site n'est demandee ni "
+    "appliquee, la console tourne sur son .env"
+)
+"""Why a console whose machine is not named takes no configuration: it could not tell its
+own from another machine's, signed by the same key."""
+
 SUBJECT: Final[str] = "configuration"
 """What the refusals of a signature call the text."""
 
@@ -164,7 +173,7 @@ def _stored(path: Path) -> Result[StoredList | None, str]:
 
 
 def _offer_at(
-    path: Path, public_key: bytes | None, machine_id: str | None
+    path: Path, public_key: bytes | None, machine_id: str
 ) -> Result[ConfigOffer | None, str]:
     """The answer kept at ``path``, its signature verified again; ``None``: no file."""
     kept = _stored(path)
@@ -193,8 +202,14 @@ def load_applied(
     the console then does not start (a configuration problem, said, never
     restarted on), because its ``.env`` no longer holds what it applied.
     Removing the file takes the console back to its ``.env``. Its level is
-    that of the newest answer kept (:func:`_leveled`).
+    that of the newest answer kept (:func:`_leveled`). ``machine_id`` ``None``
+    (``RECORD_MACHINE_ID`` not set): no file is read, whatever is there, and
+    the console runs on its ``.env``.
     """
+    if machine_id is None:
+        if path.exists():
+            _logger.warning("configuration: data/%s ignore : %s", APPLIED_FILE, MACHINE_UNASSIGNED)
+        return Ok(None)
     found = _offer_at(path, public_key, machine_id)
     if isinstance(found, Err):
         return found
@@ -212,13 +227,15 @@ def load_applied(
 
 
 def _leveled(
-    applied: AppliedConfig, path: Path, public_key: bytes | None, machine_id: str | None
+    applied: AppliedConfig, path: Path, public_key: bytes | None, machine_id: str
 ) -> AppliedConfig:
     """``applied`` at the level of the answer kept at ``path`` when it is the newer.
 
     A file there that does not verify holds every lock false (level ``none``):
-    it was only ever written because a level changed, and the safe reading of a
-    level unknown is the lowest. Turning a lock off needs nobody.
+    it was only ever written because a level dropped, and the safe reading of a
+    level unknown is the lowest. A level dropping is the barrier, not a change,
+    and the only thing that holds a lock false without a confirmation; any change
+    of a lock, off or back on, is a safety change an operator confirms.
     """
     found = _offer_at(path, public_key, machine_id)
     if isinstance(found, Err):
@@ -238,7 +255,8 @@ def held_to_level(
     The level is the one signed with the newest answer kept: a level lowered on
     the registry after the approval reaches the console with the next answer,
     for this revision or a later one, which is kept, and the console restarts on
-    it (:meth:`ConfigSync._relevel`). Turning a lock off needs nobody.
+    it (:meth:`ConfigSync._relevel`), nobody asked. A level raised again gives a
+    held lock back only as a safety change an operator confirms at rest.
     """
     if applied is None:
         return config, ()
@@ -276,6 +294,25 @@ def _words(problems: tuple[ConfigProblem, ...]) -> str:
 def _shown(change: ConfigChange) -> ChangeView:
     before, after = env_text(change.before) or "-", env_text(change.after) or "-"
     return ChangeView(change.key, change.family is Family.SAFETY, before, after)
+
+
+def running_values(applied: AppliedConfig) -> dict[str, ConfigValue]:
+    """The values the revision applied runs with: its own, the locks its level holds false."""
+    return {
+        **applied.values,
+        **dict.fromkeys(locks_above(applied.values, applied.level), False),
+    }
+
+
+def _given_back(applied: AppliedConfig, level: ValidationLevel) -> tuple[ConfigChange, ...]:
+    """The locks the revision applied sets, held false at its level, that ``level`` allows:
+    each one a safety change, ``false -> true``, for an operator to confirm."""
+    allowed = locks_above(applied.values, level)
+    return tuple(
+        ConfigChange(key, Family.SAFETY, False, True)
+        for key in locks_above(applied.values, applied.level)
+        if key not in allowed
+    )
 
 
 def view_of(
@@ -322,6 +359,7 @@ class ConfigSync:
         "_at_rest",
         "_clock",
         "_current",
+        "_hold",
         "_issued_at",
         "_local",
         "_machine_id",
@@ -346,28 +384,31 @@ class ConfigSync:
         path: Path,
         at_rest: Callable[[], bool],
         say: Callable[[str], None],
-        machine_id: str | None,
+        machine_id: str,
         local: Mapping[str, str],
         medical: MedicalStatus,
         current: Mapping[str, ConfigValue],
         applied: AppliedConfig | None,
+        hold: Callable[[bool], None],
         restart: Callable[[], None],
     ) -> None:
         """``local``: this console's ``.env`` (its local keys are judged with every
         revision). ``current``: the values it runs with. ``applied``: the revision they
-        came from, ``None`` on a ``.env``. ``restart``: the console's controlled
-        restart, at rest."""
+        came from, ``None`` on a ``.env``. ``hold``: refuse every start (``True``), or
+        no longer (``False``, a write that failed). ``restart``: the console's
+        controlled restart, at rest."""
         self._clock: Clock = clock
         self._transport: CloudTransport = transport
         self._public_key: bytes | None = public_key
         self._path: Path = path
         self._at_rest: Callable[[], bool] = at_rest
         self._say: Callable[[str], None] = say
-        self._machine_id: str | None = machine_id
+        self._machine_id: str = machine_id
         self._local: Mapping[str, str] = local
         self._medical: MedicalStatus = medical
         self._current: Mapping[str, ConfigValue] = current
         self._applied: AppliedConfig | None = applied
+        self._hold: Callable[[bool], None] = hold
         self._restart: Callable[[], None] = restart
         self._asked: Monotonic | None = None
         self._issued_at: int = -1 if applied is None else applied.issued_at
@@ -440,18 +481,33 @@ class ConfigSync:
         self._issued_at = offer.issued_at
         revision = offer.revision
         applied = self._applied
-        if applied is not None and locks_above(applied.values, offer.level) != locks_above(
-            applied.values, applied.level
+        if applied is not None and set(locks_above(applied.values, offer.level)) - set(
+            locks_above(applied.values, applied.level)
         ):
-            # Every answer carries the registry's level now, whatever revision it is for:
-            # what the revision this console runs may lock follows it before anything else.
+            # Every answer carries the registry's level now, whatever revision it is for: a
+            # lock the revision this console runs may no longer hold drops before anything.
             await self._relevel(applied, offer.level, stored)
-            return
-        if revision is None or (applied is not None and revision == applied.revision):
-            # Nothing approved, or what this console runs: nothing waits any more.
+        elif revision is None:
+            # Nothing approved: the console keeps what it has, nothing waits.
             self._pending = None
             self._refusal = None
-            return
+        elif applied is not None and revision == applied.revision:
+            # What this console runs: nothing waits, unless a level raised again allows a
+            # lock held false, which only an operator gives back.
+            self._refusal = None
+            given = _given_back(applied, offer.level)
+            if given:
+                self._wait(revision, given, stored)
+            else:
+                self._pending = None
+        else:
+            await self._receive_revision(revision, offer.level, stored)
+
+    async def _receive_revision(
+        self, revision: Revision, level: ValidationLevel, stored: StoredList
+    ) -> None:
+        """Another revision than the one applied: refused, applied, or waiting."""
+        applied = self._applied
         if applied is not None and revision.number <= applied.revision.number:
             self._pending = None
             self._refuse(
@@ -459,7 +515,7 @@ class ConfigSync:
                 f"{applied.revision.number}"
             )
             return
-        reviewed = review(revision.document, self._local, offer.level, self._medical)
+        reviewed = review(revision.document, self._local, level, self._medical)
         if isinstance(reviewed, Err):
             self._pending = None
             await self._refuse_revision(revision, reviewed.error)
@@ -470,7 +526,16 @@ class ConfigSync:
             self._pending = None
             _ = await self._apply(revision, changes, stored, None)
             return
-        if self._pending is None or self._pending.revision != revision:
+        self._wait(revision, changes, stored)
+
+    def _wait(
+        self, revision: Revision, changes: tuple[ConfigChange, ...], stored: StoredList
+    ) -> None:
+        """A safety change waits for an operator; said once per revision."""
+        if self._pending is None or (self._pending.revision, self._pending.changes) != (
+            revision,
+            changes,
+        ):
             self._say(
                 f"configuration revision {revision.number} en attente : cles de surete "
                 f"changees ({_keys(changes)}), a confirmer a la console par un operateur "
@@ -527,27 +592,33 @@ class ConfigSync:
     async def _relevel(
         self, applied: AppliedConfig, level: ValidationLevel, stored: StoredList
     ) -> None:
-        """The level signed with this answer changed what the revision applied may lock:
+        """The level signed with this answer refuses a lock the revision applied runs:
         keep the answer next to it (:data:`LEVEL_FILE`), and restart on it at rest, its
         locks held to the level. The revision applied stays what it is."""
-        refused = locks_above(applied.values, level)
-        words = (
-            f"{', '.join(refused)} au dessus du niveau {level.value} : mis a faux"
-            if refused
-            else f"verrous de la revision {applied.revision.number} permis au niveau {level.value}"
-        )
+        refused = ", ".join(locks_above(applied.values, level))
         _ = await self._keep(
             self._path.with_name(LEVEL_FILE),
             stored,
-            f"configuration : niveau de validation signe change, {words}",
+            f"configuration : niveau de validation signe abaisse, {refused} au dessus du "
+            f"niveau {level.value} : mis a faux",
         )
 
     async def _keep(self, path: Path, stored: StoredList, words: str) -> Result[None, str]:
         """Write ``stored`` as it came at ``path``, then restart the console at rest. Never
-        raises."""
+        raises.
+
+        Still at rest after the answer was awaited, or nothing is written. Every start
+        is refused from before the write until the process ends for its restart: no
+        session arms on the values the console is leaving. A write that fails lifts it.
+        """
+        if not self._at_rest():
+            self._say(f"{words} ; non enregistre : la console n'est plus au repos")
+            return Err("console plus au repos")
+        self._hold(True)
         content = STORED_LIST.dump_json(stored) + b"\n"
         written = await anyio.to_thread.run_sync(partial(replace_file, path, content))
         if isinstance(written, Err):
+            self._hold(False)
             self._say(
                 f"{words} ; non enregistre ({written.error}) : la configuration en vigueur reste"
             )

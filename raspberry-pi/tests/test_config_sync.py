@@ -9,7 +9,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Final, cast
@@ -25,14 +25,17 @@ from src.config_sync import (
     CONFIG_PATH,
     CONFIG_PERIOD,
     LEVEL_FILE,
+    MACHINE_UNASSIGNED,
     MAX_PAYLOAD_BYTES,
     AppliedConfig,
     ConfigSync,
     applied_environment,
     held_to_level,
     load_applied,
+    running_values,
     view_of,
 )
+from src.config_view import ChangeView
 from src.local_config import LocalConfig, load_local_config
 from src.machine_config import ConfigValue, ValidationLevel, effective_values, read_offer
 from src.result import Err, Ok, Result
@@ -45,6 +48,8 @@ type Reply = Result[Document, Unreachable | Refused]
 
 BASE: Final[dict[str, object]] = dict(CASES["base"])
 ENV: Final[dict[str, str]] = {"MOTOR_BACKEND": "sim", "ECG_SOURCE": "sim", "ARM_RADIUS_M": "1.5"}
+MACHINE: Final[str] = "machine-1"
+"""``RECORD_MACHINE_ID`` of the console under test, the machine :func:`payload` signs for."""
 
 
 def config_of(env: Mapping[str, str]) -> LocalConfig:
@@ -90,11 +95,14 @@ class Dashboard:
     posted: list[tuple[str, Mapping[str, JsonValue]]] = field(default_factory=list)
     post_reply: Reply = field(default_factory=lambda: Ok({"status": "applied"}))
     asked: int = 0
+    meanwhile: Callable[[], None] = lambda: None
+    """What happens at the console while the answer is awaited."""
 
     async def get(self, path: str, params: Mapping[str, str] | None = None) -> Reply:
         assert path == CONFIG_PATH
         assert params is None
         self.asked += 1
+        self.meanwhile()
         return self.reply
 
     async def post(self, path: str, body: Mapping[str, JsonValue]) -> Reply:
@@ -114,6 +122,7 @@ class Rig:
     rest: list[bool]
     restarts: list[int]
     path: Path
+    holds: list[bool]
 
     async def step(self, seconds: float = 0.0) -> None:
         self.clock.advance(Seconds(seconds))
@@ -124,7 +133,7 @@ class Rig:
         self.dashboard.reply = Ok({"status": "signed", "payload": text, "signature": signature})
 
     def stored(self) -> Result[AppliedConfig | None, str]:
-        return load_applied(self.path, self.public, None)
+        return load_applied(self.path, self.public, MACHINE)
 
 
 def make_rig(
@@ -133,7 +142,7 @@ def make_rig(
     current: Mapping[str, ConfigValue] | None = None,
     applied: AppliedConfig | None = None,
     signer: Ed25519PrivateKey | None = None,
-    machine_id: str | None = None,
+    machine_id: str = "machine-1",
 ) -> Rig:
     clock = ManualClock()
     key = Ed25519PrivateKey.generate() if signer is None else signer
@@ -142,6 +151,7 @@ def make_rig(
     said: list[str] = []
     rest = [True]
     restarts: list[int] = []
+    holds: list[bool] = []
     sync = ConfigSync(
         clock=clock,
         transport=dashboard,
@@ -154,9 +164,10 @@ def make_rig(
         medical=signed(),
         current=effective_values(config_of(ENV)) if current is None else current,
         applied=applied,
+        hold=holds.append,
         restart=lambda: restarts.append(1),
     )
-    return Rig(clock, dashboard, sync, key, public, said, rest, restarts, path)
+    return Rig(clock, dashboard, sync, key, public, said, rest, restarts, path, holds)
 
 
 async def applied_rig(tmp_path: Path, values: Mapping[str, object] = BASE) -> Rig:
@@ -247,7 +258,7 @@ async def test_an_answer_that_does_not_verify_is_refused_and_said_once(
 async def test_a_signed_text_that_is_not_this_machine_s_configuration_is_refused(
     tmp_path: Path, text: str, words: str
 ) -> None:
-    rig = make_rig(tmp_path / "c.json", machine_id="machine-1")
+    rig = make_rig(tmp_path / "c.json")
     rig.sign(text)
     await rig.step()
     assert len(rig.said) == 1
@@ -267,10 +278,10 @@ def test_a_revision_s_values_must_be_an_object_of_text() -> None:
             "values": "[]",
         }
     )
-    assert read_offer(text, None) == Err("revision 1 : valeurs illisibles")
+    assert read_offer(text, "m") == Err("revision 1 : valeurs illisibles")
     lone = json.dumps({**json.loads(text), "values": "\ud800"})
-    assert read_offer(lone, None) == Err("configuration mal formee")
-    assert read_offer("{pas du json", None) == Err("texte de la configuration illisible")
+    assert read_offer(lone, "m") == Err("configuration mal formee")
+    assert read_offer("{pas du json", "m") == Err("texte de la configuration illisible")
 
 
 # =========================================================================
@@ -330,6 +341,7 @@ async def test_a_change_of_exploitation_keys_is_written_as_received_then_restart
     assert stored.value.revision.number == 3
     assert stored.value.values["name"] == "Banc d'essai"
     assert "configuration revision 3 appliquee" in rig.said[-1]
+    assert rig.holds == [True], "every start refused from before the write to the restart"
     assert (rig.path.stat().st_mode & 0o777) == 0o600
     assert rig.sync.view().restarting
     # Restarting: nothing more is asked.
@@ -416,6 +428,30 @@ async def test_a_file_the_disk_refuses_keeps_the_configuration_in_force(tmp_path
     assert rig.restarts == []
     assert "non enregistre" in rig.said[-1]
     assert rig.sync.view().pending is not None
+    assert rig.holds == [True, False], "a write that failed lifts the hold: nothing restarts"
+
+
+@pytest.mark.parametrize("safety", [False, True])
+async def test_a_session_started_while_the_answer_was_awaited_gets_nothing_written(
+    tmp_path: Path, safety: bool
+) -> None:
+    """Rest is judged again once the answer is in: a start taken meanwhile keeps the
+    file, the hold and the restart untouched; a safety revision still waits."""
+    rig = make_rig(tmp_path / "c.json")
+    values = {**BASE, "MOTOR_MAX_RPM": 400} if safety else BASE
+    rig.sign(payload(values))
+    if safety:
+        await rig.step()
+    rig.dashboard.meanwhile = lambda: rig.rest.__setitem__(0, False)
+    if safety:
+        refused = await rig.sync.confirm("op-1")
+        assert isinstance(refused, Err)
+        assert rig.sync.view().pending is not None
+    else:
+        await rig.step()
+    assert not rig.path.exists()
+    assert (rig.holds, rig.restarts) == ([], [])
+    assert "la console n'est plus au repos" in rig.said[-1]
 
 
 async def test_a_text_older_than_the_last_taken_is_refused(tmp_path: Path) -> None:
@@ -487,13 +523,31 @@ async def test_a_lower_signed_level_holds_the_locks_of_the_revision_applied(
     held, refused = held_to_level(config_of({**ENV, "PROGRAMS_ENABLED": "true"}), kept.value)
     assert refused == ("PROGRAMS_ENABLED",)
     assert held.programs_enabled is False
-    # Raised again: the locks are allowed, and the console restarts on it.
-    again = make_rig(first.path, current=kept.value.values, applied=kept.value, signer=first.signer)
-    again.sign(
-        payload({**values, "location": "Ailleurs"}, level="auto", issued_at=1_950_000_000_000)
+    # Raised again: the lock held false comes back by nothing of itself. Giving it back is
+    # a safety change, shown false -> true, that an operator confirms at rest.
+    again = make_rig(
+        first.path, current=running_values(kept.value), applied=kept.value, signer=first.signer
     )
+    raised = payload({**values, "location": "Ailleurs"}, level="auto", issued_at=1_950_000_000_000)
+    again.sign(raised)
     await again.step()
-    assert "permis au niveau auto" in again.said[-1]
+    assert again.restarts == []
+    pending = again.sync.view().pending
+    assert pending is not None
+    assert (pending.revision, pending.changes) == (
+        2,
+        (ChangeView("PROGRAMS_ENABLED", True, "false", "true"),),
+    )
+    assert "en attente : cles de surete changees (PROGRAMS_ENABLED)" in again.said[-1]
+    await again.step(float(CONFIG_PERIOD))
+    assert len(again.said) == 1, "said once"
+    assert await again.sync.confirm("op-1") == Ok(2)
+    assert again.restarts == [1]
+    given = again.stored()
+    assert isinstance(given, Ok)
+    assert given.value is not None
+    assert given.value.level is ValidationLevel.AUTO
+    assert held_to_level(config_of({**ENV, "PROGRAMS_ENABLED": "true"}), given.value)[1] == ()
 
 
 async def test_r2_a_lower_level_signed_for_a_later_revision_holds_the_locks_applied(
@@ -575,7 +629,7 @@ def test_held_to_level_leaves_a_env_console_as_it_is() -> None:
 
 
 def test_no_file_is_the_env(tmp_path: Path) -> None:
-    assert load_applied(tmp_path / "none.json", None, None) == Ok(None)
+    assert load_applied(tmp_path / "none.json", None, MACHINE) == Ok(None)
     env = {"MOTOR_MAX_RPM": "300"}
     assert applied_environment(env, None) == (env, ())
 
@@ -590,13 +644,31 @@ def test_no_file_is_the_env(tmp_path: Path) -> None:
 def test_a_file_that_does_not_verify_is_refused(tmp_path: Path, content: bytes, words: str) -> None:
     path = tmp_path / "c.json"
     path.write_bytes(content)
-    loaded = load_applied(path, b"not a key", None)
+    loaded = load_applied(path, b"not a key", MACHINE)
     assert isinstance(loaded, Err)
     assert loaded.error.startswith(words)
 
 
+async def test_r2_an_unnamed_machine_reads_no_file_not_even_another_machine_s(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """R2: ``RECORD_MACHINE_ID`` not set, a signed configuration of another machine at
+    ``occupied`` is never loaded: the console runs on its .env, and says so."""
+    values = {**BASE, "PROGRAMS_ENABLED": True, "OCCUPANCY_OCCUPIED_ENABLED": True}
+    rig = make_rig(tmp_path / "config.applied.json", machine_id="machine-OTHER")
+    rig.sign(payload(values, level="occupied", machine="machine-OTHER"))
+    await rig.step()
+    assert await rig.sync.confirm("op-1") == Ok(2)
+    assert load_applied(rig.path, rig.public, None) == Ok(None)
+    assert MACHINE_UNASSIGNED in caplog.text
+    assert load_applied(tmp_path / "none.json", rig.public, None) == Ok(None)
+    refused = load_applied(rig.path, rig.public, MACHINE)
+    assert isinstance(refused, Err)
+    assert "configuration d'une autre machine" in refused.error
+
+
 def test_an_unreadable_file_is_refused(tmp_path: Path) -> None:
-    loaded = load_applied(tmp_path, None, None)
+    loaded = load_applied(tmp_path, None, MACHINE)
     assert isinstance(loaded, Err)
     assert loaded.error.startswith("illisible")
 
@@ -612,7 +684,7 @@ async def test_a_file_with_no_revision_or_bad_values_is_refused(tmp_path: Path) 
         rig.path.write_text(
             json.dumps({"schema_version": 1, "payload": text, "signature": signature})
         )
-        loaded = load_applied(rig.path, rig.public, "machine-1")
+        loaded = load_applied(rig.path, rig.public, MACHINE)
         assert isinstance(loaded, Err)
         assert loaded.error.startswith(words), loaded.error
 

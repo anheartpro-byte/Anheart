@@ -616,7 +616,7 @@ def changes_of(
 
 
 # =========================================================================
-# The signed text the dashboard sends (``machine_config``, contract 1.14)
+# The signed text the dashboard sends (``machine_config``, contract 1.15)
 # =========================================================================
 
 CONFIG_KIND: Final[str] = "machine_config"
@@ -691,12 +691,12 @@ def _revision(fields: Mapping[str, object]) -> Result[Revision | None, str]:
     return Ok(Revision(number, digest, text, values))
 
 
-def read_offer(text: str, machine_id: str | None) -> Result[ConfigOffer, str]:
+def read_offer(text: str, machine_id: str) -> Result[ConfigOffer, str]:
     """The signed text as a :class:`ConfigOffer`, or why it is not one.
 
     The one place its untyped value enters. ``machine_id``: this machine
-    (``RECORD_MACHINE_ID``), whose configuration alone is taken; ``None`` when it
-    is not set.
+    (``RECORD_MACHINE_ID``), whose configuration alone is taken. Always set: a
+    console whose machine is not named takes no configuration at all.
     """
     fields = _object(text)
     if fields is None:
@@ -713,7 +713,7 @@ def read_offer(text: str, machine_id: str | None) -> Result[ConfigOffer, str]:
         or level is None
     ):
         return Err("configuration mal formee")
-    if machine_id is not None and machine_id != listed_for:
+    if machine_id != listed_for:
         return Err(
             f"configuration d'une autre machine ({listed_for!r}, cette console est {machine_id!r})"
         )

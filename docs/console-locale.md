@@ -2026,11 +2026,13 @@ changement (`MOTOR_MAX_RPM : 300 -> 400 (surete)`), avec le bouton
 
 | Résultat | Ce que la page écrit |
 |---|---|
-| appliquée | `revision N appliquee : la console redemarre au repos` sous le bouton ; la console redémarre dès qu'elle est au repos |
+| appliquée | `revision N appliquee : la console redemarre au repos` sous le bouton ; plus aucun départ n'est armé, et la console redémarre aussitôt |
 | console pas au repos (séance, départ en attente, lancement du site) | le refus de la console, sous le bouton (409) ; rien n'est appliqué |
 | la révision n'est plus celle du site, ou son niveau ne la permet plus | le refus de la console (409) ; la carte suit la réponse suivante |
 | aucun opérateur connecté | 401 `operator_required`, comme toute action |
 | révision refusée par la console | `configuration refusee, la console garde la sienne : ...`, sans bouton |
+| `RECORD_MACHINE_ID` non posé | `configuration refusee, la console garde la sienne : RECORD_MACHINE_ID non pose : ...` : la console ne demande aucune configuration et tourne sur son `.env` |
+| niveau du registre relevé, verrou tenu à faux | le verrou listé `PROGRAMS_ENABLED : false -> true (surete)` avec le bouton : il ne revient qu'après la confirmation |
 
 Une révision qui ne change que des clés d'exploitation n'y attend pas : la
 console l'applique d'elle même au repos.
@@ -2391,6 +2393,7 @@ Démarrage (`describe_start_refusal`, `rider_age_refusal`, `describe_resolve_err
 | `demarrage refuse : variateur deja en marche (<n> tr/min), arret demande` | variateur trouvé en marche (processus précédent mort) ; la console le met à zéro et exige un acquittement |
 | `demarrage refuse : variateur en defaut (<mnémonique>, LFT <code>)` | défaut variateur présent quand la boucle relit le variateur pour armer. Depuis le 11 octobre 2026 un démarrage demandé depuis la page est refusé avant, par la console (tableau précédent) ; ce refus de la boucle reste pour un défaut apparu entre la réponse de la console et l'armement, et pour un lancement venu du tableau de bord |
 | `demarrage refuse : console hors service : 3 demarrages apres un arret non propre en moins de 10 min. Faire verifier la machine, puis la remettre en service depuis cette page, par un operateur nomme` | la console est hors service ([section 4](#pastille-service--en-service-ou-hors-service)) ; aucun départ, manuel ou programmé, n'est armé, avant toute autre porte |
+| `demarrage refuse : redemarrage pour la nouvelle configuration en cours` | une configuration du tableau de bord vient d'être écrite (ANH-141, [raspberry-pi.md, 12.7](raspberry-pi.md#127-la-configuration-tenue-par-le-tableau-de-bord-anh-141)) : aucun départ, manuel, de banc, programmé ou lancé du site, n'est armé avant le redémarrage qui l'applique, au repos ; un lancement du site finit en échec avec cette raison |
 | `demarrage refuse : espace disque insuffisant pour l'enregistrement de seance : <n> Mo libres sous <dossier>, 500 Mo requis. Liberer de l'espace` | moins de 500 Mo libres sous le dossier d'enregistrement ([section 16](#16-lenregistrement-de-séance-boîte-noire-locale)) |
 | `demarrage refuse : enregistrement de seance impossible, espace libre illisible sous <dossier> (dossier absent, droits, disque)` | le dossier d'enregistrement ne peut pas être créé ou mesuré |
 | `demarrage refuse : plus assez de fichiers libres pour l'enregistrement de seance : <n> inodes libres sous <dossier>, 36016 requis (une seance cree des milliers de petits fichiers). Liberer de l'espace` | il reste des octets, mais plus assez d'inodes libres pour les fichiers d'une séance ([section 16](#16-lenregistrement-de-séance-boîte-noire-locale)) |
