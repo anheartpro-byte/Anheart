@@ -2731,6 +2731,7 @@ def build_panel(  # noqa: PLR0915  # one statement per wired part
         now = clock.monotonic()
         room = None if storage is None else storage()
         sampled = None if health is None else health.last
+        interventions = None if cloud is None else cloud.drive_interventions
         return PreflightInputs(
             at=now,
             snapshot=runtime.snapshot(),
@@ -2746,7 +2747,12 @@ def build_panel(  # noqa: PLR0915  # one statement per wired part
             software_version=version,
             # Read from the link itself: the poll every few seconds, not the heartbeat.
             incidents_open_high=None if cloud is None else cloud.incidents_open_high,
-            drive_interventions_due=None if cloud is None else cloud.drive_interventions_due,
+            drive_interventions_due=None if interventions is None else interventions.count,
+            drive_interventions_restored=(
+                interventions.read_at
+                if interventions is not None and interventions.restored
+                else None
+            ),
             unreported_stop=None if cloud is None else cloud.unreported_stop,
             records_pending=None if sampled is None else sampled.records_pending,
             min_battery=config.bitalino_min_battery,
@@ -3034,6 +3040,7 @@ def build_panel(  # noqa: PLR0915  # one statement per wired part
             roster=riders,
             catalog_fields=catalog.wire_fields,
             config_hash=None if applied is None else applied.revision.digest,
+            counts_dir=profiles_path.parent,
         )
         panel.attach_cloud(
             cloud=cloud,

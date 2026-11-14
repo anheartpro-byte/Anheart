@@ -1026,7 +1026,7 @@ Ce que la règle ferme aujourd'hui, et ce qu'elle ne ferme pas encore :
 | Offre du poll d'un lancement déjà en attente | oui | `armingRefusal` : le poll ne l'offre plus |
 | Départ confirmé par la machine (`training/start`) | oui | `armingRefusal` : 409 `drive_intervention_required` (contrat 1.16) ; une console antérieure ne connaît pas ce code : elle n'arme pas et n'envoie pas de fin |
 | Tâche qui échoue les lancements en attente | oui | `armingRefusal` : le lancement est échoué |
-| Programme lancé à la console | oui, plus strict : toute séance occupée | depuis le contrat 1.16, le poll porte `drive_interventions_due`, le nombre de ces défauts (`machineLogbook.interventionsDueCount`). Le pré-vol de la console 1.16 (contrôle `drive_interventions`) refuse tout départ avec une personne à bord tant qu'il n'est pas nul : un programme, une séance manuelle occupée, un lancement du site avant sa confirmation ; il n'avertit qu'au banc. Plus strict que le serveur, qui ne ferme que les séances programmées : un variateur qui demande un réarmement manuel est inspecté avant que quelqu'un monte. Le dernier compte lu reste hors ligne, en mémoire ; non annoncé, le contrôle est orange et ne bloque pas, comme pour les incidents ([raspberry-pi.md](raspberry-pi.md#le-pré-vol-anh-142)) |
+| Programme lancé à la console | oui, plus strict : toute séance occupée | depuis le contrat 1.16, le poll porte `drive_interventions_due`, le nombre de ces défauts (`machineLogbook.interventionsDueCount`). Le pré-vol de la console 1.16 (contrôle `drive_interventions`) refuse tout départ avec une personne à bord tant qu'il n'est pas nul : un programme, une séance manuelle occupée, un lancement du site avant sa confirmation ; il n'avertit qu'au banc. Plus strict que le serveur, qui ne ferme que les séances programmées : un variateur qui demande un réarmement manuel est inspecté avant que quelqu'un monte. Seul un compte lu le change, et le dernier est gardé sur le disque de la console, redémarrage compris ; jamais lu, le contrôle est orange et ne bloque pas ([raspberry-pi.md](raspberry-pi.md#le-pré-vol-anh-142)) |
 
 ### `incidents` : registre des incidents (ANH-145)
 
@@ -4985,7 +4985,11 @@ code (le test `409-unknown-code` de `tests/test_cloud_sync.py` l'épingle).
 Le serveur envoie ce code à toute console, comme `incident_open` en 1.10 et
 `programme_changed` en 1.12. Une console `1.16` face à un serveur `1.15`
 ne reçoit pas le champ, et reçoit `incident_open` pour un départ que le
-défaut ferme.
+défaut ferme. Une console `1.16` qui a déjà lu un compte non nul le garde,
+redémarrage compris : ramener Convex sous `1.16` la laisse fermée aux
+départs avec une personne à bord jusqu'à son retour en `1.16`, ou jusqu'au
+retrait de son fichier sur place
+([raspberry-pi.md](raspberry-pi.md#14-versions-et-compatibilité)).
 
 **Catalogue signé (1.11).** Une console antérieure n'appelle jamais
 `GET /api/machine/programmes` et envoie ses profils sans `catalogRevision` :

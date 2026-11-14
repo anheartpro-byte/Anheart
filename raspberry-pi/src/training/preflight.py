@@ -27,6 +27,7 @@ from __future__ import annotations
 import math
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, replace
+from datetime import UTC, datetime
 from enum import Enum, unique
 from types import MappingProxyType
 from typing import Final, assert_never, final
@@ -39,7 +40,7 @@ from src.motor.drive import DriveState
 from src.motor.sto import StoReading, StoState, sto_bridged, sto_ready
 from src.result import Err, Ok, Result
 from src.training.types import Occupancy, RunMode, TelemetrySnapshot
-from src.units import Monotonic, Percent, Seconds, elapsed
+from src.units import Monotonic, Percent, Seconds, UnixMillis, elapsed
 from src.wall_clock import Synchronised, WallClockState, detail_of
 from src.wall_clock import label_of as clock_label
 
@@ -131,6 +132,10 @@ class PreflightInputs:
     drive_interventions_due: int | None = None
     """The drive faults waiting for their intervention in the dashboard's logbook, as it
     last announced them (contract 1.16, ANH-149); ``None``: not announced."""
+
+    drive_interventions_restored: UnixMillis | None = None
+    """When that count was announced, when it is one kept from before this start
+    (:class:`~src.cloud_sync.KeptCount`); ``None``: announced since."""
 
     unreported_stop: str | None = None
     """Why the dashboard may not count yet a session that ended on a stop (its end and
@@ -324,15 +329,26 @@ def _drive_interventions(inputs: PreflightInputs) -> Result[str, Finding]:
     count = inputs.drive_interventions_due
     if count is None:
         return Err(Unjudged("interventions variateur : non annoncees par le tableau de bord"))
+    restored = inputs.drive_interventions_restored
+    before = "" if restored is None else f" ({before_restart(restored)})"
     if count > 0:
         return Err(
             Failed(
                 f"{count} defaut(s) variateur non rearmable(s) en attente d'intervention : "
                 "aucune personne a bord avant l'intervention au carnet de bord et la cloture "
-                "de l'incident"
+                f"de l'incident{before}"
             )
         )
+    if restored is not None:
+        # Nothing was due then; a fault since is not counted until a poll says it again.
+        return Err(Unjudged(f"aucun defaut variateur en attente d'intervention{before}"))
     return Ok("aucun defaut variateur en attente d'intervention")
+
+
+def before_restart(at: UnixMillis) -> str:
+    """Where a count kept across a restart comes from: when the dashboard announced it."""
+    stamp = datetime.fromtimestamp(at / 1000, UTC).strftime("%Y-%m-%d %H:%M UTC")
+    return f"compte annonce avant le redemarrage, le {stamp}, pas encore relu"
 
 
 def _bitalino(inputs: PreflightInputs) -> Result[str, Finding]:

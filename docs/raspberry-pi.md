@@ -1263,7 +1263,7 @@ suivent sans changement.
 | 7 | `contract` | bloquant | bloquant | aucun refus de contrat du tableau de bord ; console non reliée : sans objet ; tableau de bord muet : orange, non vérifié |
 | 8 | `medical` | bloquant | sans objet | paramètres médicaux signés. La version attendue n'est pas jugée (aucune référence du serveur) |
 | 9 | `incidents` | bloquant | avertissement | aucun incident grave ouvert ou analysé annoncé par le dernier poll (`incidents_open_high`, contrat 1.10, ANH-145, lu sur le lien lui-même), **et** ce compte tient toutes les séances mal terminées : aucune séance de cette exécution terminée sur `emergency_stop`, `safety_verdict` ou `tick_exception` dont le tableau de bord n'a pas acquitté la fin, aucun enregistrement d'une exécution précédente dont il n'a pas acquitté la fin (elle n'est connue qu'une fois lu), et un poll demandé après le dernier acquittement d'une telle fin, qui a rendu un compte lisible (`CloudSync.unreported_stop`) ; une séance que l'envoi abandonne (déclaration ou fin refusée pour de bon), et la fin d'une séance sans enregistrement que le redémarrage oublierait, sont écrites à côté des enregistrements (`.sync-lost-stops.json`) et retiennent, redémarrage compris (un enregistrement illisible, toujours dû, est listé et retient de nouveau à chaque démarrage), jusqu'à l'acquittement nommé de l'opérateur, page Pré-vol, qui ne lève que ces séances perdues ([console-locale.md](console-locale.md#acquitter-une-séance-perdue-anh-145)) ; une fin que le lien n'a pas vue compte comme une fin inconnue. Un compte non nul ou une telle séance ferme tout départ avec une personne à bord, et n'est qu'un avertissement au banc (EX-4 d'ANH-145) ; sans compte annoncé (serveur antérieur, aucun poll reçu) et sans telle séance, orange « non annonces », console non reliée comprise |
-| 10 | `drive_interventions` | bloquant | avertissement | aucun défaut variateur en attente d'intervention annoncé par le dernier poll (`drive_interventions_due`, contrat 1.16, ANH-149, lu sur le lien lui-même) : un défaut que la console ne réarme pas, tant que son incident n'est pas clos ou qu'aucune entrée `intervention` du carnet de bord ne le nomme. Un compte non nul ferme tout départ avec une personne à bord, programme comme séance manuelle occupée, et n'est qu'un avertissement au banc. Le dernier compte lu reste tant qu'un poll échoue, en mémoire seulement ; sans compte annoncé (serveur antérieur à 1.16, aucun poll reçu, console non reliée, valeur illisible), orange « non annoncees ». La séance qui a fini sur le défaut est tenue par le contrôle `incidents` jusqu'à un poll demandé après sa fin, qui porte aussi ce compte |
+| 10 | `drive_interventions` | bloquant | avertissement | aucun défaut variateur en attente d'intervention annoncé par le dernier poll (`drive_interventions_due`, contrat 1.16, ANH-149, lu sur le lien lui-même) : un défaut que la console ne réarme pas, tant que son incident n'est pas clos ou qu'aucune entrée `intervention` du carnet de bord ne le nomme. Un compte non nul ferme tout départ avec une personne à bord, programme comme séance manuelle occupée, et n'est qu'un avertissement au banc. Seul un compte lu le change : un poll sans réponse, une réponse d'une autre majeure ou une réponse sans compte lisible (serveur antérieur à 1.16, valeur illisible) gardent le dernier. Chaque changement est écrit dans `data/drive_interventions_due.json` (fichier privé, vidé sur le disque puis renommé) et relu au démarrage : un compte non nul d'avant le redémarrage bloque de même, avec la date de son annonce (`compte annonce avant le redemarrage, le ... UTC, pas encore relu`), jusqu'à un poll qui dit 0 ; un 0 d'avant le redémarrage est orange, avec sa date, jusqu'au poll suivant. Jamais lu (aucun fichier, console non reliée) : orange « non annoncees ». Un fichier illisible est orange aussi, jamais pris pour 0, et le journal le dit. La séance qui a fini sur le défaut est tenue par le contrôle `incidents` jusqu'à un poll demandé après sa fin, qui porte aussi ce compte |
 | 11 | `bitalino` | bloquant | avertissement | BITalino connecté, aucune lecture de sa batterie attendue ni en cours, batterie lue à cette passe au moins `BITALINO_MIN_BATTERY_PCT` (30 % par défaut), lue il y a moins de 30 min |
 | 12 | `ecg` | bloquant | sans objet | qualité ECG `good` sans interruption depuis 30 s |
 | 13 | `temperature` | avertissement | avertissement | Pi sous 70 °C, mesuré par le pré-vol à chaque pas (zone thermique du noyau), console reliée ou non ; non mesurée (hors Linux) : orange |
@@ -4477,10 +4477,26 @@ Ce que fait la console :
   console n'arme pas et n'envoie pas de fin. Le pré-vol lit le compte
   (contrôle `drive_interventions`, [4.2](#le-pré-vol-anh-142)) et ferme
   tout départ avec une personne à bord tant qu'il n'est pas nul, plus
-  strict que le serveur. Un compte absent, négatif ou qui n'est pas un
-  entier compte comme non annoncé ; le dernier compte lu reste tant qu'un
-  poll échoue. Face à un serveur `1.15`, le champ manque : le contrôle
-  reste orange, et un tel départ est refusé `incident_open`.
+  strict que le serveur. Seul un compte lu, entier et positif ou nul, le
+  change ; le dernier est gardé sur le disque, redémarrage compris. Face à
+  un serveur `1.15`, le champ manque : une console qui n'a jamais lu de
+  compte reste orange, et un tel départ est refusé `incident_open`.
+  **Retour arrière du serveur sous 1.16** : une console qui garde un compte
+  non nul reste fermée aux départs avec une personne à bord, banc ouvert,
+  jusqu'à ce que le serveur repasse en 1.16 et dise 0, ou qu'on retire son
+  fichier sur place. Retirer le fichier seulement après qu'un admin Anheart
+  a vérifié sur le site que l'incident est clos et que l'intervention qui le
+  nomme est au carnet de bord (la carte du carnet ne dit plus « Séances
+  programmées fermées »), et le noter au carnet :
+
+  ```sh
+  sudo systemctl stop anheart
+  sudo rm /var/lib/anheart/data/drive_interventions_due.json
+  sudo systemctl start anheart
+  ```
+
+  Le contrôle repart orange, « non annoncees », comme une console qui n'a
+  jamais lu de compte.
 * **Un serveur qui refuse le contrat** (réponse 426, code
   `contract_unsupported`) : la console l'écrit dans son journal et affiche
   `serveur incompatible (contrat X vs Y)`, X étant sa version et Y les

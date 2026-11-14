@@ -142,13 +142,19 @@ from abc import abstractmethod
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from enum import Enum, unique
+from functools import partial
 from http import HTTPStatus
+from pathlib import Path
 from types import MappingProxyType
-from typing import Final, Protocol, assert_never, cast
+from typing import Annotated, Final, Literal, Protocol, assert_never, cast
 
+import anyio
 import httpx
+from pydantic import ConfigDict, Field, TypeAdapter, ValidationError
+from pydantic.dataclasses import dataclass as validated
 
 from src.clock import Clock
+from src.console_access import replace_file
 from src.contract import (
     ARMING_REFUSALS,
     CONTRACT_HEADER,
@@ -985,7 +991,7 @@ class CloudSync:
         "_confirmed_launch_id",
         "_counted_at",
         "_deposit",
-        "_drive_interventions_due",
+        "_drive_interventions",
         "_health",
         "_health_context",
         "_incidents_open_high",
@@ -1044,6 +1050,7 @@ class CloudSync:
         roster: Roster | None = None,
         catalog_fields: Callable[[], Mapping[str, JsonValue]] | None = None,
         config_hash: str | None = None,
+        counts_dir: Path | None = None,
     ) -> None:
         """``record_degraded``: whether the local session record is incomplete or cannot
         be written, read at every heartbeat; ``None`` when this console records nothing.
@@ -1058,7 +1065,8 @@ class CloudSync:
         its programmes (contract 1.11, :mod:`src.programme_catalog`), sent again when it
         changes; ``None``: nothing is said of one. ``config_hash``: the hash of the
         dashboard's configuration this console runs (contract 1.15, ANH-141); ``None`` on
-        its ``.env``."""
+        its ``.env``. ``counts_dir``: where the counts the poll announces are kept across
+        restarts (:class:`KeptCount`); ``None``: in memory only."""
         self._clock: Clock = clock
         self._config_hash: str | None = config_hash
         self._deposit: DepositTask | None = deposit
@@ -1068,7 +1076,9 @@ class CloudSync:
         self._health_context: Callable[[], HealthContext] = health_context
         self._last_rtt: Seconds | None = None
         self._incidents_open_high: int | None = None
-        self._drive_interventions_due: int | None = None
+        self._drive_interventions: KeptCount = KeptCount(
+            None if counts_dir is None else counts_dir / DRIVE_INTERVENTIONS_FILE
+        )
         # When the poll whose count is held was asked (ANH-145): a count asked before the
         # dashboard acknowledged a stop's end may not hold its incident.
         self._counted_at: Monotonic | None = None
@@ -1192,11 +1202,11 @@ class CloudSync:
         return self._incidents_open_high
 
     @property
-    def drive_interventions_due(self) -> int | None:
+    def drive_interventions(self) -> HeldCount | None:
         """The drive faults of this machine waiting for their intervention in the
-        dashboard's logbook, as the last compatible poll announced them (contract 1.16,
-        ANH-149); ``None``: not announced."""
-        return self._drive_interventions_due
+        dashboard's logbook, as the last compatible poll that said a count announced them
+        (contract 1.16, ANH-149), before this start included; ``None``: never announced."""
+        return self._drive_interventions.held
 
     @property
     def server_contract(self) -> ContractVersion | None:
@@ -1681,7 +1691,9 @@ class CloudSync:
         if incidents is not None:
             # Only a count read is one asked after a stop's end: an unreadable one is none.
             self._counted_at = now
-        self._drive_interventions_due = _count_of(polled.value.get("drive_interventions_due"))
+        await self._drive_interventions.read(
+            _count_of(polled.value.get("drive_interventions_due")), self._clock.unix_millis()
+        )
         if launch is None:
             # Left unanswered, its start may be held active by the dashboard: kept for a
             # repeated confirmation, until its hold is over (`_process_confirmation`).
@@ -2215,6 +2227,93 @@ def _safe_launch_refusal(detail: str, launch: Launch | None) -> str:
     if launch.subject_age is not None:
         safe = safe.replace(f"passager de {launch.subject_age} ans", "[retire]")
     return safe
+
+
+DRIVE_INTERVENTIONS_FILE: Final[str] = "drive_interventions_due.json"
+"""Next to the programmes (``data/``): the last count of drive interventions read."""
+
+
+@dataclass(frozen=True, slots=True)
+class HeldCount:
+    """A count the poll announced, as last read."""
+
+    count: int
+    read_at: UnixMillis
+    """When the poll first announced it, on this console's wall clock."""
+
+    restored: bool = False
+    """Read back from the disk at this start: announced before the restart, not since."""
+
+
+@validated(frozen=True, slots=True, kw_only=True, config=ConfigDict(extra="forbid", strict=True))
+class StoredCount:
+    """The file of a :class:`KeptCount`, replaced whole at every change."""
+
+    schema_version: Literal[1] = 1
+    count: Annotated[int, Field(ge=0)]
+    read_at: Annotated[int, Field(ge=0)]
+
+
+STORED_COUNT: Final[TypeAdapter[StoredCount]] = TypeAdapter(StoredCount)
+
+
+def load_count(path: Path) -> HeldCount | None:
+    """The count kept before this start; ``None`` when none is, or when the file cannot
+    be read, which is logged: a file that does not parse is never taken for 0. Blocking:
+    read once, when the console is built."""
+    try:
+        content = path.read_bytes()
+    except FileNotFoundError:
+        return None
+    except OSError as error:
+        _logger.warning("%s unreadable (%s): count unknown", path.name, error)
+        return None
+    try:
+        stored = STORED_COUNT.validate_json(content)
+    except ValidationError:
+        _logger.warning("%s is not a count this console wrote: count unknown", path.name)
+        return None
+    return HeldCount(stored.count, UnixMillis(stored.read_at), restored=True)
+
+
+class KeptCount:
+    """A count the poll announces, as last read, kept on the disk across restarts (ANH-149).
+
+    Only a count read lifts the one held: an answer that says none (a dashboard of an
+    earlier minor, a value it cannot read) keeps it, as a poll left unanswered does. A
+    change is written at once (private, flushed, then renamed); a count kept from before
+    the restart is :attr:`HeldCount.restored` until a poll says one again.
+    """
+
+    __slots__ = ("_held", "_path")
+
+    def __init__(self, path: Path | None) -> None:
+        """``path``: where the count is kept; ``None``: in memory only."""
+        self._path: Path | None = path
+        # The one count held, replaced by each poll that says one: memory of the link.
+        self._held: HeldCount | None = None if path is None else load_count(path)
+
+    @property
+    def held(self) -> HeldCount | None:
+        """The last count read, before this start included; ``None``: never read."""
+        return self._held
+
+    async def read(self, count: int | None, at: UnixMillis) -> None:
+        """What a poll of this contract said at ``at``; ``None``: no count it can read."""
+        if count is None:
+            return
+        held = self._held
+        if held is not None and held.count == count:
+            self._held = HeldCount(count, held.read_at)
+            return
+        self._held = HeldCount(count, at)
+        path = self._path
+        if path is None:
+            return
+        content = STORED_COUNT.dump_json(StoredCount(count=count, read_at=int(at))) + b"\n"
+        written = await anyio.to_thread.run_sync(partial(replace_file, path, content))
+        if isinstance(written, Err):
+            _logger.warning("%s not written (%s): a restart forgets it", path.name, written.error)
 
 
 def _count_of(value: object) -> int | None:

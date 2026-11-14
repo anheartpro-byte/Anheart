@@ -359,6 +359,40 @@ def test_a_drive_intervention_due_refuses_on_board_and_warns_at_the_bench() -> N
     assert unannounced.detail == "interventions variateur : non annoncees par le tableau de bord"
 
 
+BEFORE_RESTART: Final[str] = (
+    "compte annonce avant le redemarrage, le 2023-11-14 22:13 UTC, pas encore relu"
+)
+
+
+def test_a_count_from_before_the_restart_refuses_on_board_and_says_so() -> None:
+    """ANH-149: a count kept across a restart holds as one just read, and says its date."""
+    kept = _green(
+        drive_interventions_due=1,
+        drive_interventions_restored=UnixMillis(1_700_000_000_000),
+    )
+    refused = refusal_of(judge(CONTROLS, kept, Occupancy.OCCUPIED))
+    assert refused is not None
+    assert refused.control == "drive_interventions"
+    assert refused.reason.endswith(f"la cloture de l'incident ({BEFORE_RESTART})")
+    bench = _result(kept, "drive_interventions", Occupancy.BENCH)
+    assert bench.state is ControlState.WARN
+
+
+def test_a_0_from_before_the_restart_is_orange_until_a_poll_says_it_again() -> None:
+    """ANH-149: a fault may have come since: not green, and not red either."""
+    kept = _green(
+        drive_interventions_due=0,
+        drive_interventions_restored=UnixMillis(1_700_000_000_000),
+    )
+    for occupancy in Occupancy:
+        result = _result(kept, "drive_interventions", occupancy)
+        assert result.state is ControlState.WARN
+        assert result.detail == (
+            f"aucun defaut variateur en attente d'intervention ({BEFORE_RESTART})"
+        )
+        assert refusal_of(judge(CONTROLS, kept, occupancy)) is None
+
+
 def test_what_the_server_cannot_judge_is_orange_never_red() -> None:
     unannounced = _green(
         incidents_open_high=None,

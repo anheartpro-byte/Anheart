@@ -3119,8 +3119,13 @@ interruption après la reprise de l'acquisition. Une batterie lue il y a plus de
   variateur non rearmable(s) en attente d'intervention : aucune personne a
   bord avant l'intervention au carnet de bord et la cloture de l'incident`.
   Il redevient vert au poll qui suit l'intervention et la clôture. Hors
-  ligne, le dernier compte lu reste ; un redémarrage sans lien l'oublie
-  (orange).
+  ligne, ou face à un serveur qui ne dit plus de compte, le dernier compte
+  lu reste, redémarrage compris (`data/drive_interventions_due.json`) :
+  après un redémarrage, la raison le dit, `(compte annonce avant le
+  redemarrage, le 2026-11-14 21:10 UTC, pas encore relu)`, jusqu'au poll
+  suivant ; un 0 d'avant le redémarrage est orange avec la même mention.
+  Un fichier illisible laisse le contrôle orange, « non annoncees », et le
+  journal de la console le dit.
 - La batterie : la conversion de la lecture brute en pourcentage est une
   hypothèse à vérifier au banc sur le vrai BITalino
   ([raspberry-pi.md, 4.2](raspberry-pi.md#le-pré-vol-anh-142)).
