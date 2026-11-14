@@ -1224,6 +1224,12 @@ export const launchAutoSession = mutation({
     if (!machine.programsEnabled) {
       throw refusal("programs_disabled");
     }
+    // ANH-235: programmes enabled, and no readable version announced (an
+    // absent or malformed `medical_parameters_version` is stored as none):
+    // the server no longer leaves the medical gate to the console alone.
+    if (machine.medicalParametersVersion === undefined) {
+      throw refusal("medical_parameters_unannounced");
+    }
     await expireWaitingLaunches(ctx, riderId, args.machineId, now);
     if (
       machine.status === "in_session" ||

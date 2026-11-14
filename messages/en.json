@@ -322,6 +322,7 @@
     "machine_offline": "The machine is offline: it cannot take a session right now.",
     "medical_parameters_unavailable": "No medical parameters version is registered on the server, so no auto session can be launched remotely.",
     "medical_parameters_unsigned": "Medical parameters are unsigned: the machine is in bench mode only, with no programmed session or person on board.",
+    "medical_parameters_unannounced": "The machine has not announced which medical parameters it uses: no auto session can be launched on it until it does.",
     "rider_not_allowed": "This rider is not an active member of this machine's organization.",
     "programs_disabled": "Auto programmes are disabled on this machine: no auto session can be launched on it.",
     "programme_not_on_machine": "This programme is no longer on the machine. Reload the page and choose another one.",

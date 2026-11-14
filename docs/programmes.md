@@ -269,7 +269,9 @@ Un lancement auto depuis le site passe deux contrôles successifs :
    `medical_parameters_unavailable`. Si le heartbeat de la machine annonce
    explicitement `medical_parameters_version: null`, Convex renvoie
    `medical_parameters_unsigned` avant `programs_disabled` et le site indique
-   que la machine est en mode banc.
+   que la machine est en mode banc. Programmes activés, une machine dont le
+   heartbeat n'annonce aucune version lisible (champ absent ou mal formé) est
+   refusée `medical_parameters_unannounced` (ANH-235).
 2. **Le Pi** lit le lancement à distance, puis vérifie à nouveau le programme,
    l'âge et les conditions locales de sécurité avec son propre
    `config/medical_parameters.json` signé. La version annoncée par le Pi est

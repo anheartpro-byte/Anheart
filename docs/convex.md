@@ -1565,7 +1565,11 @@ le site) :
    explicitement annoncé `null` (fichier absent ou signature non vérifiée sur
    le Pi). Ce refus arrive avant celui des programmes désactivés.
 6. Programmes : `programs_disabled` (programmes auto désactivés : séances
-   manuelles seulement, à la machine).
+   manuelles seulement, à la machine). Puis, depuis ANH-235,
+   `medical_parameters_unannounced` : programmes activés, mais le dernier
+   heartbeat n'a annoncé aucune version lisible (champ absent ou mal formé,
+   gardé comme aucune). Avant, seul `null` était refusé et le serveur laissait
+   ce cas à la console, qui revalide au départ.
 7. Une séance à la fois (ANH-144) : `machine_busy` si la machine se dit en
    séance (`in_session`) ou a une séance qui peut la tenir ; puis `rider_busy`
    si le pratiquant en a une, sur
@@ -1881,6 +1885,7 @@ ANH-139 ajoute deux codes à `training.launchAutoSession` :
 |---|---|
 | `medical_parameters_unavailable` | Aucun paramètre médical courant n'est enregistré sur le serveur ; le lancement distant échoue fermé. |
 | `medical_parameters_unsigned` | La machine a annoncé `medicalParametersVersion: null` ; le Pi est en mode banc et ne peut pas démarrer une séance auto. Ce contrôle passe avant `programs_disabled`. |
+| `medical_parameters_unannounced` | Programmes activés, et le dernier heartbeat de la machine n'a annoncé aucune version médicale lisible (champ absent ou mal formé) : aucun lancement auto tant qu'elle n'en annonce pas une (ANH-235). Ce contrôle passe après `programs_disabled`. |
 
 ANH-146 ajoute cinq codes au retour du passager (`sessionFeedback.ts`).
 Aucun ne cite une valeur saisie :

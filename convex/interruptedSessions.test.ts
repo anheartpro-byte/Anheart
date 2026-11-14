@@ -57,6 +57,7 @@ import {
   ORG_B_ACTORS,
   seedMachineWorld,
   seedWorld,
+  SHIPPED_MEDICAL_VERSION,
 } from "./test.setup";
 
 beforeEach(() => {
@@ -104,7 +105,11 @@ const heartbeat = (
   post(
     w,
     "/api/machine/heartbeat",
-    running === undefined ? {} : { activeSessionId: running },
+    // As a console of this repository sends it: its medical version announced (ANH-235).
+    {
+      medical_parameters_version: SHIPPED_MEDICAL_VERSION,
+      ...(running === undefined ? {} : { activeSessionId: running }),
+    },
     key,
   );
 

@@ -322,6 +322,7 @@
     "machine_offline": "La machine est hors ligne : elle ne peut pas recevoir de séance pour l'instant.",
     "medical_parameters_unavailable": "Aucune version des paramètres médicaux n'est enregistrée sur le serveur : aucune séance auto ne peut être lancée à distance.",
     "medical_parameters_unsigned": "Paramètres médicaux non signés : la machine est en mode banc seulement, aucune séance programmée ni personne à bord.",
+    "medical_parameters_unannounced": "La machine n'a pas annoncé quels paramètres médicaux elle utilise : aucune séance auto ne peut y être lancée tant qu'elle ne l'a pas fait.",
     "rider_not_allowed": "Ce pratiquant n'est pas membre actif de l'organisation de cette machine.",
     "programs_disabled": "Programmes auto désactivés sur cette machine : aucune séance auto ne peut y être lancée.",
     "programme_not_on_machine": "Ce programme n'est plus sur la machine. Rechargez la page et choisissez-en un autre.",
