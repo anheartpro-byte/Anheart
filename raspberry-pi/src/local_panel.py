@@ -140,7 +140,7 @@ import logging
 import os
 import signal
 from abc import abstractmethod
-from collections.abc import Awaitable, Callable, Coroutine, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
 from threading import Event as ThreadEvent
@@ -1609,9 +1609,9 @@ class LocalPanel:
             case None:
                 pass
             case StartSession():
-                await self._arming_through(self._start_programme(command))
+                await self._arming_through(functools.partial(self._start_programme, command))
             case StartManual():
-                await self._arming_through(self._start_manual(command))
+                await self._arming_through(functools.partial(self._start_manual, command))
             case SetManualTarget(output_rpm=output_rpm):
                 self._record_command(record_commands.SetManualTarget(output_rpm), command.operator)
                 target = runtime.set_manual_target(output_rpm)
@@ -1627,12 +1627,12 @@ class LocalPanel:
             case _ as unreachable:
                 assert_never(unreachable)
 
-    async def _arming_through(self, start: Coroutine[object, object, None]) -> None:
+    async def _arming_through(self, start: Callable[[], Awaitable[None]]) -> None:
         """Run a start: until it is armed or refused, the console is not at rest
         (:meth:`catalog_at_rest`), so no configuration is written under it (ANH-141)."""
         self._arming = True
         try:
-            await start
+            await start()
         finally:
             self._arming = False
 

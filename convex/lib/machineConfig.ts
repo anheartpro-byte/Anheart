@@ -154,8 +154,20 @@ const TYPE_WORDS: Record<ConfigType, (spec: ConfigKeySpec) => string> = {
   boolean: () => "attendu true ou false",
 };
 
-/** Printable ASCII without space, quote, apostrophe or backslash: a port, an address. */
-const TOKEN = /^[!#-&(-[\]-~]+$/;
+/**
+ * Printable ASCII without space, quote, apostrophe or backslash: a port, an
+ * address. One code point at a time (0x21 to 0x7E, less `"`, `'` and `\`),
+ * the set `local_config.py` accepts; not empty.
+ */
+export function isToken(raw: string): boolean {
+  if (raw.length === 0) return false;
+  for (let index = 0; index < raw.length; index++) {
+    const code = raw.charCodeAt(index);
+    if (code < 0x21 || code > 0x7e || code === 0x22 || code === 0x27 || code === 0x5c)
+      return false;
+  }
+  return true;
+}
 /** A control character, or a surrogate not paired (with `u`, a pair is one code point). */
 const CONTROL_OR_LONE_SURROGATE = /[\x00-\x1f\x7f-\x9f\uD800-\uDFFF]/u;
 
@@ -181,7 +193,7 @@ function readValue(spec: ConfigKeySpec, raw: ConfigValue): ConfigValue | undefin
       if (spec.type === "enum") return values.includes(raw) ? raw : undefined;
       const length = Array.from(raw).length;
       const fits = length > 0 && length <= (spec.max_chars ?? 0);
-      if (spec.type === "token") return fits && TOKEN.test(raw) ? raw : undefined;
+      if (spec.type === "token") return fits && isToken(raw) ? raw : undefined;
       return fits && plainText(raw) ? raw : undefined;
     }
     case "enum_list":

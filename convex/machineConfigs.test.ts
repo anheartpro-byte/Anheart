@@ -22,6 +22,7 @@ import {
   configurationStatus,
   CONFIG_KEY_NAMES,
   machineConfigProblems,
+  isToken,
   pythonFloat,
   SAFETY_KEYS,
   type ConfigValues,
@@ -97,6 +98,19 @@ describe("ANH-141 EX-2 the validation is the console's", () => {
     [123456.789, "123456.789"],
   ])("writes %d as Python writes it: %s", (value, text) => {
     expect(pythonFloat(value)).toBe(text);
+  });
+
+  it("takes as a token each printable ASCII but space, quote, apostrophe and backslash", () => {
+    // The set of `local_config.py`, code point by code point over 0x00 to 0x7F.
+    const refused = new Set([0x20, 0x22, 0x27, 0x5c]);
+    for (let code = 0; code <= 0x7f; code++) {
+      const expected = code >= 0x21 && code <= 0x7e && !refused.has(code);
+      expect(isToken(String.fromCharCode(code)), `0x${code.toString(16)}`).toBe(expected);
+      expect(isToken(`a${String.fromCharCode(code)}b`)).toBe(expected);
+    }
+    expect(isToken("")).toBe(false);
+    expect(isToken("/dev/ttyUSB0")).toBe(true);
+    expect(isToken("é")).toBe(false);
   });
 
   it("refuses a key the console does not read, and one missing", () => {
