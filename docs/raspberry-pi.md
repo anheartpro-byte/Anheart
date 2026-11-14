@@ -4321,14 +4321,16 @@ Le code ([`src/pairing.py`](../raspberry-pi/src/pairing.py)) :
 * **Le Pi.** Son numéro de série est lu dans `/proc/device-tree/serial-number`,
   comparé comme le serveur le fait (sans espaces de tête ni de fin, en minuscules).
   Illisible : la carte le dit, et aucun appairage n'est possible.
-* **L'adresse.** Le `CONVEX_URL` du `.env` de root quand il est une adresse https,
-  quelle qu'elle soit : c'est la porte des essais et de la simulation. Sinon la carte
-  la demande, et n'accepte qu'un déploiement d'Anheart : https, et un hôte qui finit
-  par `.convex.site` (`typed_address_host_suffix` du contrat). Une console appairée
-  à un autre serveur, qui accepterait n'importe quel code, lui enverrait ses séances
-  et ses enregistrements, et pourrait recevoir de lui des départs. Le modèle
-  `.env.example` laisse `CONVEX_URL` vide : la carte demande alors l'adresse, au lieu
-  d'appairer contre un exemple.
+* **L'adresse.** Le `CONVEX_URL` du `.env` de root (`/etc/anheart/anheart.env`),
+  quand il est une adresse https, et rien d'autre : aucune adresse ne se tape sur
+  l'écran. Le domaine `.convex.site` est partagé par tous les clients de Convex :
+  un compte gratuit y sert sa propre route d'appairage, qui accepterait n'importe
+  quel code. Une console appairée à ce serveur lui enverrait ses séances et ses
+  enregistrements, et pourrait recevoir de lui des départs. Sans `CONVEX_URL`, la
+  carte dit « adresse du tableau de bord non configuree : la poser dans
+  /etc/anheart/anheart.env (CONVEX_URL) puis redemarrer » et n'offre aucun
+  appairage. L'installation pose l'adresse ([pi-image.md](pi-image.md)) ; le modèle
+  de développement `.env.example` la laisse vide, à renseigner.
 * **L'appel.** `POST /api/machine/pair {code, serialPi}` avec l'en-tête du contrat
   et sans clé. La réponse est refusée, et rien n'est écrit, si sa clé ou son
   identifiant sont mal formés, si le préfixe qu'elle donne de la clé n'est pas

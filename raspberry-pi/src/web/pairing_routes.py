@@ -46,7 +46,8 @@ class PairingRow:
     """Why the Pi's serial number cannot be read; null when it can."""
 
     address: str | None
-    """The dashboard's address the console asks; null: the screen asks for it."""
+    """The dashboard's address, from the root's ``.env``; null: none is set, and the screen
+    offers no pairing (an address typed there could be any server)."""
 
     key_prefix: str | None
     """The prefix of the key received; null before a pairing. The console then restarts."""
@@ -56,10 +57,9 @@ class PairingRow:
 
 @dataclass(frozen=True, slots=True)
 class PairingBody:
-    """The code shown on the site, and the dashboard's address when the console has none."""
+    """The code shown on the site. Nothing else: the address is the root's ``.env``'s."""
 
     code: str
-    address: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,7 +100,7 @@ def register_pairing(app: FastAPI, *, services: Services, auth: Sequence[params.
         has a key, a pairing under way or done, an unreadable serial number, no address,
         a code refused by the dashboard, an answer it cannot take, a file it cannot write.
         """
-        done = await _desk(services).pair(body.code, body.address)
+        done = await _desk(services).pair(body.code)
         if isinstance(done, Err):
             raise HTTPException(status_code=HTTPStatus.CONFLICT, detail=done.error)
         return PairedRow(

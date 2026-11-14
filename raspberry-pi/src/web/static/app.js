@@ -1824,18 +1824,20 @@ function loadConfig() {
 /*
   The first-power-up screen (ANH-115), from /api/pairing: answered only while the console has
   no key (409 once it has one, and the card is hidden). The serial number of the Pi, or why it
-  cannot be read; the address field only when the console has none; the steps still to do.
-  Once paired, the key's prefix, and the console restarts at rest.
+  cannot be read; the steps still to do. No address is typed here: a console whose root .env
+  sets none says so and offers no pairing. Once paired, the key's prefix, and the console
+  restarts at rest.
 */
 function renderPairing(pairing) {
   show(el("pairing-card"), true);
   var serial = el("pairing-serial");
   text(serial, pairing.serial || "illisible : " + pairing.serial_problem);
   serial.className = pairing.serial ? "" : "bad";
-  show(el("pairing-address-row"), !pairing.address);
-  el("pairing-submit").disabled = !pairing.serial || Boolean(pairing.key_prefix);
+  el("pairing-submit").disabled = !pairing.serial || !pairing.address || Boolean(pairing.key_prefix);
   if (pairing.key_prefix) {
     ok(el("pairing-note"), pairedWords(pairing.key_prefix));
+  } else if (!pairing.address) {
+    problem(el("pairing-note"), new Error(NO_PAIRING_ADDRESS));
   }
   var list = el("pairing-steps");
   list.textContent = "";
@@ -1843,6 +1845,9 @@ function renderPairing(pairing) {
     list.appendChild(make("li", "", step.label + " : " + step.detail));
   });
 }
+
+var NO_PAIRING_ADDRESS =
+  "adresse du tableau de bord non configuree : la poser dans /etc/anheart/anheart.env (CONVEX_URL) puis redemarrer";
 
 function pairedWords(prefix) {
   return "console appairee (cle " + prefix + ") : elle redemarre au repos, reliee au tableau de bord";
@@ -1856,12 +1861,8 @@ function loadPairing() {
 
 function doPair() {
   var code = el("pairing-code");
-  var address = el("pairing-address").value.trim();
   el("pairing-submit").disabled = true;
-  api("/api/pairing", {
-    method: "POST",
-    body: { code: code.value, address: address || null },
-  })
+  api("/api/pairing", { method: "POST", body: { code: code.value } })
     .then(function (paired) {
       ok(el("pairing-note"), pairedWords(paired.key_prefix));
     })

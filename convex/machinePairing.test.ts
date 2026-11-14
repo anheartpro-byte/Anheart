@@ -11,11 +11,7 @@ import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import schema from "./schema";
 import { CONTRACT_VERSION } from "./lib/contract";
-import {
-  PAIRING_MAX_FAILURES,
-  PAIRING_TTL_MS,
-  PAIRING_TYPED_HOST_SUFFIX,
-} from "./lib/machinePairing";
+import { PAIRING_MAX_FAILURES, PAIRING_TTL_MS } from "./lib/machinePairing";
 import { machineHeaders } from "./machineAuth.fixtures";
 import {
   issuedCode,
@@ -297,9 +293,7 @@ describe("ANH-115 EX-2 POST /api/machine/pair", () => {
     expect(row.keyId).toBeDefined();
   });
 
-  it("answers this deployment's own address, one a console's screen accepts", async () => {
-    // The rule both sides read: a console's screen takes an address of this form only.
-    expect(PAIRING_TYPED_HOST_SUFFIX).toBe(".convex.site");
+  it("answers this deployment's own address", async () => {
     vi.stubEnv("CONVEX_SITE_URL", "https://deploiement.convex.site");
     const { w } = await pairable();
     const { code } = await issuedCode(w);
@@ -307,9 +301,6 @@ describe("ANH-115 EX-2 POST /api/machine/pair", () => {
       await pair(w.t, { code, serialPi: PI_SERIAL })
     ).json()) as { convexUrl: string };
     expect(body.convexUrl).toBe("https://deploiement.convex.site");
-    expect(
-      new URL(body.convexUrl).hostname.endsWith(PAIRING_TYPED_HOST_SUFFIX),
-    ).toBe(true);
     vi.unstubAllEnvs();
   });
 

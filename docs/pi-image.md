@@ -1105,6 +1105,12 @@ variateur ni BITalino.
      `ECG_SOURCE=serial`, puis `MOTOR_PORT`, `BITALINO_MAC`, les rayons mesurés,
      `CONVEX_URL` et `MACHINE_API_KEY`
      ([deploiement.md](deploiement.md#74-configurer)) ;
+   - **`CONVEX_URL`, obligatoire avant la mise en service** : le fichier est créé
+     avec l'adresse du déploiement de développement (`.env.pi.example`) ; pour une
+     machine chez un client, y poser celle de la production. C'est la seule adresse
+     contre laquelle la console s'appaire : son écran de mise en service n'en
+     accepte aucune autre, et sans elle n'offre aucun appairage
+     ([raspberry-pi.md, 12.8](raspberry-pi.md#128-la-mise-en-service-par-code-dappairage-anh-115)) ;
    - appairer le BITalino : `bash scripts/pair_device.sh <adresse MAC>` ;
    - `sudo bash scripts/pi/preflight.sh` ;
    - `sudo systemctl restart anheart`, puis les constats de l'étape 5.

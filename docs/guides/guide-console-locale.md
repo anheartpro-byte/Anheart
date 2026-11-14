@@ -2184,9 +2184,11 @@ de la machine sur le site.
    la console** de la fiche). Il le lit au technicien ; le code vaut 30 minutes et
    ne sert qu'une fois.
 3. Taper le code dans **Code d'appairage** (majuscules ou minuscules, avec ou sans le
-   tiret). Si la carte montre **Adresse du tableau de bord**, y taper l'adresse
-   `https://<deploiement>.convex.site` : la carte n'accepte qu'un déploiement
-   d'Anheart, une adresse https en `.convex.site`.
+   tiret). Aucune adresse ne se tape ici : la console appelle celle de
+   `/etc/anheart/anheart.env` (`CONVEX_URL`). Si la carte dit « adresse du tableau de
+   bord non configuree », la poser dans ce fichier (`sudo nano
+   /etc/anheart/anheart.env`, `CONVEX_URL=https://<deploiement>.convex.site`), puis
+   `sudo systemctl restart anheart`.
 4. **Appairer**. La carte dit « console appairee (cle anh1.…) : elle redemarre au
    repos, reliee au tableau de bord ». La console redémarre d'elle même ; après le
    redémarrage, la carte n'apparaît plus et la pastille du tableau de bord passe à

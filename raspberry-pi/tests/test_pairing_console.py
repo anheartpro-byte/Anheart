@@ -24,6 +24,7 @@ from src.config_sync import AppliedConfig
 from src.local_config import LocalConfig
 from src.local_panel import EXIT_OK, EXIT_RESTART, build_panel, main
 from src.pairing import (
+    NO_ADDRESS,
     PairedLink,
     PairingDesk,
     PairingSetup,
@@ -133,12 +134,28 @@ async def test_a_refusal_is_a_conflict_in_the_screen_s_words(tmp_path: Path) -> 
     app = create_app(services=services, config=WebConfig(host="127.0.0.1", port=8080, token=TOKEN))
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 51234))
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-        sent = await client.post(
-            "/api/pairing", json={"code": CODE, "address": None}, headers=device()
-        )
+        sent = await client.post("/api/pairing", json={"code": CODE}, headers=device())
     assert sent.status_code == httpx.codes.CONFLICT
     assert cast("dict[str, str]", sent.json())["detail"].startswith("code refuse")
     assert CODE not in sent.text
+
+
+async def test_a_console_with_no_address_shows_why_and_pairs_nothing(tmp_path: Path) -> None:
+    asked: list[httpx.Request] = []
+    c = console(tmp_path)
+    services = replace(
+        c.services, pairing=PairingDesk(setup(tmp_path, dashboard(asked), address=None))
+    )
+    app = create_app(services=services, config=WebConfig(host="127.0.0.1", port=8080, token=TOKEN))
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 51234))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        shown = await client.get("/api/pairing", headers=device())
+        sent = await client.post(
+            "/api/pairing", json={"code": CODE, "address": ORIGIN}, headers=device()
+        )
+    assert cast("dict[str, object]", shown.json())["address"] is None
+    assert (sent.status_code, sent.json()) == (httpx.codes.CONFLICT, {"detail": NO_ADDRESS})
+    assert asked == []
 
 
 # --- the console --------------------------------------------------------------------------
@@ -239,7 +256,7 @@ async def test_on_the_simulated_drive_a_code_typed_pairs_restarts_and_links_the_
         config_from(BASE_ENV),
         clock=ManualClock(),
         profiles_path=tmp_path / "data" / "profiles.json",
-        pairing=setup(tmp_path, dashboard(asked), address=None),
+        pairing=setup(tmp_path, dashboard(asked)),
     )
     assert isinstance(panel.services.pairing, PairingDesk)
     app = create_app(
@@ -248,10 +265,8 @@ async def test_on_the_simulated_drive_a_code_typed_pairs_restarts_and_links_the_
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 51234))
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         shown = await client.get("/api/pairing", headers=device())
-        paired = await client.post(
-            "/api/pairing", json={"code": CODE, "address": ORIGIN}, headers=device()
-        )
-    assert shown.json()["address"] is None
+        paired = await client.post("/api/pairing", json={"code": CODE}, headers=device())
+    assert cast("dict[str, object]", shown.json())["address"] == ORIGIN
     assert paired.status_code == httpx.codes.OK
     assert [str(request.url) for request in asked] == [f"{ORIGIN}/api/machine/pair"]
     # The restart asked is taken at rest, with its own code.

@@ -30,7 +30,7 @@ class PairingView:
     serial: str | None
     serial_problem: str | None
     address: str | None
-    """``None``: the screen asks for the dashboard's address."""
+    """The dashboard's address, from the root's ``.env``; ``None``: none, and no pairing."""
 
     key_prefix: str | None
     """The key's prefix once paired; the console then restarts at rest."""
@@ -54,5 +54,5 @@ class PairingScreen(Protocol):
         """What the screen shows now."""
 
     @abstractmethod
-    async def pair(self, code: str, typed_address: str | None) -> Result[PairingDone, str]:
+    async def pair(self, code: str) -> Result[PairingDone, str]:
         """Send ``code``, write what the dashboard gives, ask for the restart; or why not."""

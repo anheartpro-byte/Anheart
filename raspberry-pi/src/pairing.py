@@ -74,12 +74,6 @@ KEY_PREFIX: Final[re.Pattern[str]] = re.compile(r"anh1\.[0-9a-f]{8}")
 """What the dashboard shows of a key (``keyPrefix`` of convex/lib/machineKeys.ts): ``anh1.``
 and the first 8 characters of its selector, never more of the key."""
 
-TYPED_HOST_SUFFIX: Final[str] = ".convex.site"
-"""The end of the host of an address typed on the screen: one of Anheart's deployments
-(``typed_address_host_suffix`` of ``machine_pairing``, pinned by the tests). An address the
-root's ``.env`` sets is not held to it: that is the override, for development and the
-simulation."""
-
 SERIAL: Final[re.Pattern[str]] = re.compile(r"[0-9a-z][0-9a-z._:-]{0,63}")
 """A serial number as the dashboard compares it (``normalizedSerial`` of
 convex/lib/machinePairing.ts)."""
@@ -140,16 +134,6 @@ def https_origin(url: str) -> str | None:
     named = f"[{host}]" if ":" in host else host
     port = "" if parsed.port is None else f":{parsed.port}"
     return f"https://{named}{port}"
-
-
-def typed_origin(url: str) -> str | None:
-    """An address typed on the screen as its origin, when it is one of Anheart's
-    deployments (:data:`TYPED_HOST_SUFFIX`); ``None`` otherwise."""
-    origin = https_origin(url)
-    if origin is None:
-        return None
-    host = httpx.URL(origin).raw_host.decode("ascii")
-    return origin if host.endswith(TYPED_HOST_SUFFIX) and host != TYPED_HOST_SUFFIX[1:] else None
 
 
 def read_serial(path: Path = SERIAL_PATH) -> Result[str, str]:
@@ -481,7 +465,8 @@ class PairingSetup:
     path: Path
     serial_path: Path = SERIAL_PATH
     address: str | None = None
-    """The ``.env``'s ``CONVEX_URL``, when it is an https origin: the screen asks for none."""
+    """The ``.env``'s ``CONVEX_URL``, when it is an https origin: the only address a pairing
+    asks. ``None``: no pairing (:data:`NO_ADDRESS`)."""
 
     machine_id: str | None = None
     """The ``.env``'s ``RECORD_MACHINE_ID``: a code of another machine is refused."""
@@ -500,6 +485,13 @@ class PairingSetup:
 
 
 ALREADY_PAIRED: Final[str] = "cette console vient d'etre appairee : elle redemarre au repos"
+NO_ADDRESS: Final[str] = (
+    "adresse du tableau de bord non configuree : la poser dans /etc/anheart/anheart.env "
+    "(CONVEX_URL) puis redemarrer"
+)
+"""Why a console whose root ``.env`` sets no https ``CONVEX_URL`` offers no pairing: an
+address typed on the screen could be any server, ``.convex.site`` included, which every
+customer of Convex shares."""
 PAIRING_BUSY: Final[str] = "un appairage est deja en cours"
 
 
@@ -536,9 +528,7 @@ class PairingDesk:
             steps=self._steps(),
         )
 
-    async def pair(  # noqa: PLR0911  # one return per refusal, each said on the screen
-        self, code: str, typed_address: str | None
-    ) -> Result[PairingDone, str]:
+    async def pair(self, code: str) -> Result[PairingDone, str]:  # noqa: PLR0911  # one per refusal
         """Send ``code``, write what the dashboard gives, ask for the restart. Or why not."""
         if self._done is not None:
             return Err(ALREADY_PAIRED)
@@ -547,12 +537,9 @@ class PairingDesk:
         serial = self._serial
         if isinstance(serial, Err):
             return Err(f"numero de serie du Pi {serial.error} : aucun appairage possible")
-        origin = self._setup.address or typed_origin(typed_address or "")
+        origin = self._setup.address
         if origin is None:
-            return Err(
-                "adresse du tableau de bord attendue : https://<deploiement>.convex.site, "
-                "un deploiement d'Anheart"
-            )
+            return Err(NO_ADDRESS)
         typed = code.strip()
         if not typed or len(typed) > MAX_CODE_CHARS:
             return Err("code d'appairage attendu : les 8 caracteres affiches sur le site")

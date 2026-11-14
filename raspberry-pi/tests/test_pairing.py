@@ -13,7 +13,7 @@ import os
 import stat
 from collections.abc import Callable
 from pathlib import Path
-from typing import Final, cast
+from typing import Final
 
 import httpx
 import pytest
@@ -24,8 +24,8 @@ from src.contract import CONTRACT_HEADER, CONTRACT_VERSION
 from src.pairing import (
     ALREADY_PAIRED,
     MAX_FILE_BYTES,
+    NO_ADDRESS,
     PAIRING_BUSY,
-    TYPED_HOST_SUFFIX,
     PairedLink,
     PairingDesk,
     PairingRefused,
@@ -47,7 +47,6 @@ from src.pairing import (
     write_paired,
 )
 from src.result import Err, Ok
-from tests.test_contract import shared
 
 REPO: Final[Path] = Path(__file__).resolve().parents[2]
 ORIGIN: Final[str] = "https://deploiement.convex.site"
@@ -496,19 +495,23 @@ async def test_a_pairing_writes_the_file_asks_for_the_restart_then_takes_no_othe
         None,
     )
     assert [step.id for step in before.steps] == ["ota", "network"]
-    done = await screen.pair(f"  {CODE} ", None)
+    done = await screen.pair(f"  {CODE} ")
     assert isinstance(done, Ok)
     assert done.value.key_prefix == PREFIX
     assert [step.id for step in done.value.steps] == ["ota", "network"]
     assert restarts == ["restart"]
     assert read_paired(tmp_path / "data" / "machine.env") == Ok(LINK)
     assert screen.view().key_prefix == PREFIX
-    outcome = await screen.pair(CODE, None)
+    outcome = await screen.pair(CODE)
     assert outcome == Err(ALREADY_PAIRED)
     assert restarts == ["restart"]
 
 
-async def test_the_address_typed_is_asked_when_the_env_sets_none(tmp_path: Path) -> None:
+async def test_a_console_whose_root_env_sets_no_address_offers_no_pairing(
+    tmp_path: Path,
+) -> None:
+    """No address is ever typed on the screen: .convex.site is shared by every customer of
+    Convex, and a console paired to another server would send it its sessions."""
     asked: list[str] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -517,28 +520,20 @@ async def test_the_address_typed_is_asked_when_the_env_sets_none(tmp_path: Path)
 
     screen = desk(tmp_path, handler, address=None)
     assert screen.view().address is None
-    for typed in (
-        None,
-        "",
-        "http://deploiement.convex.site",
-        "https://attacker.example",
-        "https://convex.site",
-        "https://deploiement.convex.site.attacker.example",
-        "https://deploiement.convex.cloud",
-    ):
-        refused = await screen.pair(CODE, typed)
-        assert refused == Err(
-            "adresse du tableau de bord attendue : https://<deploiement>.convex.site, "
-            "un deploiement d'Anheart"
-        ), typed
+    outcome = await screen.pair(CODE)
+    assert outcome == Err(NO_ADDRESS)
+    assert NO_ADDRESS == (
+        "adresse du tableau de bord non configuree : la poser dans /etc/anheart/anheart.env "
+        "(CONVEX_URL) puis redemarrer"
+    )
     assert asked == []
-    outcome = await screen.pair(CODE, f"{ORIGIN}/")
-    assert isinstance(outcome, Ok)
-    assert asked == [f"{ORIGIN}/api/machine/pair"]
+    assert not (tmp_path / "data" / "machine.env").exists()
 
 
-async def test_the_root_s_env_sets_any_https_address_for_development(tmp_path: Path) -> None:
-    """The override: an address the root's .env sets is not held to the deployments' rule."""
+async def test_the_root_env_s_address_is_the_one_asked_whatever_https_origin(
+    tmp_path: Path,
+) -> None:
+    """The installer sets it; development and the simulation set their own."""
     asked: list[str] = []
     dev = "https://dev.example:8443"
 
@@ -547,15 +542,26 @@ async def test_the_root_s_env_sets_any_https_address_for_development(tmp_path: P
         return httpx.Response(200, json=answer(convex_url=dev))
 
     screen = desk(tmp_path, handler, address=dev)
-    outcome = await screen.pair(CODE, "https://ignored.convex.site")
+    assert screen.view().address == dev
+    outcome = await screen.pair(CODE)
     assert isinstance(outcome, Ok)
     assert asked == [f"{dev}/api/machine/pair"]
+    assert read_paired(tmp_path / "data" / "machine.env") == Ok(PairedLink(KEY, dev, MACHINE))
 
 
-def test_the_typed_address_rule_is_the_shared_contract_s() -> None:
-    section = cast("dict[str, object]", shared()["machine_pairing"])
-    assert section["typed_address_host_suffix"] == TYPED_HOST_SUFFIX
-    assert TYPED_HOST_SUFFIX == ".convex.site"
+async def test_an_answer_naming_another_address_than_the_one_asked_writes_nothing(
+    tmp_path: Path,
+) -> None:
+    screen = desk(
+        tmp_path,
+        lambda _request: httpx.Response(200, json=answer(convex_url="https://other.convex.site")),
+    )
+    outcome = await screen.pair(CODE)
+    assert outcome == Err(
+        "reponse inattendue du tableau de bord (adresse : pas celle qui a repondu) : "
+        "rien n'est ecrit"
+    )
+    assert not (tmp_path / "data" / "machine.env").exists()
 
 
 def test_the_template_s_address_is_left_for_the_screen_to_ask(tmp_path: Path) -> None:
@@ -569,13 +575,13 @@ async def test_no_pairing_without_a_serial_number_or_a_code(tmp_path: Path) -> N
     blind = desk(tmp_path, serial=tmp_path / "none")
     assert blind.view().serial is None
     assert blind.view().serial_problem == "illisible (FileNotFoundError:ENOENT)"
-    outcome = await blind.pair(CODE, None)
+    outcome = await blind.pair(CODE)
     assert outcome == Err(
         "numero de serie du Pi illisible (FileNotFoundError:ENOENT) : aucun appairage possible"
     )
     screen = desk(tmp_path)
     for code in ("", "   ", "x" * 33):
-        outcome = await screen.pair(code, None)
+        outcome = await screen.pair(code)
         assert outcome == Err("code d'appairage attendu : les 8 caracteres affiches sur le site")
 
 
@@ -594,9 +600,9 @@ async def test_one_pairing_at_a_time(tmp_path: Path) -> None:
             client=lambda: httpx.AsyncClient(transport=httpx.MockTransport(slow)),
         )
     )
-    first = asyncio.create_task(screen.pair(CODE, None))
+    first = asyncio.create_task(screen.pair(CODE))
     await asyncio.sleep(0.01)
-    outcome = await screen.pair(CODE, None)
+    outcome = await screen.pair(CODE)
     assert outcome == Err(PAIRING_BUSY)
     release.set()
     outcome = await first
@@ -611,17 +617,17 @@ async def test_a_refused_code_writes_nothing_and_another_may_follow(tmp_path: Pa
         ]
     )
     screen = desk(tmp_path, lambda _request: next(answers))
-    refused = await screen.pair(CODE, None)
+    refused = await screen.pair(CODE)
     assert isinstance(refused, Err)
     assert refused.error.startswith("code refuse")
     assert not (tmp_path / "data" / "machine.env").exists()
-    outcome = await screen.pair(CODE, None)
+    outcome = await screen.pair(CODE)
     assert isinstance(outcome, Ok)
 
 
 async def test_a_code_of_another_machine_than_the_env_s_is_never_written(tmp_path: Path) -> None:
     screen = desk(tmp_path, machine_id="machine999")
-    refused = await screen.pair(CODE, None)
+    refused = await screen.pair(CODE)
     assert refused == Err(
         "le code est celui de la machine machine123, et cette console est reglee pour "
         "machine999 (RECORD_MACHINE_ID) : rien n'est ecrit ; corriger le .env puis demander un "
@@ -630,7 +636,7 @@ async def test_a_code_of_another_machine_than_the_env_s_is_never_written(tmp_pat
     assert not (tmp_path / "data" / "machine.env").exists()
     (tmp_path / "same").mkdir()
     same = desk(tmp_path / "same", machine_id=MACHINE)
-    outcome = await same.pair(CODE, None)
+    outcome = await same.pair(CODE)
     assert isinstance(outcome, Ok)
 
 
@@ -645,7 +651,7 @@ async def test_a_key_the_disk_refuses_is_said_and_nothing_restarts(
         return Err("OSError:ENOSPC")
 
     monkeypatch.setattr(pairing, "write_paired", full)
-    outcome = await screen.pair(CODE, None)
+    outcome = await screen.pair(CODE)
     assert outcome == Err(
         "la cle recue n'a pas pu etre ecrite (OSError:ENOSPC) : en demander un nouveau code"
     )

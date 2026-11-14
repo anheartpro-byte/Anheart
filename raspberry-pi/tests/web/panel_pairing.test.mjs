@@ -1,6 +1,6 @@
 // The first-power-up screen of the console page (/api/pairing, ANH-115): shown only while the
-// console has no key, the Pi's serial number, the address field when the console has none, the
-// steps still to do, and the code sent once and never kept on the page.
+// console has no key, the Pi's serial number, the steps still to do, and the code sent once and
+// never kept on the page. No address is typed here: a console whose root .env sets none says so.
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
@@ -109,12 +109,12 @@ test("the card is the first of the console's page, hidden until the console says
   assert.match(source, /window\.setInterval\(loadPairing, PANEL_MS\);/);
 });
 
-test("a console with no key shows its Pi and the steps to come, and asks no address it has", () => {
+test("a console with no key shows its Pi and the steps to come, and has no address field", () => {
   const { context, node } = page();
+  assert.doesNotMatch(html, /pairing-address/);
   context.renderPairing(UNPAIRED);
   assert.equal(node("pairing-card").classes.has("hidden"), false);
   assert.equal(node("pairing-serial").textContent, "10000000c0ffee42");
-  assert.ok(node("pairing-address-row").classes.has("hidden"));
   assert.equal(node("pairing-submit").disabled, false);
   assert.deepEqual(
     node("pairing-steps").children.map((item) => item.textContent),
@@ -125,10 +125,15 @@ test("a console with no key shows its Pi and the steps to come, and asks no addr
   );
 });
 
-test("a console with no address asks for it; one that cannot read its serial offers no pairing", () => {
+test("a console with no address says where to set it; one with no serial offers no pairing", () => {
   const { context, node } = page();
   context.renderPairing({ ...UNPAIRED, address: null });
-  assert.equal(node("pairing-address-row").classes.has("hidden"), false);
+  assert.equal(
+    node("pairing-note").textContent,
+    "adresse du tableau de bord non configuree : la poser dans /etc/anheart/anheart.env (CONVEX_URL) puis redemarrer",
+  );
+  assert.ok(node("pairing-note").classes.has("note-bad"));
+  assert.equal(node("pairing-submit").disabled, true);
   context.renderPairing({ ...UNPAIRED, serial: null, serial_problem: "illisible (OSError:ENOENT)" });
   assert.equal(node("pairing-serial").textContent, "illisible : illisible (OSError:ENOENT)");
   assert.ok(node("pairing-serial").classes.has("bad"));
@@ -153,17 +158,16 @@ test("a console that has a key hides the card", async () => {
   assert.ok(node("pairing-card").classes.has("hidden"));
 });
 
-test("pairing sends the code and the address typed, then never keeps the code", async () => {
+test("pairing sends the code alone, then never keeps it", async () => {
   const { context, node, asked } = page(() =>
     Promise.resolve({ key_prefix: "anh1.ab12cd34", steps: STEPS }),
   );
   node("pairing-code").value = "7KQ2-M4XP";
-  node("pairing-address").value = "  https://deploiement.convex.site ";
   context.doPair();
   await settle();
   assert.equal(asked[0][0], "/api/pairing");
   assert.equal(asked[0][1].method, "POST");
-  assert.deepEqual({ ...asked[0][1].body }, { code: "7KQ2-M4XP", address: "https://deploiement.convex.site" });
+  assert.deepEqual({ ...asked[0][1].body }, { code: "7KQ2-M4XP" });
   assert.match(node("pairing-note").textContent, /^console appairee \(cle anh1\.ab12cd34\)/);
   assert.equal(node("pairing-code").value, "");
   assert.equal(node("pairing-submit").disabled, true);
@@ -174,7 +178,7 @@ test("a refusal is shown as the console says it, the code is cleared, and the bu
   node("pairing-code").value = "7KQ2-M4XP";
   context.doPair();
   await settle();
-  assert.equal(asked[0][1].body.address, null);
+  assert.deepEqual(Object.keys(asked[0][1].body), ["code"]);
   assert.match(node("pairing-note").textContent, /^code refuse/);
   assert.ok(node("pairing-note").classes.has("note-bad"));
   assert.equal(node("pairing-code").value, "");
