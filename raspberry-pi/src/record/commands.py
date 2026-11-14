@@ -161,15 +161,13 @@ _BARE_COMMANDS: Final[dict[str, Command]] = {
 }
 
 
-def encode(command: Command) -> str:  # noqa: PLR0911  # one return per command
+def encode(command: Command) -> str:  # noqa: PLR0911, PLR0912  # one return per command
     """The ``detail`` of the event that records ``command``."""
     match command:
-        case ConfirmEstopWiring() | ConfirmRemoteLaunch():
-            return (
-                "confirm_remote_launch"
-                if isinstance(command, ConfirmRemoteLaunch)
-                else "confirm_estop_wiring"
-            )
+        case ConfirmEstopWiring():
+            return "confirm_estop_wiring"
+        case ConfirmRemoteLaunch():
+            return "confirm_remote_launch"
         case StartProgramme():
             return "start_programme"
         case StartManual(ceiling):

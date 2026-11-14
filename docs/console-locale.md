@@ -1416,7 +1416,9 @@ affiche « Expirée : départ non confirmé à temps ». Ce code tient lieu du
 `not_confirmed_on_site` du ticket, et ce réglage de son
 `REMOTE_LAUNCH_CONFIRM_TIMEOUT_S`. Le site affiche la séance en attente « En
 attente de confirmation sur place ». L'enregistrement armé porte
-`operator_action` `confirm_remote_launch`, sous l'identifiant de l'opérateur connecté.
+`operator_action` `confirm_remote_launch`, avec en `actor` l'identifiant du compte de
+l'opérateur connecté, déjà opaque et gardé tel quel (`operator_alias` ne remplace par un
+`op-…` qu'un nom libre).
 Une tablette connectée sur le réseau de la console confirme comme l'écran de la
 machine : rien ne prouve que l'opérateur est devant elle (MEN-02). Si Convex a pris le
 départ mais que sa réponse 2xx se perd, une nouvelle confirmation dans ces 60 s reçoit
