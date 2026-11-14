@@ -14,6 +14,7 @@ from src.units import MotorRpm, OutputRpm
 
 EVERY_COMMAND: tuple[tuple[commands.Command, str], ...] = (
     (commands.ConfirmEstopWiring(), "confirm_estop_wiring"),
+    (commands.ConfirmRemoteLaunch(), "confirm_remote_launch"),
     (commands.StartProgramme(), "start_programme"),
     (commands.StartManual(MotorRpm(1380)), "start_manual ceiling_motor_rpm=1380"),
     (commands.SetManualTarget(OutputRpm(27.0)), "manual_target output_rpm=27.0"),

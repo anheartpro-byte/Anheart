@@ -312,6 +312,8 @@ describe("ANH-203 training panel: who is shown the stop control", () => {
     telemetry([]);
     const screen = panel();
     expect(screen.text()).toContain(t.pending);
+    // ANH-85: a launch waits for a signed-in operator at the machine's console.
+    expect(t.pending).toContain("confirmation sur place");
     expect(screen.hasButton(t.stop)).toBe(false);
 
     await click(screen.button(t.cancel));

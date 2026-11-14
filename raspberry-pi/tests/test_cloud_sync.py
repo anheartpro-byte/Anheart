@@ -2952,6 +2952,12 @@ async def test_the_confirming_operator_is_recorded_and_the_roster_name_stays_off
     ]
     assert len(confirmations) == 1
     assert confirmations[0].actor == OPERATOR_ID, "the account signed in (ANH-152)"
+    commanded = [
+        (event.kind.value, event.actor)
+        for event in loaded.value.events
+        if event.detail == "confirm_remote_launch"
+    ]
+    assert commanded == [("operator_action", OPERATOR_ID)], "ANH-85"
     logbook = (root / "logbook" / "events.jsonl").read_text(encoding="utf-8")
     assert "launch_confirmed" in logbook
     assert OPERATOR_ID in logbook
@@ -2963,6 +2969,8 @@ async def test_the_confirming_operator_is_recorded_and_the_roster_name_stays_off
 @pytest.mark.parametrize(
     "code",
     [
+        # ANH-85: a confirmation that reaches the dashboard after the launch expired.
+        ErrorCode("expired_before_start"),
         ErrorCode("right_revoked_before_start"),
         ErrorCode("rider_not_fit"),
         ErrorCode("fitness_expired"),

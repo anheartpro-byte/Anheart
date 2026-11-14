@@ -1071,6 +1071,7 @@ def test_console_events_land_in_the_records_closed_vocabulary(tmp_path: Path) ->
         ("warning", "console: fault_reset_requested: reset defaut", ALIAS),
         ("operator_action", "confirm_estop_wiring", ALIAS),
         ("warning", "console: attested: wiring attested", ALIAS),
+        ("operator_action", "confirm_remote_launch", ALIAS),
         ("warning", "console: launch_confirmed", ALIAS),
         ("operator_action", "latch_estop", "system"),
         ("warning", "console: emergency_stop: unattributed: pressed", "system"),
@@ -1113,6 +1114,13 @@ def test_the_confirming_operator_is_written_in_the_armed_session(tmp_path: Path)
     assert len(confirmations) == 1
     assert confirmations[0].kind is EventKind.WARNING
     assert confirmations[0].actor == operator_alias(confirmer)
+    # ANH-85: and the command the replay knows, under the same actor.
+    commanded = [
+        (event.kind, event.actor)
+        for event in loaded.value.events
+        if event.detail == "confirm_remote_launch"
+    ]
+    assert commanded == [(EventKind.OPERATOR_ACTION, operator_alias(confirmer))]
     assert confirmer not in (path / "events.jsonl").read_text(encoding="utf-8")
 
 
@@ -1135,10 +1143,10 @@ def test_the_confirming_operator_is_written_in_the_armed_session(tmp_path: Path)
         ),
         (
             SurfaceEvent.LAUNCH_CONFIRMED,
-            commands.StartProgramme(),
-            EventKind.REMOTE_COMMAND,
-            DASHBOARD_OPERATOR,
-            False,
+            commands.ConfirmRemoteLaunch(),
+            EventKind.OPERATOR_ACTION,
+            OPERATOR,
+            True,
         ),
         (
             SurfaceEvent.FAULT_RESET_REQUESTED,

@@ -325,6 +325,7 @@ et la simulation écrivent la même chose :
 | `detail` | Appel du runtime rejoué |
 | --- | --- |
 | `confirm_estop_wiring` | `confirm_estop_wiring(actor)` |
+| `confirm_remote_launch` | aucun : l'opérateur connecté a confirmé à la console un lancement du tableau de bord (ANH-85) ; le départ qu'il laisse passer est sa propre commande |
 | `start_programme` | `start(programme du manifeste, sujet)` |
 | `start_manual ceiling_motor_rpm=1380` | `start_manual(occupation du manifeste, actor, plafond)` |
 | `manual_target output_rpm=27.0` | `set_manual_target(27.0)` |

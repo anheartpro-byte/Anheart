@@ -1404,9 +1404,21 @@ seule fois. Passé les 60 s, l'offre disparaît ; dès que le tableau de bord re
 n'est plus confirmable (`refuse : <raison>`) et disparaît au poll suivant. Aucun essai
 n'est automatique.
 
-Cette confirmation Pi est le bouton qui sera garanti par le geste physique d'ANH-85;
-elle ne réalise pas ce geste et n'ajoute pas son délai. L'opérateur est le nom que la
-console connaît aujourd'hui; ANH-152 reste hors de ce parcours. Si Convex a pris le
+**Confirmation sur place (ANH-85).** Ce bouton est le seul chemin vers
+`training/start` : aucun lancement distant ne démarre sans lui, ni en attendant, ni
+après l'expiration, ni après un redémarrage de la console (un clic n'est gardé qu'en
+mémoire). Il exige un opérateur connecté (ANH-152) et confirme du même geste le
+passager affiché depuis la liste tenue (ANH-144). Le délai est celui du serveur,
+`PENDING_SESSION_TTL_S` (300 s par défaut, de 90 à 600 s, compté depuis le lancement
+sur le site) : le poll ne propose plus le lancement 45 s avant, la carte disparaît, et
+Convex passe la séance `failed` avec le code `expired_before_start`, que le site
+affiche « Expirée : départ non confirmé à temps ». Ce code tient lieu du
+`not_confirmed_on_site` du ticket, et ce réglage de son
+`REMOTE_LAUNCH_CONFIRM_TIMEOUT_S`. Le site affiche la séance en attente « En
+attente de confirmation sur place ». L'enregistrement armé porte
+`operator_action` `confirm_remote_launch`, sous l'identifiant de l'opérateur connecté.
+Une tablette connectée sur le réseau de la console confirme comme l'écran de la
+machine : rien ne prouve que l'opérateur est devant elle (MEN-02). Si Convex a pris le
 départ mais que sa réponse 2xx se perd, une nouvelle confirmation dans ces 60 s reçoit
 200 aux conditions ci-dessus, dans les 90 s qui suivent le départ daté par le serveur
 à la première confirmation, et la machine démarre (contrat 1.8) ; sans nouveau clic
@@ -2419,7 +2431,9 @@ jusqu'au prochain poll qui ne la propose plus ou jusqu'au démarrage. Le bouton 
 **Demarrer la seance** est masqué tant que l'offre est affichée. La confirmation
 est une annotation `warning`, préfixée `console:`, attribuée à l'alias du
 confirmateur dans `actor` ; hors séance elle va au `logbook/events.jsonl`, et
-l'enregistrement armé porte aussi `console: launch_confirmed` avec cet alias.
+l'enregistrement armé porte aussi `console: launch_confirmed` avec cet alias, et la
+commande `operator_action` `confirm_remote_launch` sous le même `actor` (ANH-85), que
+le rejeu lit sans rien demander au runtime.
 La commande effective reste écrite une fois sous son kind d'entrée.
 Un refus du tableau de bord ou une demande sans réponse ne
 soumet pas le démarrage à la machine et n'envoie pas `training/end`. Un refus local

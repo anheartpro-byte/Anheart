@@ -333,7 +333,8 @@ médical.
   une séance attend déjà sur cette machine. Cherchez-la dans **Sessions**,
   onglet **Tous**, et annulez-la ([section 8](#8-arrêter-ou-annuler-une-séance)).
 - **Sinon la fenêtre se ferme** et la vue en direct de la nouvelle séance
-  s'ouvre, avec le bandeau « En attente que la machine arme la séance… ».
+  s'ouvre, avec le bandeau « En attente de confirmation sur place, à la
+  console de la machine… ».
 
 ## 7. Suivre une séance en direct
 
@@ -343,19 +344,16 @@ récentes**.
 
 ### En attente
 
-Le bandeau « En attente que la machine arme la séance… » veut dire que la
-machine n'a pas encore pris votre demande. En temps normal, cela dure quelques
-secondes : au repos, la machine interroge le site toutes les 3 secondes
-environ.
+Le bandeau « En attente de confirmation sur place, à la console de la
+machine… » veut dire que la séance attend un opérateur connecté à la console de
+la machine. La console montre la demande et le passager ; rien ne démarre tant
+que cet opérateur ne l'a pas confirmée à la console (ANH-85).
 
-Si le bandeau reste affiché, la machine n'a toujours pas pris votre demande.
-Annulez la séance ([section 8](#8-arrêter-ou-annuler-une-séance)), puis voyez
-avec l'opérateur.
-
-> **Ne laissez jamais une séance en attente.** Elle n'expire pas. Tant qu'elle
-> n'est pas annulée, la machine peut la prendre plus tard, par exemple quand
-> elle redevient joignable, et démarrer sans aucune action à la console,
-> alors que plus personne ne s'y attend.
+Sans confirmation dans le délai, 5 minutes par défaut depuis votre clic (la
+console cesse de la proposer 45 s avant), la séance expire : elle prend le
+statut « Échouée », motif « Expirée : départ non confirmé à temps », et la
+machine ne peut plus la prendre. Vous pouvez aussi
+l'annuler avant ([section 8](#8-arrêter-ou-annuler-une-séance)).
 
 Il arrive aussi que la machine refuse le départ. La séance prend alors le
 statut « Échouée », avec un motif qui commence par « refusee par la

@@ -662,6 +662,24 @@ def test_events_that_are_not_inputs_are_never_read_as_commands(bench: Path, tmp_
     assert report.comparison.deviating_ticks == 0
 
 
+def test_a_remote_launch_confirmed_at_the_machine_replays_as_nothing(
+    bench: Path, tmp_path: Path
+) -> None:
+    # ANH-85: the confirmation is a command of the vocabulary with no entry point of
+    # the runtime; the start it let through is its own command.
+    folder = copy(bench, tmp_path)
+    confirmed: Line = {
+        "t": 1.5,
+        "kind": "operator_action",
+        "detail": "confirm_remote_launch",
+        "actor": "op",
+    }
+    edit_lines(folder, "events.jsonl", lambda lines: [*lines, confirmed])
+    report = replayed(folder)
+    assert report.matches
+    assert report.comparison.deviating_ticks == 0
+
+
 def test_every_reason_a_record_is_not_replayable_is_given_at_once(
     bench: Path, tmp_path: Path
 ) -> None:
