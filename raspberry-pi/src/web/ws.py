@@ -156,7 +156,7 @@ async def serve_telemetry(websocket: WebSocket, *, services: Services, config: W
         hub.release(client)
         reader.cancel()
         with contextlib.suppress(asyncio.CancelledError):
-            await reader
+            await asyncio.gather(reader)
 
 
 async def _stream(
