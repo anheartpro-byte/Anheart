@@ -333,6 +333,9 @@ def _orders(recording: Recording) -> Result[tuple[_Order, ...], str]:
                 f"{parsed.error}"
             )
         command = parsed.value
+        if isinstance(command, commands.ConfirmRemoteLaunch):
+            # No entry point of the runtime: the start it let through is its own order.
+            continue
         operation: _Operation
         if isinstance(command, commands.StartProgramme):
             if program is None:

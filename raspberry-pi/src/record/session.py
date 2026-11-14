@@ -808,17 +808,17 @@ class SessionRecorder:
                 "replay_preamble: less than 8 s of raw ECG before the origin",
                 SYSTEM,
             )
-        if request.confirmed_by is not None and not any(
-            isinstance(held.entry, Event) and held.entry.detail == "console: launch_confirmed"
-            for held in window
-        ):
-            self._event(
-                live,
-                live.origin,
-                EventKind.WARNING,
-                "console: launch_confirmed",
-                operator_alias(request.confirmed_by),
-            )
+        confirmer = request.confirmed_by
+        if confirmer is not None:
+            # The confirmation at the machine (ANH-85), unless the window brought it already.
+            for kind, detail in (
+                (EventKind.OPERATOR_ACTION, commands.encode(commands.ConfirmRemoteLaunch())),
+                (EventKind.WARNING, "console: launch_confirmed"),
+            ):
+                if not any(
+                    isinstance(held.entry, Event) and held.entry.detail == detail for held in window
+                ):
+                    self._event(live, live.origin, kind, detail, operator_alias(confirmer))
         if request.ballast is not None and request.confirmed_by is not None:
             # Only a bench launch the operator attested is ever started with a ballast.
             self._event(
@@ -967,6 +967,8 @@ class SessionRecorder:
             self.note_command(commands.ConfirmEstopWiring(), event.operator, at=event.at)
         elif event.kind is SurfaceEvent.EMERGENCY_STOP:
             self.note_command(commands.LatchEmergencyStop(), event.operator, at=event.at)
+        elif event.kind is SurfaceEvent.LAUNCH_CONFIRMED:
+            self.note_command(commands.ConfirmRemoteLaunch(), event.operator, at=event.at)
         if live is not None:
             self._event(live, event.at, kind, detail, actor)
             return

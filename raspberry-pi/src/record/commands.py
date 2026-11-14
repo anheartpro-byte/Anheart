@@ -8,6 +8,7 @@ are INPUTS of the runtime (:data:`INPUT_KINDS`) the ``detail`` is one command of
 this closed vocabulary, written by :func:`encode` and read by :func:`parse`:
 
     confirm_estop_wiring
+    confirm_remote_launch
     start_programme
     start_manual ceiling_motor_rpm=1380
     manual_target output_rpm=27.0
@@ -46,6 +47,14 @@ from src.units import MotorRpm, OutputRpm
 @dataclass(frozen=True, slots=True)
 class ConfirmEstopWiring:
     """The operator attests that a wired emergency stop exists."""
+
+
+@dataclass(frozen=True, slots=True)
+class ConfirmRemoteLaunch:
+    """The operator signed in at the console confirms a launch from the dashboard (ANH-85).
+
+    No entry point of the runtime: the start it lets through is its own command.
+    """
 
 
 @dataclass(frozen=True, slots=True)
@@ -117,6 +126,7 @@ class PresenceTrip:
 
 type Command = (
     ConfirmEstopWiring
+    | ConfirmRemoteLaunch
     | StartProgramme
     | StartManual
     | SetManualTarget
@@ -140,6 +150,7 @@ _BOOLEANS: Final = {"true": True, "false": False}
 _PRESENCE_ARGUMENTS: Final[int] = 2
 _BARE_COMMANDS: Final[dict[str, Command]] = {
     "confirm_estop_wiring": ConfirmEstopWiring(),
+    "confirm_remote_launch": ConfirmRemoteLaunch(),
     "start_programme": StartProgramme(),
     "stop": Stop(),
     "estop": EmergencyStop(),
@@ -150,11 +161,13 @@ _BARE_COMMANDS: Final[dict[str, Command]] = {
 }
 
 
-def encode(command: Command) -> str:  # noqa: PLR0911  # one return per command
+def encode(command: Command) -> str:  # noqa: PLR0911, PLR0912  # one return per command
     """The ``detail`` of the event that records ``command``."""
     match command:
         case ConfirmEstopWiring():
             return "confirm_estop_wiring"
+        case ConfirmRemoteLaunch():
+            return "confirm_remote_launch"
         case StartProgramme():
             return "start_programme"
         case StartManual(ceiling):
