@@ -674,8 +674,10 @@ def test_a_request_left_open_does_not_keep_the_console_from_its_stop(
         client = _held_request(port)
         # The server has the headers, and a request under way, before the signal.
         time.sleep(0.3)
+        signalled = time.monotonic()
         console.process.send_signal(sent)
         code = console.ended()
+        took = time.monotonic() - signalled
     finally:
         if client is not None:
             client.close()
@@ -685,6 +687,8 @@ def test_a_request_left_open_does_not_keep_the_console_from_its_stop(
     assert words.count("stopping") == 1, f"the driver's stop ran {words.count('stopping')} times"
     assert words[-4:] == ["served", *ENDED_WELL], f"not one whole stop: {words}"
     assert code == status, console.said()
+    # Sooner, and the server had no request under way: the bound was never put to the test.
+    assert took >= bench.GRACEFUL_SHUTDOWN_S, f"ended {took:.2f} s after the signal"
 
 
 @signals_reach_a_process
