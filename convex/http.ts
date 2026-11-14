@@ -855,11 +855,9 @@ function eventOf(raw: unknown) {
  * -> {stored, duplicates, rejected}
  *
  * The events of the session's local record, each `{seq, t, kind, detail,
- * actor}`: `seq` is its rank among the events the machine sends of the
- * record (999 999 at most), the presence pings and the events dated before
- * the start, which it keeps to itself, taking none; `t` is a whole number of
- * ms, and an event is one `(sessionId, seq)`, stored once however many times
- * it is sent. Sizes are bounded here: 2.5 MiB of body and 200
+ * actor}`: `seq` is its rank in the record (999 999 at most), `t` a whole
+ * number of ms, and an event is one `(sessionId, seq)`, stored once however
+ * many times it is sent. Sizes are bounded here: 2.5 MiB of body and 200
  * events per request, both refused (413) before an event is read; 2000
  * characters of text per event. Ten requests a second per machine at most.
  *

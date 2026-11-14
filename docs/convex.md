@@ -742,9 +742,7 @@ E-STOP ou un STOP fait depuis une tablette sans opérateur connecté). Index
 `by_session_and_seq`, `by_session_and_t` (les événements autour d'un
 incident, ANH-145) et `by_organization`.
 
-`seq` est le rang de l'événement parmi ceux que la console envoie de
-l'enregistrement : les signes de présence de la page et les événements datés
-d'avant le départ, qu'elle garde pour elle, n'en prennent pas. **Une ligne par
+`seq` est le rang de l'événement dans l'enregistrement. **Une ligne par
 `(sessionId, seq)`** : un événement envoyé une seconde fois n'est pas inséré
 de nouveau (`storeEvents`). Une seule fonction publique la lit :
 `incidents.get`, pour les événements à 60 s au plus de l'instant d'un

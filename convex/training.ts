@@ -2499,10 +2499,8 @@ const trainingEvent = v.object({
 /**
  * Store events of a session of this machine, as it reads them back from the
  * session's local record. Idempotent like `storeTelemetry`: an event is one
- * `(sessionId, seq)`, its rank among the events the machine sends of that
- * record (presence pings and events dated before the start take none,
- * `raspberry-pi/src/record/upload.py`), and an event already stored is left
- * as it is. The dates are bounded as those of the telemetry are. An event
+ * `(sessionId, seq)`, its rank in that record, and an event already stored is
+ * left as it is. The dates are bounded as those of the telemetry are. An event
  * stored by this call may open an incident (ANH-145, `openIncidentOfEvent`).
  */
 export const storeEvents = internalMutation({
