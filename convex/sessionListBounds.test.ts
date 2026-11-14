@@ -9,13 +9,13 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import type { FunctionReturnType } from "convex/server";
 import { api } from "./_generated/api";
-import type { QueryCtx } from "./_generated/server";
 import { getCurrentUserOrThrow } from "./lib/auth";
 import {
   newestReadableSessions,
   readableSessions,
 } from "./lib/readableSessions";
 import { as } from "./test.setup";
+import { recordReads } from "./readRecorder.fixtures";
 import {
   boundsWorld,
   expectedForManager,
@@ -23,66 +23,6 @@ import {
 } from "./sessionListBounds.fixtures";
 
 type BoundsWorld = Awaited<ReturnType<typeof boundsWorld>>;
-
-type RecordedRead = {
-  readonly table: string;
-  readonly index: unknown;
-  readonly calls: (
-    | { method: "filter" | "paginate" | "collect" }
-    | { method: "take"; limit: unknown }
-  )[];
-};
-
-function recordReads(ctx: QueryCtx) {
-  const reads: RecordedRead[] = [];
-  function record<T extends object>(
-    query: T,
-    table: string,
-    read?: RecordedRead,
-  ): T {
-    return new Proxy(query, {
-      get(target, key, receiver) {
-        const method: unknown = Reflect.get(target, key, receiver);
-        if (typeof method !== "function") return method;
-        return (...args: unknown[]) => {
-          let source = read;
-          if (key === "withIndex" || source === undefined) {
-            source = {
-              table,
-              index: key === "withIndex" ? args[0] : undefined,
-              calls: [],
-            };
-            reads.push(source);
-          }
-          if (key === "filter" || key === "paginate" || key === "collect") {
-            source.calls.push({ method: key });
-          } else if (key === "take") {
-            source.calls.push({ method: key, limit: args[0] });
-          }
-          const result: unknown = Reflect.apply(method, target, args);
-          if (
-            (key === "withIndex" || key === "order" || key === "filter") &&
-            typeof result === "object" &&
-            result !== null
-          ) {
-            return record(result, table, source);
-          }
-          return result;
-        };
-      },
-    });
-  }
-  const db = new Proxy(ctx.db, {
-    get(target, key, receiver) {
-      if (key === "query") {
-        return (table: Parameters<QueryCtx["db"]["query"]>[0]) =>
-          record(target.query(table), table);
-      }
-      return Reflect.get(target, key, receiver);
-    },
-  });
-  return { ctx: { ...ctx, db }, reads };
-}
 
 async function expectBudgetBites(w: BoundsWorld) {
   await expect(
