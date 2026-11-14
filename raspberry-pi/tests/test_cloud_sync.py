@@ -209,6 +209,7 @@ class Dashboard:
 
 
 DOWN: Final[Reply] = Err(Unreachable("no route to host"))
+KEY_REFUSED_WORDS: Final[str] = "refuse la cle de cette machine"
 POLL_PATH: Final[str] = "/api/machine/training/poll"
 START: Final[str] = "/api/machine/training/start"
 STATUS: Final[str] = "/api/machine/training/status"
@@ -291,13 +292,14 @@ class Rig:
         assert isinstance(accepted, Ok), accepted
 
     async def step(self, seconds: float = 1.0) -> None:
-        """One second of the link's three tasks: the riders' list, then the sending, the
-        stop watch looking before and after them, as it does on the console, where it
-        looks four times a second."""
+        """One second of the link's four tasks: the riders' list, the dashboard step, then
+        the sending, the stop watch looking before and after them, as it does on the
+        console, where it looks four times a second."""
         self.clock.advance(Seconds(seconds))
         await self.sync.watch_stop()
         await self.sync.refresh_roster()
         await self.sync.step()
+        await self.sync.send_records()
         await self.sync.watch_stop()
 
 
@@ -1136,6 +1138,7 @@ async def test_a_late_2xx_cannot_reuse_a_confirmation_after_a_local_session(
 
     release.set()
     await asyncio.wait_for(request, timeout=1.0)
+    await r.panel.records_step()  # the sending's own task: the failed end goes out
 
     assert r.panel.surface.pending is None
     assert state_of(r.panel) is RuntimeState.FINISHED
@@ -1158,6 +1161,67 @@ async def test_a_late_2xx_cannot_reuse_a_confirmation_after_a_local_session(
         caplog,
         (PROFILE, "passager de 30 ans", RIDER_NAME, "Dr Manager"),
     )
+
+
+@pytest.mark.parametrize(
+    ("answer", "words"),
+    [
+        pytest.param(ok({"riders": []}), "n'est pas dans", id="without-the-rider"),
+        pytest.param(Err(Refused(status=401, detail="no")), KEY_REFUSED_WORDS, id="key-401"),
+        pytest.param(Err(Refused(status=403, detail="no")), KEY_REFUSED_WORDS, id="key-403"),
+    ],
+)
+async def test_a_list_that_drops_the_rider_while_the_start_is_asked_for_refuses_the_arming(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, answer: Reply, words: str
+) -> None:
+    """ANH-239: the riders' list arrives while ``training/start`` is on its way, in the same
+    second. The order is no longer fixed (the list has a task of its own), and this is the
+    newer one: the start was asked for with the rider, the list came without them, or the
+    dashboard refused the machine's key (401, 403), which empties the list at once. The
+    arming reads the list again (``LocalPanel._rider_for``): refused, nothing armed, and
+    never a session for a rider the list no longer offers.
+    """
+    r = linked(tmp_path)
+    r.dashboard.answer(POLL_PATH, launch_answer(dict(LAUNCH)))
+    # The list was asked for at the start; it is due again a moment after the click.
+    await r.run(float(ROSTER_PERIOD) - 0.4)
+    confirm_linked(r.panel)
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    original_post = r.dashboard.post
+
+    async def post(path: str, body: Mapping[str, JsonValue]) -> Reply:
+        if path == START:
+            entered.set()
+            await release.wait()
+        return await original_post(path, body)
+
+    monkeypatch.setattr(r.dashboard, "post", post)
+    request = asyncio.create_task(r.panel.cloud_step())
+    await asyncio.wait_for(entered.wait(), timeout=1.0)
+
+    # Within the same second, the list's own task brings a list without the rider.
+    r.dashboard.answer(ROSTER_PATH, answer)
+    for _ in range(3):
+        r.clock.advance(TICK)
+        r.panel.surface.note_presence(OPERATOR)
+        await r.panel.ecg_step()
+        await r.panel.control_step()
+    await r.panel.roster_step()
+    assert len(r.dashboard.to(ROSTER_PATH)) >= 2, "the list was asked for again"
+    release.set()
+    await asyncio.wait_for(request, timeout=1.0)
+    assert pending_start(r.panel.surface) is not None, "the 2xx handed the launch to the loop"
+
+    await r.run(2.0)
+    assert state_of(r.panel) is RuntimeState.IDLE
+    assert r.panel.surface.pending is None
+    assert len(r.dashboard.to(START)) == 1
+    (end,) = r.dashboard.to("/api/machine/training/end")
+    assert end["sessionId"] == "remote-1"
+    assert end["failed"] is True
+    assert words in str(end["reason"])
+    await r.panel.close()
 
 
 async def test_a_late_2xx_while_a_local_session_runs_keeps_the_failed_end(
@@ -1433,6 +1497,7 @@ async def test_a_reply_for_a_replaced_offer_cannot_submit_or_arm_it(
 
     release.set()
     await asyncio.wait_for(request, timeout=1.0)
+    await r.panel.records_step()  # the sending's own task: an end owed goes out
 
     assert r.panel.runtime.state is RuntimeState.IDLE
     assert r.panel.surface.pending is None
@@ -1641,6 +1706,7 @@ async def test_a_dashboard_launch_fails_closed_without_local_preflight(tmp_path:
     assert isinstance(accepted, Ok)
     r.clock.advance(Seconds(1.0))
     await sync.step()
+    await sync.send_records()
 
     assert r.dashboard.to(START) == []
     ends = r.dashboard.to("/api/machine/training/end")
@@ -2090,6 +2156,7 @@ async def test_a_late_refusal_does_not_refuse_a_new_remote_offer(tmp_path: Path)
     assert offer.reason is None
 
     await r.sync.step()
+    await r.sync.send_records()
     ends = r.dashboard.to("/api/machine/training/end")
     assert ends[-1]["sessionId"] == "remote-1"
     assert ends[-1]["reason"] == expected_dashboard_refusal(detail, LAUNCH)
@@ -2723,12 +2790,14 @@ class Linked:
             self.panel.surface.note_presence(OPERATOR)
             await self.panel.ecg_step()
             await self.panel.control_step()
-            # The link's three tasks: the stop watch four times a second (here at
-            # each tick), the riders' list and the sending once a second.
+            # The link's four tasks: the stop watch four times a second (here at
+            # each tick), the riders' list, the dashboard step and the sending once a
+            # second.
             await self.panel.cloud_stop_step()
             if n % 5 == 0:
                 await self.panel.roster_step()
                 await self.panel.cloud_step()
+                await self.panel.records_step()
 
 
 def state_of(panel: LocalPanel) -> RuntimeState:
@@ -3433,12 +3502,27 @@ async def test_a_failure_of_the_riders_list_request_never_reaches_the_console(
     await rig_.panel.close()
 
 
+async def test_a_failure_of_the_sending_never_reaches_the_console(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    rig_ = linked(tmp_path)
+
+    async def broken(_self: CloudSync) -> None:
+        raise RuntimeError("bug in the sending")
+
+    monkeypatch.setattr(CloudSync, "send_records", broken)
+    await rig_.panel.records_step()
+    assert "dashboard sending step failed" in caplog.text
+    await rig_.panel.close()
+
+
 async def test_an_unlinked_console_has_no_link_step(tmp_path: Path) -> None:
     clock = ManualClock()
     config = config_of(MACHINE_API_KEY="")
     panel = build_panel(config, clock=clock, profiles_path=tmp_path / "p.json")
     assert panel.cloud is None
     await panel.cloud_step()
+    await panel.records_step()
     await panel.cloud_stop_step()
     await panel.roster_step()
     assert panel.roster.state(clock.monotonic()) is RosterState.UNLINKED

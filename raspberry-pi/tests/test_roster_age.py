@@ -109,6 +109,7 @@ async def test_the_monotonic_clock_alone_makes_the_list_stale(tmp_path: Path) ->
             json={**start_body(FITTING.user_id), "profiles_digest": await shown_digest(session)},
         )
     assert (roster.state, roster.age_s, roster.detail) == ("stale", 901.0, STALE_AT_901)
+    assert roster.max_age_s == 900.0, "the page ages the list against the console's own bound"
     assert offered(roster) == []
     assert refused.status_code == httpx.codes.CONFLICT
     assert detail(refused) == f"demarrage refuse : {STALE_AT_901}"

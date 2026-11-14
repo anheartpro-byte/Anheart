@@ -92,9 +92,10 @@ class Linked:
                 )
             await self.recorded.tick(1.0)
             await panel.cloud_stop_step()
-            # The riders' list is the link's own task since ANH-239.
+            # The riders' list and the sending are tasks of their own since ANH-239.
             await panel.roster_step()
             await panel.cloud_step()
+            await panel.records_step()
 
     async def until_finished(self, session: httpx.AsyncClient) -> None:
         stopped = await session.post(

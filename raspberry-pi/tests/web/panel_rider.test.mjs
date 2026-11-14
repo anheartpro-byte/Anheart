@@ -36,8 +36,11 @@ function panel(storage = new Map()) {
   const nodes = new Map(
     [...html.matchAll(/id="([^"]+)"/g)].map((match) => [match[1], new Element()]),
   );
+  const clock = { now: 1000 };
   const context = vm.createContext({
+    performance: { now: () => clock.now },
     document: {
+      documentElement: { style: { setProperty: () => undefined } },
       getElementById: (id) => nodes.get(id) ?? null,
       createElement: () => new Element(),
     },
@@ -61,7 +64,7 @@ function panel(storage = new Map()) {
       },
     });
   }
-  return { context, nodes, storage };
+  return { clock, context, nodes, storage };
 }
 
 const ADULT = {
@@ -81,7 +84,15 @@ const UNSET = {
 };
 
 function roster(riders, overrides = {}) {
-  return { state: "current", detail: "", age_s: 12.4, problem: null, riders, ...overrides };
+  return {
+    state: "current",
+    detail: "",
+    age_s: 12.4,
+    problem: null,
+    riders,
+    max_age_s: 900,
+    ...overrides,
+  };
 }
 
 const options = (node) => node.children.map((option) => [option.value, option.textContent]);
@@ -161,6 +172,38 @@ test("a refresh that changes nothing keeps the choice and the options as they ar
   assert.equal(nodes.get("roster-note").textContent, "liste du tableau de bord recue il y a 3 min");
 });
 
+test("between two answers the list ages on the page, and past its age nobody is offered", () => {
+  const { clock, context, nodes } = panel();
+  context.renderRoster(roster([ADULT], { age_s: 895 }));
+  nodes.get("rider").value = "k17adult";
+  context.onRiderChange();
+  clock.now += 4000;
+  context.refreshLiveness();
+  assert.equal(nodes.get("rider").value, "k17adult", "899 s: still offered");
+  assert.equal(nodes.get("roster-note").textContent, "liste du tableau de bord recue il y a 14 min");
+
+  // The page's ten seconds have not passed: no answer yet, and the list is past 900 s.
+  clock.now += 1500;
+  context.refreshLiveness();
+  assert.deepEqual(options(nodes.get("rider")), [["", "- aucun passager propose -"]]);
+  assert.equal(nodes.get("rider").value, "");
+  const note = nodes.get("roster-note");
+  assert.equal(note.className, "note note-bad");
+  assert.equal(
+    note.textContent,
+    "liste des passagers perimee : recue il y a 15 min 1 s, au-dela de 15 min personne n'est propose",
+  );
+  assert.equal(context.selectedRider("k17adult"), null, "no start can name them");
+
+  // The next answer brings the list back, as received.
+  context.renderRoster(roster([ADULT], { age_s: 2 }));
+  assert.deepEqual(options(nodes.get("rider")), [
+    ["", "- choisir le passager -"],
+    ["k17adult", "Synthetic Adult"],
+  ]);
+  assert.equal(nodes.get("roster-note").textContent, "liste du tableau de bord recue il y a 2 s");
+});
+
 test("no list offered: the reason is said, and nobody can be chosen", () => {
   const { context, nodes } = panel();
   context.renderRoster(
@@ -221,6 +264,45 @@ test("a start and a preview name the rider chosen, or nobody, and nothing else o
   }
   // The name stays in this page's memory: the browser's storage never holds it.
   assert.equal([...storage.values()].some((value) => value.includes("Synthetic Adult")), false);
+});
+
+test("a failed read of the list stays said, in red, until a list comes", async () => {
+  const { clock, context, nodes } = panel();
+  context.api = () => Promise.resolve(roster([ADULT]));
+  await context.loadRoster();
+  context.api = () => Promise.reject(new Error("HTTP 503"));
+  await context.loadRoster();
+  const note = nodes.get("roster-note");
+  assert.equal(note.textContent, "HTTP 503");
+  // The refresh every 500 ms keeps it, and still ages the list it holds.
+  clock.now += 500;
+  context.refreshLiveness();
+  assert.equal(note.textContent, "HTTP 503");
+  assert.equal(note.className, "note note-bad");
+  assert.deepEqual(options(nodes.get("rider")), [
+    ["", "- choisir le passager -"],
+    ["k17adult", "Synthetic Adult"],
+  ]);
+  context.api = () => Promise.resolve(roster([ADULT]));
+  await context.loadRoster();
+  assert.equal(note.textContent, "liste du tableau de bord recue il y a 12 s");
+  assert.equal(note.className, "note");
+});
+
+test("the list ages from when it was asked for: an answer 5 s in transit lengthens nothing", async () => {
+  const { clock, context, nodes } = panel();
+  const slow = (answer) => () => {
+    clock.now += 5000; // sent at 1000, answered at 6000
+    return Promise.resolve(answer);
+  };
+  context.api = slow(roster([ADULT], { age_s: 12.4 }));
+  await context.loadRoster();
+  assert.equal(nodes.get("roster-note").textContent, "liste du tableau de bord recue il y a 17 s");
+  // 897 s old when the console answered, 902 s once here: nobody, at once.
+  context.api = slow(roster([ADULT], { age_s: 897 }));
+  await context.loadRoster();
+  assert.deepEqual(options(nodes.get("rider")), [["", "- aucun passager propose -"]]);
+  assert.match(nodes.get("roster-note").textContent, /^liste des passagers perimee : recue il y a 15 min 2 s/);
 });
 
 test("a list that cannot be read is said where the list is", async () => {
