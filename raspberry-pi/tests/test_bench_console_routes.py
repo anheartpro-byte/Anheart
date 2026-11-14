@@ -15,7 +15,7 @@ from __future__ import annotations
 import asyncio
 import threading
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
 from http import HTTPStatus
 from typing import Final
@@ -42,6 +42,9 @@ from tests.test_atv320 import build_drive as driver_over
 
 WAIT_S: Final[float] = 10.0
 """How long a test waits for the bus thread at most; it is done within a cycle or two."""
+
+UNLISTED_LFT: Final[int] = 999
+"""A fault code no table of the driver's knows."""
 
 TURNING_RPM: Final[int] = 600
 """What RFRD reads on a shaft that turns: a plausible speed, under the nameplate's bound."""
@@ -318,3 +321,88 @@ async def test_the_fault_reset_writes_128_then_6_on_a_drive_in_fault(rig: Bench)
     assert await rig.result("fault_reset") == "fault_reset: ok"
     cmd = rig.regs.cmd
     assert rig.since(mark) == [(cmd, ControlWord.FAULT_RESET), (cmd, ControlWord.SHUTDOWN)]
+
+
+# =========================================================================
+# The bus thread's poll: what the page is shown, and what it is not
+# =========================================================================
+
+
+async def _until(predicate: Callable[[], bool], why: str) -> None:
+    deadline = time.monotonic() + WAIT_S
+    while not predicate():
+        assert time.monotonic() < deadline, why
+        await asyncio.sleep(0.01)
+
+
+async def test_a_fault_is_shown_by_name_an_unknown_code_as_unknown_and_none_as_none(
+    rig: Bench,
+) -> None:
+    await rig.polled()
+    assert rig.worker.snap.fault == "aucun"
+    rig.bus.registers[rig.regs.eta] = ETA_FAULT
+    rig.bus.registers[rig.regs.lft] = LFT_OVERCURRENT
+    await rig.polled()
+    await rig.polled()
+    assert (rig.worker.snap.drive_state, rig.worker.snap.fault) == ("FAULT", "OVERCURRENT")
+    rig.bus.registers[rig.regs.lft] = UNLISTED_LFT
+    await rig.polled()
+    await rig.polled()
+    assert rig.worker.snap.fault == "UNKNOWN", "never a plausible wrong name"
+
+
+async def test_an_impossible_speed_or_current_is_never_shown(rig: Bench) -> None:
+    rig.bus.registers[rig.regs.rfrd] = 5000
+    rig.bus.registers[rig.regs.lcr] = 200
+    await rig.polled()
+    await rig.polled()
+    snap = rig.worker.snap
+    assert (snap.output_rpm, snap.current_a) == (None, None)
+    assert snap.implausible >= 2
+    assert snap.last_error == "courant 20.0 A impossible (plaque 2.15 A)"
+    rig.bus.registers[rig.regs.rfrd] = 0
+    rig.bus.registers[rig.regs.lcr] = 12
+    await rig.polled()
+    await rig.polled()
+    assert (rig.worker.snap.output_rpm, rig.worker.snap.current_a) == (0, 1.2)
+
+
+async def test_a_failed_read_clears_every_live_field(rig: Bench) -> None:
+    await rig.polled()
+    assert rig.worker.snap.drive_state == "SWITCH_ON_DISABLED"
+    failed = rig.worker.snap.read_failed
+    rig.bus.script_reads.append(io_exception())
+    await _until(lambda: rig.worker.snap.read_failed > failed, "no failed read counted")
+    snap = rig.worker.snap
+    assert (snap.link_ok, snap.status_word, snap.drive_state, snap.enabled) == (
+        False,
+        None,
+        None,
+        None,
+    )
+    assert (snap.output_rpm, snap.current_a, snap.fault) == (None, None, None)
+    await _until(lambda: rig.worker.snap.link_ok, "the next read did not bring it back")
+
+
+async def test_a_keepalive_that_fails_is_said(rig: Bench) -> None:
+    await rig.armed_and_enabled()
+    await rig.polled()
+    rig.bus.script_writes.append(io_exception())
+    await _until(
+        lambda: (rig.worker.snap.last_error or "").startswith("keepalive: "),
+        "the failed keepalive was never said",
+    )
+
+
+async def test_a_lost_link_disarms_and_reconnects_without_resuming(rig: Bench) -> None:
+    await rig.armed_and_enabled()
+    rig.bus.sticky_reads = io_exception()
+    await _until(lambda: not rig.worker.snap.armed, "a lost link never disarmed")
+    assert rig.worker.snap.last_action.startswith("DESARME: liaison perdue.")
+    rig.bus.sticky_reads = Behave.NORMALLY
+    await _until(lambda: rig.worker.snap.reconnects >= 1, "never reconnected")
+    await _until(lambda: rig.worker.snap.link_ok, "the link never came back")
+    mark = rig.mark()
+    await rig.polled()
+    await rig.polled()
+    assert rig.since(mark) == [], "the keepalive resumed by itself"
