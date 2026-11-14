@@ -493,6 +493,38 @@ test("an old report closes the bench start: no frame and a status past its age, 
   assert.equal(page.node("manual-start").disabled, false);
 });
 
+test("a socket opened again is live from its first frame, never from the old one's last", async () => {
+  const page = await answered(status(BENCH_MODE));
+  const sockets = [];
+  page.context.WebSocket = class {
+    constructor(url) {
+      this.url = url;
+      sockets.push(this);
+    }
+    close() {}
+  };
+  page.context.window.location = { protocol: "http:", host: "console" };
+  page.context.connect();
+  sockets[0].onopen();
+  sockets[0].onmessage({ data: JSON.stringify({ kind: "snapshot", snapshot: snapshot() }) });
+  assert.equal(page.node("manual-start").disabled, false);
+  // The socket drops, and stays down long enough for the status to age too.
+  sockets[0].onclose();
+  page.clock.now += 20000;
+  page.context.refreshLiveness();
+  assert.equal(page.node("manual-start").disabled, true);
+  // Open again: the 20 s old frame of the socket before says nothing of now.
+  page.context.connect();
+  sockets[1].onopen();
+  assert.equal(page.context.framesLive(), false);
+  assert.equal(page.node("manual-start").disabled, true, "reopened by the old socket's snapshot");
+  // Its first frame: live again.
+  page.clock.now += 200;
+  sockets[1].onmessage({ data: JSON.stringify({ kind: "snapshot", snapshot: snapshot() }) });
+  assert.equal(page.context.framesLive(), true);
+  assert.equal(page.node("manual-start").disabled, false);
+});
+
 test("on a read-only console the bench start stays closed under the bridge too", async () => {
   const page = await answered(status(BENCH_MODE));
   page.context.state.motionEnabled = false;

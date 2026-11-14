@@ -1796,7 +1796,8 @@ Rien ne l'efface tout seul.
    Après un arrêt d'urgence, le bandeau rouge disparaît aussi.
 
 Cas particulier : un verdict `go_silent` ne s'acquitte pas. Le message dit
-`... demanded GO_SILENT, which is one-way ...`. Il faut vérifier que la machine est
+`... demanded GO_SILENT, which is one-way ...`, quelle que soit la chaîne STO lue à ce
+moment : rétablir la chaîne n'y change rien. Il faut vérifier que la machine est
 arrêtée, puis **redémarrer la console**.
 
 ### 13.7 La caméra détecte une intrusion

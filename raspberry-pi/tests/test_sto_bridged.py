@@ -748,6 +748,38 @@ async def test_under_every_other_source_the_bench_confirmation_is_refused_and_an
         await rig.panel.close()
 
 
+@pytest.mark.parametrize(
+    "env",
+    [
+        BRIDGED_ENV,
+        BENCH_ENV,
+        {**BENCH_ENV, "STO_SOURCE": "sim_open"},
+        {**BENCH_ENV, **SERIAL},
+        {**BENCH_ENV, **SERIAL, "STO_SOURCE": "drive_input", "STO_DRIVE_INPUT": "LI1"},
+    ],
+    ids=["bridged_declared", "sim_ready", "sim_open", "none", "drive_input"],
+)
+async def test_the_routes_and_the_supervisor_read_one_bench_fact(
+    tmp_path: Path, env: Mapping[str, str]
+) -> None:
+    """R2 of ANH-92: the page's routes and the supervisor's statement read the same test on the
+    same source, so they cannot disagree on whether this console is the declared bench."""
+    rig, _ = make_rig(tmp_path, env=env)
+    try:
+        supervisor_says_bench = (
+            rig.panel.runtime.supervisor.attestation_statement == BENCH_BRIDGED_ATTESTATION
+        )
+        async with rig.http() as client:
+            status = parse(StatusRow, await client.get("/api/status"))
+            routes_say_bench = status.attestation_fields == BENCH_ATTESTATION_FIELDS
+            estop_fields = status.attestation_fields == ESTOP_WIRING_FIELDS
+        assert supervisor_says_bench is routes_say_bench
+        assert routes_say_bench is not estop_fields
+        assert routes_say_bench is (env.get("STO_SOURCE") == "bridged_declared")
+    finally:
+        await rig.panel.close()
+
+
 ANH92_UNATTESTED: Final[str] = (
     f"nobody has attested the emergency stop this boot: {ESTOP_ATTESTATION}"
 )
