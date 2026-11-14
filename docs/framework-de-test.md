@@ -2639,7 +2639,7 @@ hors de la nuit, que sur un lancement manuel de `ci.yml` qui coche sa case, et
 un workflow appelé ne reçoit pas cette case ; celle de la console entière ne
 tourne que la nuit.
 
-Deux tests tiennent les deux groupes de concurrence
+Trois tests tiennent les deux groupes de concurrence
 ([ANH-220](https://linear.app/anheart/issue/ANH-220/pipeline-de-release-suites-de-la-revue-danh-219-et-premier-lancement-a)) :
 `scripts/ci/ci-workflow.test.mjs` vérifie que la CI appelée par la release ne
 partage pas le groupe de la CI du push ou de la nuit sur `main`, et que seules
@@ -2648,8 +2648,10 @@ deux push de `main`, partagent un groupe ;
 `scripts/ci/analysis-workflows.test.mjs` vérifie que CodeQL partage
 `codeql-<sha>` avec l'analyse du push du même commit. L'appel CodeQL attend ;
 une troisième analyse de ce commit peut remplacer l'unique exécution en
-attente et faire échouer l'étape 2 avant les tags. L'évaluateur refuse toute
-forme qu'il ne connaît pas, même derrière un `||` déjà vrai.
+attente et faire échouer l'étape 2 avant les tags. Le troisième, dans
+`scripts/ci/ci-workflow.test.mjs`, tient l'évaluateur des expressions de
+groupe : il refuse toute forme qu'il ne connaît pas, même derrière un `||`
+déjà vrai.
 
 **Tests.** `scripts/ci/release-workflow.test.mjs` est lancé par le job `docs` à
 chaque exécution. Il lit le workflow comme du texte et **exécute les scripts de

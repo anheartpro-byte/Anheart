@@ -4499,7 +4499,7 @@ nom de l'en-tête, liste des codes d'erreur), et les constantes de
 | Règle | Effet |
 |---|---|
 | Même **majeure** des deux côtés | Les deux se parlent. |
-| **Mineure** différente, même majeure | Acceptée dans les deux sens : dans une majeure, chacun ne s'appuie que sur ce que toutes ses mineures fournissent. |
+| **Mineure** différente, même majeure | Acceptée dans les deux sens : dans une majeure, chacun ne s'appuie que sur ce que toutes ses mineures fournissent. L'ordre de mise à jour reste celui de [deploiement.md, section 3.4](deploiement.md#34-ordre-de-mise-à-jour-entre-convex-et-les-consoles) : Convex d'abord, y compris quand seul le contenu d'un fichier déposé s'enrichit. |
 | Majeure de la machine absente, illisible ou non servie | Convex répond **426** `contract_unsupported` à 13 des 14 routes machine (toutes **sauf** `GET /api/machine/training/status`), sans rien lire ni écrire d'autre que la dernière utilisation de la clé ([§6](#6-routes-http-machine-convexhttpts)). |
 | Arrêt venu du tableau de bord | Il traverse toutes les versions : la route `training/status` répond avec la seule clé, et le Pi arrête sa séance sur `stopRequested: true` ou `active: false` d'une réponse de n'importe quelle majeure, version absente comprise. C'est tout ce qu'il retient d'une réponse d'une autre majeure. |
 | Majeure du serveur différente de celle de la machine, ou non annoncée | Le Pi **n'arme aucun lancement distant** venu de cette réponse, l'affiche sur la console et renvoie le lancement comme séance échouée (voir [raspberry-pi.md](raspberry-pi.md#14-versions-et-compatibilité)). |
