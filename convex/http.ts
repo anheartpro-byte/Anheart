@@ -852,8 +852,10 @@ function eventOf(raw: unknown) {
  * -> {stored, duplicates, rejected}
  *
  * The events of the session's local record, each `{seq, t, kind, detail,
- * actor}`: `seq` is its number among the record's events (999 999 at most;
- * the console sends some of them only, so the numbers sent leave gaps), `t` a whole
+ * actor}`: `seq` is its number among the events the console sends of the record
+ * (999 999 at most): presence pings and events dated before the start take none,
+ * and a line it cannot read still takes one, so the numbers sent can leave
+ * gaps (raspberry-pi/src/record/upload.py, `read_events`). `t` is a whole
  * number of ms, and an event is one `(sessionId, seq)`, stored once however
  * many times it is sent. Sizes are bounded here: 2.5 MiB of body and 200
  * events per request, both refused (413) before an event is read; 2000

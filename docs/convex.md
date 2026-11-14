@@ -743,7 +743,12 @@ E-STOP ou un STOP fait depuis une tablette sans opérateur connecté). Index
 `by_session_and_seq`, `by_session_and_t` (les événements autour d'un
 incident, ANH-145) et `by_organization`.
 
-`seq` est le rang de l'événement dans l'enregistrement. **Une ligne par
+`seq` est le numéro de l'événement parmi ceux que la console envoie de
+l'enregistrement (999 999 au plus) : les signaux de présence et les
+événements datés d'avant le départ n'en prennent pas, une ligne qu'elle ne
+peut pas lire en prend un quand même, si bien que les numéros envoyés
+peuvent laisser des trous (`read_events`,
+`raspberry-pi/src/record/upload.py`). **Une ligne par
 `(sessionId, seq)`** : un événement envoyé une seconde fois n'est pas inséré
 de nouveau (`storeEvents`). Une seule fonction publique la lit :
 `incidents.get`, pour les événements à 60 s au plus de l'instant d'un
