@@ -28,6 +28,8 @@ vi.mock(
   "@/i18n/navigation",
   async () => (await import("@/test-support/pages")).navigation,
 );
+const download = vi.hoisted(() => ({ save: vi.fn() }));
+vi.mock("@/lib/download", () => ({ save: download.save }));
 
 /**
  * ANH-149: a machine's logbook on its page, its form, its export, and the
@@ -153,6 +155,81 @@ describe("the logbook card", () => {
     expect(takeConsoleErrors()).toEqual([
       expect.stringMatching(/^\[logbook upload\] failed/),
     ]);
+  });
+});
+
+describe("the logbook card, further", () => {
+  it("uploads the attachment, then writes the entry with its storage id", async () => {
+    mutation(api.machineLogbook.generateUploadUrl).mockResolvedValue(
+      "https://storage.example.invalid/upload",
+    );
+    mutation(api.machineLogbook.addEntry).mockResolvedValue("entry-3");
+    const fetch = vi
+      .fn()
+      .mockResolvedValue({ ok: true, json: async () => ({ storageId: "storage-9" }) });
+    vi.stubGlobal("fetch", fetch);
+    await card(book({ writable: ["note"] }));
+    const file = new File(["%PDF"], "rapport.pdf", { type: "application/pdf" });
+    fireEvent.change(screen.getByLabelText(t.summaryLabel), { target: { value: "rapport joint" } });
+    fireEvent.change(screen.getByLabelText(t.fileLabel), { target: { files: [file] } });
+    fireEvent.click(screen.getByRole("button", { name: t.add }));
+    await waitFor(() => expect(mutationsSent()).toHaveLength(2));
+    expect(fetch).toHaveBeenCalledWith("https://storage.example.invalid/upload", {
+      method: "POST",
+      headers: { "Content-Type": "application/pdf" },
+      body: file,
+    });
+    expect(mutationsSent()[1]).toMatchObject({
+      name: "machineLogbook:addEntry",
+      args: { storageId: "storage-9", summary: "rapport joint" },
+    });
+    vi.unstubAllGlobals();
+  });
+
+  it("refuses an upload the storage does not answer with a storage id", async () => {
+    mutation(api.machineLogbook.generateUploadUrl).mockResolvedValue(
+      "https://storage.example.invalid/upload",
+    );
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) }));
+    await card(book({ writable: ["note"] }));
+    fireEvent.change(screen.getByLabelText(t.summaryLabel), { target: { value: "rapport joint" } });
+    fireEvent.change(screen.getByLabelText(t.fileLabel), {
+      target: { files: [new File(["x"], "a.png", { type: "image/png" })] },
+    });
+    fireEvent.click(screen.getByRole("button", { name: t.add }));
+    await waitFor(() => expect(feedbackShown()).toHaveLength(1));
+    expect(mutationsSent().map(({ name }) => name)).toEqual(["machineLogbook:generateUploadUrl"]);
+    expect(takeConsoleErrors()).toHaveLength(1);
+    vi.unstubAllGlobals();
+  });
+
+  it("names the incident an intervention handles, picked from those due", async () => {
+    mutation(api.machineLogbook.addEntry).mockResolvedValue("entry-3");
+    const view = await card(book({ interventionsDue: [incidentId] }));
+    await view.user.click(screen.getByRole("combobox", { name: t.incidentLabel }));
+    await view.user.click(screen.getByRole("option", { name: "Incident incident-9" }));
+    fireEvent.change(screen.getByLabelText(t.summaryLabel), { target: { value: "variateur remplace" } });
+    fireEvent.click(screen.getByRole("button", { name: t.add }));
+    await waitFor(() =>
+      expect(mutationsSent()[0]).toMatchObject({
+        name: "machineLogbook:addEntry",
+        args: { kind: "intervention", incidentId },
+      }),
+    );
+  });
+
+  it("saves the CSV when the export is asked, and scrolls its entries by the keyboard", async () => {
+    await card(book());
+    fireEvent.click(screen.getByRole("button", { name: t.exportCsv }));
+    expect(download.save).toHaveBeenCalledWith(expect.any(Blob), "carnet-machine-1.csv");
+    const region = screen.getByRole("region", { name: t.entriesLabel });
+    expect(region.getAttribute("tabindex")).toBe("0");
+  });
+
+  it("shows a deleted account for an author whose names are both empty", async () => {
+    const [first, second] = book().entries;
+    await card(book({ entries: [{ ...first, byName: "" }, second] }));
+    expect(screen.getByText(t.byUnknown)).toBeTruthy();
   });
 });
 
