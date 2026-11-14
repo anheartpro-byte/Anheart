@@ -10,13 +10,43 @@ from typing import Final
 from pydantic import TypeAdapter
 
 from src.record.codec import ACTOR, Privacy, validate_manifest
-from src.record.ecg import RawBlock, decode_block
+from src.record.ecg import SAMPLE_RATE, RawBlock, decode_block
+from src.record.journal import RAW_BLOCKS_PER_SECOND
 from src.record.rows import Row, finite
 from src.record.schema import DriveFrame, Event, Manifest, ReadWarning, RecordError
 from src.record.writer import EVENT, FRAME, MANIFEST, SENSOR_COLUMNS, TICK_COLUMNS
 from src.result import Err, Ok, Result
+from src.sensors.base import SensorKind
 
 ROW: Final[TypeAdapter[Row]] = TypeAdapter(Row)
+
+LONGEST_RECORD_S: Final[int] = 2 * 3600 + 10 * 60
+"""The longest record read: a programme of two hours, the longest the deposit plans for
+(``docs/enregistrement.md``, its 36 000 raw blocks), and ten minutes for the eight seconds
+before the start, the descent and the monitored recovery."""
+
+RAW_HEADER_ALLOWANCE: Final[int] = 512
+"""Bytes allowed for a raw block's header line: 235 for six channels with both delivery
+instants written in full (a newline included), here a little over twice that."""
+
+MAX_RAW_BLOCKS: Final[int] = RAW_BLOCKS_PER_SECOND * LONGEST_RECORD_S
+"""39 000 raw blocks: one per acquisition batch, five a second."""
+
+MAX_RAW_BYTES: Final[int] = MAX_RAW_BLOCKS * (
+    SAMPLE_RATE // RAW_BLOCKS_PER_SECOND * len(SensorKind) * 2 + RAW_HEADER_ALLOWANCE
+)
+"""What those blocks may hold decompressed: 39 000 blocks of 0.2 s, each 200 samples of
+six channels at two bytes (2 400 bytes) and its header line (512 allowed), 39 000 x 2 912
+= 113 568 000 bytes. A real six-channel record of 2 h 10 min holds 39 000 x 2 635, about
+102.8 MB.
+
+The reader keeps every decoded block, and a decoded block takes about twenty times its
+bytes in memory: a record at this bound needs about 2.3 GB to be read, as a real one of
+that length does. However small an archive is compressed, a record never needs more."""
+
+GZIP_SIZE_BYTES: Final[int] = 4
+"""The trailer field of a gzip member that gives its decompressed size (ISIZE)."""
+
 CSV_TEXT_COLUMNS: Final = frozenset(
     {
         "state",
@@ -118,6 +148,10 @@ def read(path: Path) -> Result[Recording, RecordError]:
     try:
         manifest = MANIFEST.validate_json((path / "manifest.json").read_bytes())
         validate_manifest(manifest, Privacy())
+        # Before one block is decoded: the reader keeps them all.
+        above = _raw_above_longest_record(path / "ecg_raw")
+        if above is not None:
+            return Err(RecordError("read", above))
         _checksums(path, warnings)
         rows = _csv(path / "ticks.csv", ROW, TICK_COLUMNS, warnings)
         for row in rows:
@@ -142,6 +176,29 @@ def read(path: Path) -> Result[Recording, RecordError]:
     except (OSError, ValueError, EOFError, zlib.error) as error:
         return Err(RecordError("read", type(error).__name__))
     return Ok(recording)
+
+
+def _inflated_size(block: Path) -> int:
+    """The size a gzip block says it holds decompressed, from its last four bytes.
+
+    A block whose trailer lies fails its own check when it is decoded (``inflate``):
+    a block that is read holds what it says.
+    """
+    with block.open("rb") as content:
+        if content.seek(0, io.SEEK_END) < GZIP_SIZE_BYTES:
+            return 0
+        content.seek(-GZIP_SIZE_BYTES, io.SEEK_END)
+        return int.from_bytes(content.read(GZIP_SIZE_BYTES), "little")
+
+
+def _raw_above_longest_record(path: Path) -> str | None:
+    """Why the raw blocks under ``path`` hold more than the longest record, or ``None``."""
+    blocks = sorted(path.glob("*.bin.gz"))
+    if len(blocks) > MAX_RAW_BLOCKS:
+        return "raw_blocks_above_longest_record"
+    if sum(_inflated_size(block) for block in blocks) > MAX_RAW_BYTES:
+        return "raw_bytes_above_longest_record"
+    return None
 
 
 def _raw(path: Path, warnings: list[ReadWarning]) -> tuple[RawBlock, ...]:

@@ -13,16 +13,19 @@ from pydantic import ValidationError
 
 from src.clock import ManualClock
 from src.motor.sto import StoSourceKind
+from src.record import reader
 from src.record.codec import JSON, Privacy, encode, mapping
 from src.record.ecg import (
     MAX_BLOCK_HEADER_BYTES,
     MAX_RAW_BLOCK_BYTES,
     Header,
     RawBlock,
+    RuntimeDelivery,
     decode_block,
     encode_block,
     inflate,
 )
+from src.record.journal import RAW_BLOCKS_PER_SECOND
 from src.record.reader import read
 from src.record.rows import JsonValue
 from src.record.schema import (
@@ -35,6 +38,7 @@ from src.record.schema import (
     Preflight,
     Profile,
     RecordedBallast,
+    RecordError,
 )
 from src.record.writer import MANIFEST, TICK_COLUMNS, Writer
 from src.result import Err, Ok
@@ -355,6 +359,64 @@ def test_a_block_cut_short_is_read_as_truncated_and_one_followed_by_anything_is_
         decode_block(whole + whole)
     with pytest.raises(zlib.error):
         decode_block(b"not a gzip member")
+
+
+def _with_raw_blocks(tmp_path: Path, count: int) -> Path:
+    recording = writer(tmp_path)
+    for seq in range(count):
+        block = RawBlock(Header(seq, seq * 0.2, 1, ("ECG",)), ((7,),))
+        assert isinstance(recording.raw(block), Ok)
+    return recording.path
+
+
+@pytest.mark.parametrize(
+    ("limit", "refusal"),
+    [
+        ("MAX_RAW_BLOCKS", "raw_blocks_above_longest_record"),
+        ("MAX_RAW_BYTES", "raw_bytes_above_longest_record"),
+    ],
+)
+def test_the_reader_refuses_more_raw_ecg_than_the_longest_record_before_decoding_any(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, limit: str, refusal: str
+) -> None:
+    """The reader keeps every decoded block: more blocks, or more bytes they say they hold,
+    than the longest record are refused first, for the import, a replay and the gate alike."""
+    path = _with_raw_blocks(tmp_path, 3)
+
+    def never(_raw: bytes) -> RawBlock:
+        raise AssertionError("a block was decoded before the bound was checked")
+
+    monkeypatch.setattr(reader, limit, 2)
+    monkeypatch.setattr(reader, "decode_block", never)
+    assert read(path) == Err(RecordError("read", refusal))
+
+
+def test_a_raw_block_too_short_to_say_its_size_counts_for_nothing_and_is_refused(
+    tmp_path: Path,
+) -> None:
+    path = _with_raw_blocks(tmp_path, 1)
+    (path / "ecg_raw" / "000099.bin.gz").write_bytes(b"gz")
+    assert read(path) == Err(RecordError("read", "error"))
+
+
+def test_the_bound_holds_a_real_six_channel_record_of_the_longest_length() -> None:
+    """The bound's own arithmetic, on a real header line: six channels, both delivery
+    instants written in full, the largest numbers of a two-hour record."""
+    channels = tuple(kind.value for kind in SensorKind)
+    header = Header(
+        seq=123_456,
+        t_first=7199.123456789012,
+        n_samples=200,
+        channels=channels,
+        t_received=7199.3234567890123,
+        runtime_delivery=RuntimeDelivery(t=7199.3334567890123, t_observed=7199.3284567890123),
+    )
+    content = inflate(encode_block(RawBlock(header, tuple((-1234,) * 200 for _ in channels))))
+    line = len(content.split(b"\n", 1)[0]) + 1
+    assert line <= reader.RAW_HEADER_ALLOWANCE // 2
+    per_second = RAW_BLOCKS_PER_SECOND * len(content)
+    assert per_second * reader.LONGEST_RECORD_S < reader.MAX_RAW_BYTES
+    assert (reader.MAX_RAW_BLOCKS, reader.MAX_RAW_BYTES) == (39_000, 113_568_000)
 
 
 def test_ex7_configured_sensor_metrics_are_published_at_one_hz(tmp_path: Path) -> None:

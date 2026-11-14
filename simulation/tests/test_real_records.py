@@ -63,6 +63,7 @@ from simulation.tests.replay_support import (
     reseal,
     short,
     tick_at,
+    with_largest_zero_blocks,
 )
 from src.record.codec import JSON, mapping
 from src.record.reader import Recording, read
@@ -527,6 +528,34 @@ def test_what_tarfile_raises_on_a_header_it_cannot_read_is_a_named_refusal(
     assert unpack(archive, tmp_path / "out") == Err(
         "the archive holds a header tarfile cannot read"
     )
+
+
+RAW_ABOVE = "the record cannot be read (raw_bytes_above_longest_record)"
+
+
+def test_a_replay_and_the_library_refuse_more_ecg_than_the_longest_record_unread(
+    session: Path, tmp_path: Path
+) -> None:
+    """A hundred and ten of the largest blocks, all zeros, an archive under a megabyte: the reader
+    kept them all decoded, gigabytes. ``--replay`` and the library's gate go through the
+    reader too, and both are refused before one block is decoded."""
+    hostile = copy(session, tmp_path / "hostile")
+    with_largest_zero_blocks(hostile)
+    archive = tmp_path / "hostile.tar.gz"
+    pack(hostile, archive)
+    assert archive.stat().st_size < 1024 * 1024
+    tracemalloc.start()
+    try:
+        replayed = replay_path(archive)
+        folder = replay_path(hostile)
+        judged = judge(archive, tmp_path / "judged")
+        _now, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert replayed == Err(ReplayError(RAW_ABOVE))
+    assert folder == Err(ReplayError(RAW_ABOVE))
+    assert judged == RAW_ABOVE
+    assert peak < 64 * 1024 * 1024, f"held {peak} bytes"
 
 
 def test_a_short_fragment_after_the_last_member_is_not_taken_for_the_end(
