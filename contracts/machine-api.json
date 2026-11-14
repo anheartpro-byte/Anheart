@@ -1,6 +1,6 @@
 {
   "description": "Contrat HTTP entre une machine (console du Raspberry Pi) et Convex. Source unique : convex/lib/contract.ts lit ce fichier, raspberry-pi/src/contract.py y est épinglé par ses tests. Voir docs/convex.md, section Versions et compatibilité.",
-  "contract_version": "1.16",
+  "contract_version": "1.17",
   "header": "X-Anheart-Contract",
   "server_version_field": "server_contract_version",
   "heartbeat_response_fields": ["success", "serverTime", "server_contract_version"],
@@ -64,8 +64,25 @@
     "hash_pattern": "^[0-9a-f]{64}$",
     "config_contract": "contracts/machine-config.json"
   },
+  "machine_pairing": {
+    "since": "1.17",
+    "route": "POST /api/machine/pair",
+    "description": "Depuis 1.17 (ANH-115), une console sans clé reçoit la sienne par un code d'appairage au lieu d'une clé copiée à la main. Un administrateur de l'organisation de la machine (ou l'admin Anheart) le demande sur le site, pour une machine dont le registre porte le numéro de série du Pi (`serialPi`) : `code_length` caractères de l'alphabet `alphabet` (Crockford, 40 bits), affichés par groupes de `group_length` séparés d'un tiret, valables `ttl_s` secondes, une seule fois. Le serveur n'en garde qu'une empreinte scrypt salée ; un nouveau code de la même machine remplace le précédent. La console envoie `{code, serialPi}` (`serialPi` tel que le Pi le lit, comparé sans espaces de tête ni de fin et en minuscules ; `code` comparé en majuscules, sans espaces ni tirets, O lu 0, I et L lus 1), avec l'en-tête du contrat mais sans clé, au plus `max_body_bytes` octets. Le seau global `global_limit` est pris avant tout le reste (429 `rate_limited`), puis l'en-tête du contrat (426), la taille (413) et la forme (400 `invalid_request`). Un code juste pour ce numéro de série répond 200 `{machineId, apiKey, keyPrefix, convexUrl, server_contract_version}`, `Cache-Control: no-store` : `apiKey` est la nouvelle clé de la machine, la seule fois qu'elle est donnée, et toutes les clés encore valides de la machine sont révoquées aussitôt ; `convexUrl` est l'adresse du déploiement. Tout autre cas répond 401 `pairing_refused`, le même corps et le même travail : numéro inconnu ou sans code en cours, code faux, expiré, déjà utilisé, remplacé, révoqué, ou brûlé ; `max_failures` codes faux pour un même code le brûlent, et il faut en demander un autre. La console écrit la clé et l'adresse dans son `.env`, et rien d'autre. Un serveur antérieur répond 404.",
+    "alphabet": "0123456789ABCDEFGHJKMNPQRSTVWXYZ",
+    "code_length": 8,
+    "group_length": 4,
+    "ttl_s": 1800,
+    "max_failures": 5,
+    "max_serial_chars": 64,
+    "max_body_bytes": 1024,
+    "global_limit": { "rate": 20, "period_ms": 60000, "capacity": 20 },
+    "response_fields": ["machineId", "apiKey", "keyPrefix", "convexUrl", "server_contract_version"]
+  },
   "contract_exempt_routes": {
     "GET /api/machine/training/status": "Porte la demande d'arrêt, qui doit atteindre une séance en cours quelle que soit la version du contrat. La clé de la machine reste exigée et la réponse annonce `server_contract_version`. Une console d'une autre majeure n'en retient que ce qui arrête : `stopRequested: true` ou `active: false`."
+  },
+  "machine_key_exempt_routes": {
+    "POST /api/machine/pair": "Une console qui s'appaire n'a pas encore de clé : c'est ce que la route lui donne. Elle envoie et le serveur vérifie l'en-tête du contrat ; ce qui la garde est le code d'appairage, lié au numéro de série du Pi, à usage unique, brûlé après `max_failures` codes faux, et le seau global de `machine_pairing`."
   },
   "heartbeat_version_fields": [
     "software_version",
@@ -171,6 +188,10 @@
     "contract_unsupported": {
       "statuses": [426],
       "meaning": "La majeure du contrat annoncée par la machine est absente ou n'est pas servie. La réponse porte `supported`, la liste des majeures servies."
+    },
+    "pairing_refused": {
+      "statuses": [401],
+      "meaning": "Depuis 1.17, appairage refusé (`machine_pairing`), toujours dans les mêmes mots : aucun code en cours pour ce numéro de série, ou un code faux, expiré, déjà utilisé, remplacé, révoqué ou brûlé."
     },
     "unauthorized": {
       "statuses": [401],

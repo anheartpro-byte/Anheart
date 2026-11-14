@@ -46,6 +46,9 @@ function substitute(
         ),
       },
       max_body_bytes: { routes: sizes },
+      machine_pairing: {
+        global_limit: { rate: 9, period_ms: 8_000, capacity: 10 },
+      },
     },
   }));
 }
@@ -65,6 +68,12 @@ describe("ANH-166 the limits are read from contracts/machine-api.json", () => {
       rate: 2,
       period: 7_000,
       capacity: 3,
+    });
+    expect(limits.rateLimiter.limits?.machinePairing).toEqual({
+      kind: "token bucket",
+      rate: 9,
+      period: 8_000,
+      capacity: 10,
     });
     expect(limits.rateLimiter.limits?.machineUploadUrl).toEqual({
       kind: "token bucket",

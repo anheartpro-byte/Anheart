@@ -177,8 +177,8 @@ requête. Les valeurs fermées sont définies dans
 | `organizationId` | Identifiant d'organisation, facultatif pour une action globale. Une ligne sans organisation n'est lisible que par l'admin Anheart. |
 | `actorId` | Identifiant de `users` ou de `machines`, absent pour le système. |
 | `actorRole` | `admin`, `org_admin`, `gestionnaire`, `user`, `machine` ou `system`. Le rôle de l'acteur au moment de l'effet. |
-| `action` | Une des 64 valeurs de `AUDIT_ACTIONS`, énumération fermée ; catégories décrites au [§5](#convexlibauditts-anh-167). |
-| `targetType` | `user`, `machine`, `machine_key`, `machine_operator`, `machine_device`, `session`, `fitness_assessment`, `consent`, `organization`, `software_release`, `medical_parameters_version`, `programme`, `patient_invitation`, `incident` ou `machine_config`. Déduit de l'action par `AUDIT_ACTION_TARGET`. `user.invited` cible une `patient_invitation`, y compris quand aucun profil unique ne peut être lié à l'invitation. |
+| `action` | Une des 68 valeurs de `AUDIT_ACTIONS`, énumération fermée ; catégories décrites au [§5](#convexlibauditts-anh-167). |
+| `targetType` | `user`, `machine`, `machine_key`, `machine_pairing`, `machine_operator`, `machine_device`, `session`, `fitness_assessment`, `consent`, `organization`, `software_release`, `medical_parameters_version`, `programme`, `patient_invitation`, `incident` ou `machine_config`. Déduit de l'action par `AUDIT_ACTION_TARGET`. `user.invited` cible une `patient_invitation`, y compris quand aucun profil unique ne peut être lié à l'invitation. |
 | `targetId` | Chaîne, identifiant de la cible ; il reste dans le journal après la suppression de celle-ci. |
 | `details` | Objet facultatif, dont seules les clés ci-dessous sont admises. |
 | `requestId` | Identifiant de requête Convex lu par `ctx.meta.getRequestMetadata()`, partagé par la route ou l'action d'origine et la mutation qu'elle appelle, ainsi que par les lignes d'une même requête. |
@@ -632,6 +632,27 @@ fiche), `by_machine_and_revoked` (les clés qu'une rotation retire),
 l'empreinte (`by_key_hash`) : l'empreinte est salée (ANH-121), elle change à
 chaque calcul et ne peut pas servir à chercher une clé. La recherche se fait
 par le sélecteur, puis l'empreinte est vérifiée.
+
+### `machine_pairing_codes` : les codes d'appairage (ANH-115)
+
+Une console qui n'a pas encore de clé la reçoit par un code d'appairage au
+lieu d'une clé copiée à la main ([§6](#lappairage-dune-console-contrat-117-anh-115)).
+Le code n'est jamais gardé : seulement son empreinte scrypt salée. Il est
+montré une fois, dans la réponse de l'action qui l'a tiré.
+
+| Champ | Rôle |
+|---|---|
+| `machineId`, `organizationId` | La machine du code et son organisation au moment de l'émission. Une machine sans organisation (d'avant ANH-114) n'en reçoit pas. |
+| `serialPi` | Le numéro de série du Pi que nomme le registre de la machine à l'émission, tel qu'il est comparé : sans espaces de tête ni de fin, en minuscules. Le seul Pi que le code sert. |
+| `salt`, `hash` | Sel de 16 octets et scrypt de 32 octets du code (N = 2^15, r = 8, p = 1), en base 64. |
+| `createdBy`, `createdAt`, `expiresAt` | L'admin qui l'a demandé, quand, et la fin de sa validité, 30 minutes plus tard. |
+| `failures` | Codes faux envoyés pour ce numéro de série pendant qu'il était ouvert. Le cinquième le brûle. |
+| `closedAt`, `closedAs`, `closedBy` | Le code ne sert plus : `claimed` (échangé contre une clé), `replaced` (un code plus récent de la machine), `revoked` (depuis le site, `closedBy`) ou `burned` (ses codes faux). Absents tant qu'il est ouvert ; un code ouvert dont `expiresAt` est passé est expiré. |
+| `keyId` | La clé de `machine_api_keys` que le code a donnée. |
+
+Index : `by_serial_and_closed` (ce qu'une demande d'appairage cherche),
+`by_machine_and_closed` (le code ouvert d'une machine). Une machine a au plus
+un code ouvert : en émettre un ferme les autres.
 
 ### `machine_operators` et `machine_devices` : qui agit à la console (ANH-152)
 
@@ -2468,6 +2489,25 @@ Révoquer la clé qui en a remplacé une autre ne prolonge pas celle-ci : elle
 reste `replaced` et expire à la fin de son chevauchement. Pour garder la
 machine reliée, créer une nouvelle clé.
 
+### `machinePairing.ts` et `pairingCodes.ts` (codes d'appairage, ANH-115)
+
+Un code donne une clé : il est aux mêmes admins que les clés. Le tirage et le
+hachage sont dans `pairingCodes.ts` (Node, pour scrypt), les lignes et la
+réclamation dans `machinePairing.ts`, les règles dans
+[`convex/lib/machinePairing.ts`](../convex/lib/machinePairing.ts).
+
+| Fonction | Autorisation | Rôle |
+|---|---|---|
+| `pairingCodes.issuePairingCode` | admin Anheart ; admin de l'organisation de la machine | Action. `{machineId}` → `{code, expiresAt}`. Le code `XXXX-XXXX` (8 caractères de l'alphabet de Crockford, 40 bits) n'est visible **qu'à ce moment** ; valable 30 minutes, il remplace le code ouvert de la machine. Refus, rien n'étant écrit : `not_authorized`, `machine_not_found` (machine inconnue, supprimée, sans organisation ou d'une autre organisation), `pairing_serial_missing` (le registre ne nomme aucun numéro de série du Pi, ou un qu'une console ne peut pas envoyer), `pairing_serial_in_use` (une autre machine a un code ouvert pour ce numéro). |
+| `machinePairing.revokePairingCode` | idem | `{machineId}` : le code ouvert de la machine ne sert plus. Sans code ouvert, rien n'est écrit. |
+| `machinePairing.pairingState` | idem ; `null` pour tout autre rôle | `{machineId}` → `{createdAt, expiresAt, createdByName}` du code que la machine peut faire réclamer maintenant, ou `null`. Jamais le code, son sel ni son empreinte. |
+
+Fonctions internes : `prepareIssue` (la limite d'écriture du compte, son
+droit et le numéro de série, avant le tirage), `storeIssuedCode` (les mêmes
+contrôles de nouveau, puis la ligne), `pairingCandidates` (les codes ouverts
+d'un numéro de série, avec ce qui les vérifie), `pairingCodes.verifyPairing`
+(le verdict) et `claimPairing` (son application, une transaction).
+
 Fonctions internes :
 
 - `recordKeyUse` : écrit `lastUsedAt` si la dernière écriture a une minute ou
@@ -3249,6 +3289,12 @@ autre majeure n'en retient que ce qui arrête, `stopRequested: true` ou
 listées dans `contracts/machine-api.json` (`contract_exempt_routes`), et
 passent par `authenticateMachineRequest` au lieu de `validateMachineAuth`.
 
+**Une seule route sans clé : l'appairage.** `POST /api/machine/pair`
+(contrat 1.17) est celle par où une console qui n'a pas encore de clé en
+reçoit une ; elle exige l'en-tête du contrat et non la clé, et le fichier
+partagé la liste avec sa raison (`machine_key_exempt_routes`).
+[Ci-dessous](#lappairage-dune-console-contrat-117-anh-115).
+
 La suppression (`isDeleted`) ou la désactivation explicite
 (`authenticationEnabled: false`) produit aussi **401**, sur les 14 routes et
 les deux queries internes d'authentification, quelle que soit la clé. Une
@@ -3835,6 +3881,57 @@ et les clés dans [`contracts/machine-config.json`](../contracts/machine-config.
   fiche de la machine affiche (« refusée par la machine : »).
 - **Non limitée en débit**, comme le catalogue et la liste des opérateurs.
   L'accusé d'application l'est (1 toutes les 10 s, réserve 5).
+
+### L'appairage d'une console (contrat 1.17, ANH-115)
+
+`POST /api/machine/pair {code, serialPi}`, sans clé, avec l'en-tête du
+contrat ([entrée `machine_pairing`](../contracts/machine-api.json)).
+
+- **Le code.** Demandé sur le site par un admin de l'organisation de la
+  machine ou l'admin Anheart (`pairingCodes.issuePairingCode`, §5), pour la
+  machine dont le registre nomme le numéro de série du Pi. Huit caractères de
+  l'alphabet de Crockford (`0-9` et `A-Z` sans I, L, O ni U, 40 bits), tirés
+  par `randomBytes` (les 5 bits bas d'un octet chacun : 32 divise 256, aucun
+  biais), montrés en deux groupes `XXXX-XXXX`, une seule fois. Le serveur ne
+  garde que leur scrypt salé (N = 2^15, r = 8, p = 1 : 32 Mio et quelques
+  dizaines de millisecondes par empreinte, dans les limites d'une action Node,
+  et bien au delà des 30 minutes d'un code pour qui voudrait les essayer tous
+  sur une copie de la table). Lu en majuscules, sans espaces ni tirets, O lu
+  0, I et L lus 1.
+- **Dans l'ordre.** Le seau global d'abord (20 par minute pour tous les
+  appelants ensemble, 429 `rate_limited`), avant que rien de la requête ne
+  soit lu ; puis l'en-tête du contrat (426), la taille (1 024 octets, 413) et
+  la forme (400 `invalid_request`). Convex ne donne aux actions HTTP aucune
+  adresse de client sûre : aucune limite par adresse.
+- **Le verdict, puis la réclamation.** L'action Node `verifyPairing` lit les
+  codes ouverts du numéro de série, en garde un non expiré à sa propre
+  horloge, calcule scrypt du code envoyé avec son sel et compare en temps
+  constant (`timingSafeEqual`). Puis une seule mutation, `claimPairing`, relit
+  ce code et refait les contrôles : ouvert, non expiré, moins de cinq échecs.
+  Un code faux compte un échec (le cinquième brûle le code) ; un code juste le
+  réclame. Deux verdicts sur le même code s'appliquent l'un après l'autre,
+  chacun sur ce que le précédent a laissé : deux codes faux simultanés ne
+  passent pas la limite, et une réclamation qui croise une révocation est
+  refusée si la révocation est passée la première.
+- **Le même refus, le même travail.** Numéro inconnu ou sans code ouvert, code
+  faux, expiré, déjà utilisé, remplacé, révoqué ou brûlé : 401
+  `pairing_refused`, le même corps. Un numéro sans code ouvert coûte la même
+  lecture, le même scrypt (sur un sel qui ne correspond à rien) et la même
+  mutation : ni la réponse ni sa durée ne disent quels numéros ont un code.
+- **La réclamation.** Machine encore utilisable, de la même organisation, et
+  dont le registre nomme toujours ce Pi, sinon refusée. Une nouvelle clé par
+  la rotation d'ANH-165 sans chevauchement : toutes les autres clés valides de
+  la machine sont révoquées aussitôt, un Pi neuf ou réinstallé remplaçant
+  l'ancien. La réponse 200 `{machineId, apiKey, keyPrefix, convexUrl,
+  server_contract_version}` porte `Cache-Control: no-store` ; `apiKey` y est
+  donnée une fois, et nulle part ailleurs : ni ligne, ni journal, ni audit
+  (`convex/machinePairing.test.ts`). `convexUrl` est l'adresse du
+  déploiement. Perdue avant que la console ne l'écrive : demander un autre
+  code, qui donne une autre clé et révoque celle qui s'est perdue.
+- **Audit.** `machine_pairing.issued`, `machine_pairing.revoked` (révoqué, ou
+  remplacé encore ouvert), `machine_pairing.burned`, `machine_pairing.claimed`,
+  puis `machine_key.created` et `machine_key.revoked` de la rotation. Jamais le
+  code, son sel, son empreinte ni la clé.
 
 ### Routes retirées
 
@@ -4910,6 +5007,7 @@ sont décrites ci-dessous.
 
 | Mineure | Ajouts, tous compatibles |
 |---|---|
+| `1.17` | L'appairage d'une console par un code à usage unique (ANH-115, [entrée `machine_pairing`](../contracts/machine-api.json), [§6](#lappairage-dune-console-contrat-117-anh-115)) : la route `POST /api/machine/pair {code, serialPi}`, sans clé (`machine_key_exempt_routes`), sous un seau global de 20 par minute ; le code d'erreur `pairing_refused` (401). La console 1.17 de ce dépôt ne l'appelle pas encore ; un serveur antérieur répond 404. Ordre de déploiement : Convex, puis l'image du Pi. |
 | `1.16` | Le défaut variateur qui attend son intervention (ANH-149, [entrée `drive_interventions`](../contracts/machine-api.json), [carnet de bord](#machine_logbook--carnet-de-bord-des-machines-anh-149)) : la réponse de `GET /api/machine/training/poll` porte `drive_interventions_due`, le nombre de défauts variateur de la machine qui attendent leur intervention, à toute console ; la console 1.16 de ce dépôt le lit dans son pré-vol et ferme tout départ avec une personne à bord tant qu'il n'est pas nul, plus strictement que le serveur. Un refus à l'armement de plus en **409**, `drive_intervention_required`, pour un lancement auto seulement : il était dit `incident_open` avant 1.16, code qui ne dit plus qu'un incident grave ouvert. Une console antérieure ignore le champ et ne connaît pas ce code : sur ce 409 elle n'arme pas, n'envoie pas de fin, et montre la phrase générique qui le nomme, `depart distant refuse (HTTP 409, drive_intervention_required)` ; son indicateur de liaison ne le reconnaît pas et le note jusqu'au poll suivant. Ordre de déploiement : Convex avant l'image du Pi. |
 | `1.15` | La configuration de la machine tenue dans Convex (ANH-141, [entrée `machine_config`](../contracts/machine-api.json), [§6](#la-configuration-signée-contrat-115-anh-141)) : la route `GET /api/machine/config`, non limitée en débit, qui répond la révision en vigueur signée avec le niveau de validation de la machine, ou `not_configured` sans clé ; la route `POST /api/machine/config/applied {revision, hash, refusal?}`, limitée à 1 toutes les 10 s ; `config_hash` du heartbeat gardé (`machines.configHash`). Aucun code d'erreur nouveau. La console 1.15 de ce dépôt demande la route au repos, applique la révision et le dit ; tant qu'elle n'a appliqué aucune révision, elle envoie `config_hash: null`. Ordre de déploiement : Convex, puis la clé de signature dans Convex, puis l'image du Pi. |
 | `1.14` | L'état de la chaîne STO et de l'horloge dans la santé du heartbeat (ANH-92, ANH-148, [entrée `health_state`](../contracts/machine-api.json), [Santé machine](#santé-machine-anh-148)) : `sto_state`, `sto_source`, `clock_trusted` et `clock_max_error_s`, facultatifs et nullables, que la console n'envoie qu'à un serveur qui a annoncé 1.14 ou plus. Aucun code d'erreur nouveau. Ordre de déploiement : Convex avant l'image du Pi. |

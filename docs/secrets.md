@@ -124,6 +124,18 @@ gèrent sur la fiche de la machine, carte **Clés de la machine**, par l'admin
 Anheart ou l'admin de l'organisation de la machine ; un gestionnaire, même de
 la machine, n'y a pas accès.
 
+**Une console sans clé la reçoit par un code d'appairage** (ANH-115,
+[convex.md](convex.md#lappairage-dune-console-contrat-117-anh-115)) : un
+admin le demande pour la machine, dont le registre nomme le numéro de série du
+Pi, et le code donne la clé à ce Pi seulement. Le code est un secret pendant
+ses 30 minutes : le lire au technicien ou le lui montrer, jamais l'écrire dans
+un ticket, un message ou une capture ; le site ne le met dans aucune adresse.
+Il ne sert qu'une fois, et cinq codes faux le brûlent. La clé qu'il donne
+n'est montrée à personne : la console la reçoit et l'écrit dans son `.env` ;
+le site n'en montre que le préfixe. L'appairage révoque aussitôt toutes les
+autres clés de la machine : appairer une machine en service la coupe jusqu'à
+ce que le Pi appairé tourne. Il n'ajoute aucun secret au déploiement.
+
 Renouveler la clé sans couper la machine :
 
 1. Fiche de la machine, **Clés de la machine**, **Nouvelle clé**. Garder le

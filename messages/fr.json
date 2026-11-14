@@ -100,6 +100,12 @@
         "revoked": "Clé de machine révoquée",
         "expired_revoked": "Clé expirée révoquée"
       },
+      "machine_pairing": {
+        "issued": "Code d'appairage émis",
+        "revoked": "Code d'appairage révoqué",
+        "burned": "Code d'appairage brûlé par des codes faux",
+        "claimed": "Console appairée par son code"
+      },
       "machine_operator": {
         "enabled": "Opérateur de la console activé",
         "disabled": "Opérateur de la console désactivé",
@@ -158,6 +164,7 @@
       "user": "Utilisateur",
       "machine": "Machine",
       "machine_key": "Clé de machine",
+      "machine_pairing": "Code d'appairage",
       "machine_operator": "Opérateur de la console",
       "machine_device": "Tablette de la console",
       "session": "Séance",
@@ -537,7 +544,9 @@
     "machine_device_not_found": "Cette tablette n'existe pas, ou appartient à une machine que vous n'administrez pas.",
     "machine_key_not_found": "Cette clé n'existe pas, ou appartient à une machine que vous n'administrez pas.",
     "invalid_key_overlap": "Le chevauchement doit être un nombre entier de minutes, entre 0 et 10 080 (7 jours).",
-    "invalid_key_expiry": "La durée de vie d'une nouvelle clé doit être un nombre entier de minutes, entre une heure et dix ans."
+    "invalid_key_expiry": "La durée de vie d'une nouvelle clé doit être un nombre entier de minutes, entre une heure et dix ans.",
+    "pairing_serial_missing": "Renseignez d'abord le numéro de série du Pi dans l'identité du registre : un code d'appairage ne sert qu'à ce Pi.",
+    "pairing_serial_in_use": "Une autre machine a un code d'appairage en cours pour ce numéro de série : révoquez-le, ou attendez qu'il expire."
   },
   "sessionRecord": {
     "next": "Page suivante",

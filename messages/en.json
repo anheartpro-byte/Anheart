@@ -100,6 +100,12 @@
         "revoked": "Machine key revoked",
         "expired_revoked": "Expired key revoked"
       },
+      "machine_pairing": {
+        "issued": "Pairing code issued",
+        "revoked": "Pairing code revoked",
+        "burned": "Pairing code burned by wrong codes",
+        "claimed": "Console paired with its code"
+      },
       "machine_operator": {
         "enabled": "Console operator enabled",
         "disabled": "Console operator disabled",
@@ -158,6 +164,7 @@
       "user": "User",
       "machine": "Machine",
       "machine_key": "Machine key",
+      "machine_pairing": "Pairing code",
       "machine_operator": "Console operator",
       "machine_device": "Console tablet",
       "session": "Session",
@@ -537,7 +544,9 @@
     "machine_device_not_found": "This tablet does not exist, or belongs to a machine you do not administer.",
     "machine_key_not_found": "This key does not exist, or belongs to a machine you do not administer.",
     "invalid_key_overlap": "The overlap must be a whole number of minutes, between 0 and 10,080 (7 days).",
-    "invalid_key_expiry": "The lifetime of a new key must be a whole number of minutes, between one hour and ten years."
+    "invalid_key_expiry": "The lifetime of a new key must be a whole number of minutes, between one hour and ten years.",
+    "pairing_serial_missing": "First enter the Pi's serial number in the registry's identity: a pairing code serves that Pi only.",
+    "pairing_serial_in_use": "Another machine has an open pairing code for this serial number: revoke it, or wait for it to expire."
   },
   "sessionRecord": {
     "next": "Next page",

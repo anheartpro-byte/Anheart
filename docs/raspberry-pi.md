@@ -4397,7 +4397,7 @@ dépôt ; la description complète des règles est dans
 
 Ce que fait la console :
 
-* **Chaque requête** porte l'en-tête `X-Anheart-Contract: 1.16`. Il est posé sur
+* **Chaque requête** porte l'en-tête `X-Anheart-Contract: 1.17`. Il est posé sur
   le client HTTP lui-même, pas requête par requête : aucune ne peut partir sans.
 * **Chaque heartbeat** porte `software_version`, `contract_version`,
   `medical_parameters_version` et `config_hash`. `medical_parameters_version`

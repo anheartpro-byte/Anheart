@@ -40,6 +40,7 @@ const shared = JSON.parse(sharedText) as {
   header: string;
   server_version_field: string;
   contract_exempt_routes: Record<string, string>;
+  machine_key_exempt_routes: Record<string, string>;
   error_codes: Record<string, { statuses: number[]; meaning: string }>;
 };
 
@@ -153,7 +154,7 @@ async function startAfter(
 describe("ANH-133 EX-1 one contract, defined in contracts/machine-api.json", () => {
   it("serves the version, header and error codes of the shared file", () => {
     expect(CONTRACT_VERSION).toBe(shared.contract_version);
-    expect(CONTRACT_VERSION).toBe("1.16");
+    expect(CONTRACT_VERSION).toBe("1.17");
     expect(CONTRACT_HEADER).toBe(shared.header);
     expect(MACHINE_ERROR_CODES).toEqual(Object.keys(shared.error_codes));
     expect(MACHINE_ERROR_CODES.length).toBeGreaterThan(0);
@@ -305,10 +306,17 @@ describe("ANH-133 the stop request gets through whatever the contract", () => {
   it("is the only route exempt from the contract, and the shared file says so", () => {
     expect(exempt).toEqual([`GET ${STATUS}`]);
     expect(enforced).toHaveLength(machineRoutes.length - 1);
-    // The list these suites iterate is every route the backend registers: a
-    // route added without the gate cannot stay out of them.
+    // The list these suites iterate is every route the backend registers but
+    // the one that takes no key, which the shared file names: a route added
+    // without the gate cannot stay out of them.
+    expect(Object.keys(shared.machine_key_exempt_routes)).toEqual([
+      "POST /api/machine/pair",
+    ]);
     expect(
-      machineRoutes.map(([method, path]) => `${method} ${path}`).sort(),
+      [
+        ...machineRoutes.map(([method, path]) => `${method} ${path}`),
+        ...Object.keys(shared.machine_key_exempt_routes),
+      ].sort(),
     ).toEqual(
       http
         .getRoutes()
@@ -881,6 +889,20 @@ describe("ANH-133 EX-5 every refusal is {error: <stable code>, message}", () => 
       status: 426,
       code: "contract_unsupported",
       run: (w) => call(w, "GET", "/api/machine/roster", null),
+    },
+    {
+      name: "pair: no open code for this serial number",
+      status: 401,
+      code: "pairing_refused",
+      run: (w) =>
+        w.t.fetch("/api/machine/pair", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            [CONTRACT_HEADER]: CONTRACT_VERSION,
+          },
+          body: JSON.stringify({ code: "ABCD-EFGH", serialPi: "no-such-pi" }),
+        }),
     },
   ];
 

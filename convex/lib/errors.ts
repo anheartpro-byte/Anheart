@@ -156,6 +156,12 @@ export const DASHBOARD_ERRORS = {
   invalid_key_expiry:
     "The lifetime of a new machine key is not a whole number of minutes between 60 (one hour) and 5256000 (ten years).",
 
+  // Pairing codes (ANH-115).
+  pairing_serial_missing:
+    "The machine's registry holds no Pi serial number, or not one a console can send: a pairing code serves one Pi.",
+  pairing_serial_in_use:
+    "Another machine has an open pairing code for the same Pi serial number: revoke it, or let it expire.",
+
   // Patient invitations.
   invalid_invitation:
     "The name or the e-mail address of the invitation is not valid.",
