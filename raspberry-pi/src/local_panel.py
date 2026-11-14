@@ -257,6 +257,12 @@ from src.motor.sto import (
     sto_bridged,
 )
 from src.operator_sync import OperatorSync
+from src.pairing import (
+    MACHINE_ENV_FILE,
+    PairingDesk,
+    PairingSetup,
+    startup_environment,
+)
 from src.panel_lifecycle import PanelTasks, WebRunner
 from src.panel_status import EcgLinkStatus, PanelStatus
 from src.passenger_feedback import PassengerFeedback, SessionIdReader
@@ -2657,6 +2663,7 @@ def build_panel(  # noqa: PLR0915  # one statement per wired part
     access: ConsoleAccess | None = None,
     applied: AppliedConfig | None = None,
     local_env: Mapping[str, str] | None = None,
+    pairing: PairingSetup | None = None,
 ) -> LocalPanel:
     """Wire everything, in the plan's order. Opens no port and starts no task.
 
@@ -2891,6 +2898,8 @@ def build_panel(  # noqa: PLR0915  # one statement per wired part
         watchdog=watchdog,
         service=service,
     )
+    # A console with no key offers its first-power-up screen (ANH-115); one with a key, none.
+    desk = PairingDesk(pairing) if pairing is not None and config.cloud is None else None
     services = Services(
         clock=clock,
         sto=sto,
@@ -2916,6 +2925,7 @@ def build_panel(  # noqa: PLR0915  # one statement per wired part
         roster=riders,
         preflight=monitor,
         access=access,
+        pairing=desk,
         config_view=functools.partial(
             view_of,
             applied,
@@ -2949,6 +2959,8 @@ def build_panel(  # noqa: PLR0915  # one statement per wired part
         sto=sto,
         preflight=monitor,
     )
+    if desk is not None:
+        desk.bind_restart(panel.request_restart)
     owned: HttpxTransport | None = None
     if config.cloud is not None:
         if health is None:
@@ -3061,6 +3073,8 @@ def build_panel(  # noqa: PLR0915  # one statement per wired part
 
 
 APPLIED_CONFIG_PATH: Final[Path] = LOCAL_PROFILES_PATH.parent / APPLIED_FILE
+PAIRED_PATH: Final[Path] = LOCAL_PROFILES_PATH.parent / MACHINE_ENV_FILE
+"""What a pairing writes (ANH-115): the machine's key, address and identifier."""
 """``data/config.applied.json``: the dashboard's configuration this console applied (ANH-141)."""
 
 OPERATORS_FILE: Final[str] = "operators.json"
@@ -3696,6 +3710,7 @@ async def run_console(
         preflight=True,
         applied=applied,
         local_env=local_env,
+        pairing=PairingSetup.of({} if local_env is None else local_env, PAIRED_PATH),
     )
     undo = install_stop_signals(event)
     code = EXIT_FAILED
@@ -3766,6 +3781,8 @@ def main(environ: Mapping[str, str] | None = None) -> int:
             KEY_UI_TOKEN,
             KEY_DEVICE_TOKEN,
         )
+    # What a pairing wrote (ANH-115), key by key where the .env sets nothing.
+    env = startup_environment(env, PAIRED_PATH)
     machine_id = env.get(KEY_RECORD_MACHINE_ID, "").strip()
     kept = load_applied(
         APPLIED_CONFIG_PATH,

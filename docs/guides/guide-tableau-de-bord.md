@@ -2047,8 +2047,7 @@ carte **Programmes** liste les programmes de la machine.
 l'étape 2, renseignez aussi le **Numéro de série du Pi** ; après **Créer**,
 lisez le code au technicien, qui le tape sur l'écran de première mise sous
 tension de la console, et la console écrit elle-même sa clé et l'adresse
-Convex. Cet écran de la console n'est pas encore livré : d'ici là, suivez les
-étapes 5 à 7 avec une clé.
+Convex ([guide-console-locale.md, 13.12](guide-console-locale.md#1312-mettre-en-service-une-console-neuve-par-son-code-dappairage)).
 
 **Si ça ne marche pas** :
 

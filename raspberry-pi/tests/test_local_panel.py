@@ -64,6 +64,7 @@ from src.medical_unusable import MedicalParametersUnusableError
 from src.motor.atv320 import ATV320Drive, FtdiModbusClient
 from src.motor.drive import DriveFault, DriveState, LowSpeedNotZero, describe_fault
 from src.motor.simulated import SimulatedDrive, SimulatedDriveConfig
+from src.pairing import PairingSetup
 from src.record.journal import Journal
 from src.result import Ok
 from src.sim.bitalino import SimulatedBitalinoClient
@@ -552,6 +553,7 @@ async def test_the_production_console_records_its_sessions_and_stops_its_journal
         preflight: bool,
         applied: AppliedConfig | None,
         local_env: Mapping[str, str] | None,
+        pairing: PairingSetup | None,
     ) -> LocalPanel:
         panel = real(
             config,
@@ -564,6 +566,7 @@ async def test_the_production_console_records_its_sessions_and_stops_its_journal
             preflight=preflight,
             applied=applied,
             local_env=local_env,
+            pairing=pairing,
         )
         built.append(panel)
         return panel

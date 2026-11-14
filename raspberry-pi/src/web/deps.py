@@ -53,6 +53,7 @@ from src.console_access import LOCAL_DEVICE, LOOPBACK_DEVICE, ConsoleAccess
 from src.control_surface import ControlSurface
 from src.geometry import MachineGeometry
 from src.motor.sto import StoSource
+from src.pairing_view import PairingScreen
 from src.panel_status import PanelSource
 from src.passenger_feedback import PassengerFeedback
 from src.presence.monitor import PresenceDecision, PresenceMonitor
@@ -643,6 +644,10 @@ class Services:
     """Apply, by an operator signed in, the revision with a safety key that waits
     (``POST /api/config/apply``): the revision, or why not. ``None``: the console is not
     linked to a dashboard, and nothing can wait."""
+
+    pairing: PairingScreen | None = None
+    """The first-power-up screen (``/api/pairing``, ANH-115); ``None``: the console has a key,
+    and offers no pairing."""
 
     access: ConsoleAccess | None = None
     """Who may act (ANH-152): the signed operator list, the sign-in, the sessions.

@@ -310,7 +310,8 @@ ERROR __main__: configuration: UI_PORT: 8123 est le port de scripts/bench_consol
    LEG_TIP_RADIUS_M=2.43
    # monter par paliers délibérés pendant la mise en service
    MOTOR_MAX_RPM=300
-   # vide tant qu'on ne veut pas le tableau de bord
+   # vide tant qu'on ne veut pas le tableau de bord : la console
+   # la reçoit alors par son écran de mise en service (13.12)
    MACHINE_API_KEY=
    ```
 
@@ -2170,6 +2171,40 @@ Quoi faire, selon ce que dit le message. Dans tous les cas il se termine par
 > été prise. Les trois messages de fréquence cardiaque ne concernent qu'une séance
 > manuelle avec une personne à bord, que la page ne propose pas et que la
 > configuration refuse aujourd'hui (jalon M6).
+
+### 13.12 Mettre en service une console neuve par son code d'appairage
+
+**Qui** : le technicien à la console, avec un administrateur qui a accès à la fiche
+de la machine sur le site.
+
+1. Allumer la console. Sans clé, la page **Tableau de bord** commence par la carte
+   **Mise en service : appairer la console**, qui montre le **Numero de serie du Pi**.
+2. L'administrateur crée la machine sur le site avec ce numéro de série, ou le
+   renseigne dans son registre, puis émet un code d'appairage (carte **Appairage de
+   la console** de la fiche). Il le lit au technicien ; le code vaut 30 minutes et
+   ne sert qu'une fois.
+3. Taper le code dans **Code d'appairage** (majuscules ou minuscules, avec ou sans le
+   tiret). Si la carte montre **Adresse du tableau de bord**, y taper l'adresse
+   `https://<deploiement>.convex.site`.
+4. **Appairer**. La carte dit « console appairee (cle anh1.…) : elle redemarre au
+   repos, reliee au tableau de bord ». La console redémarre d'elle même ; après le
+   redémarrage, la carte n'apparaît plus et la pastille du tableau de bord passe à
+   l'état relié.
+5. Les **Etapes suivantes** listées sur la carte ne sont pas encore faites par la
+   console : l'inscription au service de mise à jour et le réseau de la console.
+
+**Si ça ne marche pas** :
+
+* « code refuse » : le code est faux, expiré, déjà servi, remplacé par un plus
+  récent ou révoqué, ou le registre nomme un autre Pi. Demander un nouveau code ;
+  cinq codes faux rendent un code inutilisable ;
+* « numero de serie du Pi illisible » : la console ne tourne pas sur un Raspberry
+  Pi, ou ne peut pas lire son numéro ; pas d'appairage possible ici ;
+* « le code est celui de la machine … » : le `.env` de la console nomme une autre
+  machine (`RECORD_MACHINE_ID`). Corriger le `.env`, puis demander un nouveau code ;
+* « tableau de bord injoignable » : vérifier le réseau et l'adresse.
+
+**Désappairer une console** : l'arrêter au repos, retirer `/var/lib/anheart/data/machine.env` (`raspberry-pi/data/machine.env` sur un poste de développement), la redémarrer (`sudo systemctl restart anheart`), puis **Révoquer** la clé sur la fiche de la machine, carte **Clés de la machine** : la console redémarre sans clé, sur son écran de mise en service, et la clé qu'elle tenait n'ouvre plus rien.
 
 ## 14. Message affiché, ce qu'il veut dire, quoi faire
 

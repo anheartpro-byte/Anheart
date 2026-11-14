@@ -36,6 +36,7 @@ from src.local_panel import (
     run_console,
 )
 from src.motor.simulated import SimState
+from src.pairing import PairingSetup
 from src.record.journal import Journal
 from src.record.reader import read
 from src.record.session import SessionRecorder, SessionRequest, manifest_for
@@ -391,6 +392,7 @@ async def test_on_a_system_that_cannot_be_asked_the_production_console_says_so_o
         preflight: bool,
         applied: AppliedConfig | None = None,
         local_env: Mapping[str, str] | None = None,
+        pairing: PairingSetup | None = None,
     ) -> LocalPanel:
         panel = real(
             config,
@@ -402,6 +404,7 @@ async def test_on_a_system_that_cannot_be_asked_the_production_console_says_so_o
             preflight=preflight,
             applied=applied,
             local_env=local_env,
+            pairing=pairing,
         )
         built.append(panel)
         return panel

@@ -4306,6 +4306,53 @@ son `.env` comme avant, et rien ne la bloque :
   est là), la redémarrer. Tant qu'une
   révision approuvée existe sur le site, elle redescend au repos suivant.
 
+### 12.8 La mise en service par code d'appairage (ANH-115)
+
+Depuis le contrat 1.17, une console sans clé la reçoit par un code d'appairage au
+lieu d'une clé copiée à la main ([convex.md](convex.md#lappairage-dune-console-contrat-117-anh-115)).
+Le code ([`src/pairing.py`](../raspberry-pi/src/pairing.py)) :
+
+* **L'écran.** Tant que la console n'a pas de clé, la page **Tableau de bord**
+  commence par la carte **Mise en service : appairer la console** (`GET` et
+  `POST /api/pairing`, derrière le jeton de la tablette comme toute route, sans
+  opérateur connecté : aucune liste d'opérateurs n'existe avant l'appairage, et le
+  code émis sur le site pour ce Pi est exigé). Une console qui a une clé répond
+  **409** aux deux routes et ne montre pas la carte.
+* **Le Pi.** Son numéro de série est lu dans `/proc/device-tree/serial-number`,
+  comparé comme le serveur le fait (sans espaces de tête ni de fin, en minuscules).
+  Illisible : la carte le dit, et aucun appairage n'est possible.
+* **L'adresse.** Le `CONVEX_URL` du `.env` quand il est une adresse https ; sinon
+  la carte la demande, https seulement.
+* **L'appel.** `POST /api/machine/pair {code, serialPi}` avec l'en-tête du contrat
+  et sans clé. La réponse est refusée, et rien n'est écrit, si sa clé ou son
+  identifiant sont mal formés, ou si son `convexUrl` n'est pas l'origine https à
+  laquelle la console vient de parler. Un `RECORD_MACHINE_ID` du `.env` autre que
+  la machine du code : refus, rien n'est écrit, et la carte dit de corriger le
+  `.env` puis de demander un nouveau code (le serveur a déjà donné une clé et
+  révoqué les autres). Le code tapé n'est ni gardé, ni journalisé, ni renvoyé ; la
+  clé n'est montrée que par son préfixe.
+* **Le fichier.** `data/machine.env` (`/var/lib/anheart/data/machine.env` sur un
+  Pi installé), au compte de la console, mode 600, écrit d'un coup : fichier
+  temporaire créé privé, vidé sur le disque, renommé par dessus, puis le dossier
+  vidé ; un lien à sa place est refusé. Trois lignes, et rien d'autre :
+  `MACHINE_API_KEY`, `CONVEX_URL`, `RECORD_MACHINE_ID`. Pas dans
+  `/etc/anheart/anheart.env` : celui-ci appartient à root, porte les limites que la
+  console applique, et la console ne doit jamais pouvoir l'écrire.
+* **Au démarrage.** Le fichier est lu par un analyseur strict : exactement ces
+  trois clés, une fois chacune, sans guillemets, espaces ni rien qu'un shell
+  étendrait, une clé bien formée, une origine https, un identifiant. Tout autre
+  contenu fait ignorer le fichier, avec une ligne au journal, et la console démarre
+  sans clé : le fichier ne peut jamais régler une clé de sûreté. Clé par clé, une
+  valeur du `.env` l'emporte sur celle du fichier, avec un avertissement quand
+  elles diffèrent.
+* **Ensuite.** La console redémarre au repos (le redémarrage contrôlé, code 75) et
+  revient reliée au tableau de bord. Deux étapes de la mise en service ne sont pas
+  encore les siennes, et la carte les liste comme à faire : l'inscription au
+  service de mise à jour (ANH-169) et le réseau de la console avec son mot de
+  passe (ANH-151).
+
+**Désappairer une console** : l'arrêter au repos, retirer `/var/lib/anheart/data/machine.env` (`raspberry-pi/data/machine.env` sur un poste de développement), la redémarrer (`sudo systemctl restart anheart`), puis **Révoquer** la clé sur la fiche de la machine, carte **Clés de la machine** : la console redémarre sans clé, sur son écran de mise en service, et la clé qu'elle tenait n'ouvre plus rien.
+
 ---
 
 ## 13. Le contrat de code strict et la gate

@@ -294,7 +294,13 @@ par sa ligne de commande, que tout utilisateur de la machine peut lire dans la
 liste des processus. `scripts/pi/preflight.sh` donne la clé de la machine à
 `curl` de la même façon. Le fichier créé a une clé de machine **vide** : la
 console d'un Pi neuf n'est reliée à aucun tableau de bord tant qu'une personne
-n'a pas écrit la clé.
+n'a pas écrit la clé, ou que la console ne l'a pas reçue par son code d'appairage
+(ANH-115). Elle l'écrit alors dans `/var/lib/anheart/data/machine.env`, au compte
+`anheart`, mode 600, avec l'adresse et l'identifiant de la machine, et dans rien
+d'autre : ce fichier-là ne peut régler aucune limite, et une clé écrite dans
+`/etc/anheart/anheart.env` l'emporte sur la sienne. Que le compte de la console
+puisse lire sa clé est acceptable : la console la tient et s'en sert de toute
+façon ([secrets.md, 3.1](secrets.md#31-clé-de-la-machine)).
 
 **Les clés du fichier.** Le fichier créé est une copie de `.env.pi.example`,
 qui ne porte que des clés lues par la console

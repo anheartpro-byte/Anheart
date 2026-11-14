@@ -233,6 +233,31 @@
   <section id="view-console" class="view">
     <h1 class="page-title">Tableau de bord</h1>
 
+    <!--
+      The first-power-up screen (ANH-115), shown only while the console has no key
+      (/api/pairing answers): the Pi's serial number, the code an admin issued on the site
+      for it, and the dashboard's address when the console has none. The key received is
+      shown by its prefix only; the console then restarts at rest, linked.
+    -->
+    <div id="pairing-card" class="card hidden">
+      <h2>Mise en service : appairer la console</h2>
+      <p class="note">
+        Cette console n'a pas encore de cle. Sur la fiche de la machine du site, un administrateur
+        emet un code d'appairage pour le Pi ci-dessous ; tapez-le ici.
+      </p>
+      <p>Numero de serie du Pi : <strong id="pairing-serial">&mdash;</strong></p>
+      <label id="pairing-address-row" class="hidden">Adresse du tableau de bord
+        <input id="pairing-address" type="url" autocomplete="off" spellcheck="false" placeholder="adresse https du deploiement, en .convex.site" />
+      </label>
+      <label>Code d'appairage
+        <input id="pairing-code" type="text" autocomplete="off" spellcheck="false" autocapitalize="characters" maxlength="32" />
+      </label>
+      <button id="pairing-submit" class="btn" type="button">Appairer</button>
+      <p id="pairing-note" class="note" role="status"></p>
+      <h3>Etapes suivantes</h3>
+      <ul id="pairing-steps"></ul>
+    </div>
+
     <div id="console-readonly" class="card mode-banner">
       <strong>LECTURE SEULE</strong>
       <span id="console-readonly-detail">

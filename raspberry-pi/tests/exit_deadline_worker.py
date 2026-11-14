@@ -31,6 +31,7 @@ from src.clock import Clock
 from src.config_sync import AppliedConfig
 from src.local_config import LocalConfig
 from src.local_panel import LocalPanel, ServiceDesk, build_panel
+from src.pairing import PairingSetup
 from src.record.journal import Journal
 from src.wall_clock import WallClockProbe
 from src.web import routes
@@ -62,6 +63,7 @@ def main(root: Path, port: str, mode: str) -> int:
         preflight: bool,
         applied: AppliedConfig | None = None,
         local_env: Mapping[str, str] | None = None,
+        pairing: PairingSetup | None = None,
     ) -> LocalPanel:
         # The console's own profile store stays out of the repository's ``data/``.
         panel = build_panel(
@@ -75,6 +77,7 @@ def main(root: Path, port: str, mode: str) -> int:
             preflight=preflight,
             applied=applied,
             local_env=local_env,
+            pairing=pairing,
         )
         # The export is an action (ANH-152): the parent signs in on the test list.
         access = panel.services.access

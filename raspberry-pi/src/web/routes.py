@@ -140,6 +140,7 @@ from src.web.deps import (
     identify_device,
     is_loopback_host,
 )
+from src.web.pairing_routes import register_pairing
 from src.web.preflight_routes import register_preflight
 from src.web.schemas import (
     AccessRow,
@@ -482,6 +483,7 @@ def _register_api(app: FastAPI, *, services: Services, config: WebConfig) -> Non
     _register_service(app, services=services, auth=auth, acting=acting)
     _register_config(app, services=services, auth=auth, acting=acting)
     register_preflight(app, services=services, auth=auth, acting=acting)
+    register_pairing(app, services=services, auth=auth)
 
 
 def _register_access(

@@ -1821,6 +1821,60 @@ function loadConfig() {
   return api("/api/config").then(renderConfig).catch(function () {});
 }
 
+/*
+  The first-power-up screen (ANH-115), from /api/pairing: answered only while the console has
+  no key (409 once it has one, and the card is hidden). The serial number of the Pi, or why it
+  cannot be read; the address field only when the console has none; the steps still to do.
+  Once paired, the key's prefix, and the console restarts at rest.
+*/
+function renderPairing(pairing) {
+  show(el("pairing-card"), true);
+  var serial = el("pairing-serial");
+  text(serial, pairing.serial || "illisible : " + pairing.serial_problem);
+  serial.className = pairing.serial ? "" : "bad";
+  show(el("pairing-address-row"), !pairing.address);
+  el("pairing-submit").disabled = !pairing.serial || Boolean(pairing.key_prefix);
+  if (pairing.key_prefix) {
+    ok(el("pairing-note"), pairedWords(pairing.key_prefix));
+  }
+  var list = el("pairing-steps");
+  list.textContent = "";
+  pairing.steps.forEach(function (step) {
+    list.appendChild(make("li", "", step.label + " : " + step.detail));
+  });
+}
+
+function pairedWords(prefix) {
+  return "console appairee (cle " + prefix + ") : elle redemarre au repos, reliee au tableau de bord";
+}
+
+function loadPairing() {
+  return api("/api/pairing").then(renderPairing).catch(function () {
+    show(el("pairing-card"), false);
+  });
+}
+
+function doPair() {
+  var code = el("pairing-code");
+  var address = el("pairing-address").value.trim();
+  el("pairing-submit").disabled = true;
+  api("/api/pairing", {
+    method: "POST",
+    body: { code: code.value, address: address || null },
+  })
+    .then(function (paired) {
+      ok(el("pairing-note"), pairedWords(paired.key_prefix));
+    })
+    .catch(function (error) {
+      problem(el("pairing-note"), error);
+      el("pairing-submit").disabled = false;
+    })
+    .then(function () {
+      // Never kept on the page, whatever the answer.
+      code.value = "";
+    });
+}
+
 function doApplyConfig() {
   el("config-apply").disabled = true;
   api("/api/config/apply", { method: "POST" })
@@ -4498,6 +4552,7 @@ function start() {
   el("ack").onclick = doAcknowledge;
   el("service-restore-button").onclick = doRestoreService;
   el("config-apply").onclick = doApplyConfig;
+  el("pairing-submit").onclick = doPair;
   el("attest").onclick = doAttest;
   el("manual-start").onclick = doManualStart;
   el("manual-apply").onclick = doManualApply;
@@ -4537,6 +4592,7 @@ function start() {
   window.setInterval(loadRemoteLaunch, PANEL_MS);
   window.setInterval(loadFeedback, PANEL_MS);
   window.setInterval(loadConfig, PANEL_MS);
+  window.setInterval(loadPairing, PANEL_MS);
   window.setInterval(loadSensors, SENSORS_MS);
   window.setInterval(loadRoster, ROSTER_MS);
   window.setInterval(refreshProfiles, PROFILES_MS);
@@ -4559,6 +4615,7 @@ function boot() {
   loadRemoteLaunch();
   loadFeedback();
   loadConfig();
+  loadPairing();
   loadSensors();
   loadRoster();
   loadStatus()
