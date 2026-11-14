@@ -11,6 +11,9 @@ import {
 } from "./test.setup";
 import { registryRelease, registryUpload } from "./machineRegistry.fixtures";
 import { levelAt } from "./lib/machineRegistry";
+import { getCurrentUserOrThrow } from "./lib/auth";
+import { alertsOf } from "./machineRegistry";
+import { recordReads } from "./readRecorder.fixtures";
 import { pendingSessionTtlMs } from "./training";
 
 beforeEach(() => {
@@ -929,5 +932,65 @@ describe("ANH-147 machine registry", () => {
         })
       )?.serialPi,
     ).toBe("TEST-PI-REASSIGNED");
+  });
+});
+
+describe("B-9 registry alerts: read access is the index range", () => {
+  it.each([
+    ["orgAdmin", "by_organization_and_machine_and_started"],
+    ["admin", "by_machine_and_started"],
+  ] as const)(
+    "%s reads one bounded range of %s, and filters nothing",
+    async (actor, index) => {
+      const w = await seedWorld(modules);
+      const reads = await as(w.t, actor).run(async (ctx) => {
+        const user = await getCurrentUserOrThrow(ctx);
+        const machine = await ctx.db.get(w.machine);
+        const recorded = recordReads(ctx);
+        await alertsOf(recorded.ctx, { machine: machine!, user }, null);
+        return recorded.reads;
+      });
+      expect(reads).toEqual([
+        { table: "sessions", index, calls: [{ method: "take", limit: 50 }] },
+      ]);
+    },
+  );
+
+  it("counts a centre's session behind more newer sessions of another centre than the limit", async () => {
+    const w = await seedWorld(modules);
+    await bench(w);
+    await w.t.run(async (ctx) => {
+      await ctx.db.insert("sessions", {
+        machineId: w.machine,
+        organizationId: w.orgA,
+        status: "completed",
+        startedAt: NOW + 1,
+        kind: "manual",
+        notes: "Occupancy: occupied",
+        channels: [],
+      });
+      for (let index = 0; index < 60; index += 1)
+        await ctx.db.insert("sessions", {
+          machineId: w.machine,
+          organizationId: w.orgB,
+          status: "completed",
+          startedAt: NOW + 100 + index,
+          kind: "manual",
+          notes: "Occupancy: occupied",
+          channels: [],
+        });
+    });
+    const alerts = (
+      await as(w.t, "orgAdmin").query(api.machineRegistry.getRegistry, {
+        machineId: w.machine,
+      })
+    )?.alerts;
+    expect(
+      alerts?.find(({ code }) => code === "person_on_board_without_occupied"),
+    ).toEqual({
+      code: "person_on_board_without_occupied",
+      count: 1,
+      mostRecentAt: NOW + 1,
+    });
   });
 });
