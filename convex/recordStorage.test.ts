@@ -18,6 +18,7 @@ import {
   uploadRequest,
 } from "./lib/recordStorage";
 import { makeFunctionReference } from "convex/server";
+import { z } from "zod";
 import type { Id } from "./_generated/dataModel";
 import { CONTRACT_HEADER, CONTRACT_VERSION } from "./lib/contract";
 import completePiManifest from "../raspberry-pi/tests/fixtures/complete_manifest_v2.json";
@@ -104,13 +105,94 @@ async function upload(
   await w.t.finishAllScheduledFunctions(vi.runAllTimers);
   return args;
 }
+/** The schema a field holds, without its optional, nullable or default wrappers. */
+function unwrapped(schema: z.ZodType): z.ZodType {
+  let inner = schema;
+  while (
+    inner instanceof z.ZodOptional ||
+    inner instanceof z.ZodNullable ||
+    inner instanceof z.ZodDefault
+  )
+    inner = inner.unwrap() as z.ZodType;
+  return inner;
+}
+
+/**
+ * Every object of `value`, at any depth, whose keys differ from those its schema
+ * knows: the paths where the Pi writes a key Convex does not read, or Convex reads
+ * one the Pi does not write. Arrays are followed into their items.
+ */
+function keyGaps(
+  schema: z.ZodType,
+  value: unknown,
+  path = "manifest",
+): string[] {
+  const inner = unwrapped(schema);
+  if (inner instanceof z.ZodArray && Array.isArray(value))
+    return value.flatMap((item, index) =>
+      keyGaps(inner.element as z.ZodType, item, `${path}[${index}]`),
+    );
+  if (
+    !(inner instanceof z.ZodObject) ||
+    value === null ||
+    typeof value !== "object" ||
+    Array.isArray(value)
+  )
+    return [];
+  const shape = inner.shape as Record<string, z.ZodType>;
+  const fields = value as Record<string, unknown>;
+  const same =
+    JSON.stringify(Object.keys(shape).sort()) ===
+    JSON.stringify(Object.keys(fields).sort());
+  return [
+    ...(same ? [] : [path]),
+    ...Object.keys(fields)
+      .filter((key) => key in shape)
+      .flatMap((key) => keyGaps(shape[key], fields[key], `${path}.${key}`)),
+  ];
+}
+
 describe("ANH-130 verified session deposits", () => {
   it("knows every key of the complete manifest written by the Pi, and the Pi writes every key it knows", () => {
     // The fixture holds every key of the Pi's manifest (test_record_contract.py): each is
-    // one Convex reads, and each key Convex reads is one the Pi writes.
+    // one Convex reads, and each key Convex reads is one the Pi writes, at every depth.
     expect(Object.keys(completePiManifest).sort()).toEqual(
       Object.keys(depositManifest.shape).sort(),
     );
+    expect(keyGaps(depositManifest, completePiManifest)).toEqual([]);
+  });
+
+  it("finds a key only Convex knows, or only the Pi writes, deep in the manifest", () => {
+    const deposit = z.strictObject({
+      profile: z
+        .strictObject({
+          total_duration_s: z.number(),
+          only_convex: z.number().optional(),
+        })
+        .partial()
+        .nullable()
+        .optional(),
+      preflight: z
+        .array(z.strictObject({ check: z.string(), passed: z.boolean() }))
+        .nullable(),
+    });
+    const written = {
+      profile: { total_duration_s: 60 },
+      preflight: [{ check: "estop", passed: true }],
+    };
+    expect(keyGaps(deposit, written)).toEqual(["manifest.profile"]);
+    expect(
+      keyGaps(deposit, {
+        profile: { total_duration_s: 60, only_convex: 1 },
+        preflight: [{ check: "estop", passed: true, only_pi: 1 }],
+      }),
+    ).toEqual(["manifest.preflight[0]"]);
+    expect(
+      keyGaps(deposit, {
+        profile: { total_duration_s: 60, only_convex: 1 },
+        preflight: null,
+      }),
+    ).toEqual([]);
   });
 
   it("accepts the complete manifest written by the Pi and rejects an extra key", () => {

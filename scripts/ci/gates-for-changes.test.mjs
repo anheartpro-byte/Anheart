@@ -5,7 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { classify, decide, PAGES_READ_BY_PI_TESTS } from "./gates-for-changes.mjs";
+import { classify, decide, PAGES_READ_BY_PI_TESTS, SITE_FILES_READ_BY_PYTHON_TESTS } from "./gates-for-changes.mjs";
 
 const script = fileURLToPath(new URL("gates-for-changes.mjs", import.meta.url));
 const root = fileURLToPath(new URL("../../", import.meta.url));
@@ -226,6 +226,66 @@ test("every page of docs/ a Python test opens runs the Python gates, alone in it
   }
   // Any other page still runs nothing of its own.
   assert.deepEqual(gates(["docs/securite.md", "docs/guides/guide-tableau-de-bord.md"]), NOTHING);
+});
+
+/** Every file the repository tracks. */
+const TRACKED = trackedUnder();
+
+/** Under raspberry-pi/ or simulation/: what the Python gates read of their own. */
+const pythonTree = (/** @type {string} */ path) => /^(raspberry-pi|simulation)\//.test(path);
+
+/**
+ * Every tracked file a Python source names by a path: a quoted path with a slash
+ * (`"contracts/feedback.json"`), or quoted segments joined by `/`
+ * (`ROOT / "lib" / "fitnessQuestionnaire.ts"`), as written from the root or as the end
+ * of a tracked path. A path that ends a file of raspberry-pi/ or simulation/ is taken for
+ * that one, the tree the test runs in. Limit: a path built while the test runs (a
+ * variable, an f-string, a glob) is not seen; a page of docs/ named by its last segment
+ * alone is found by `pagesNamedIn`.
+ * @param {string} text
+ */
+const filesNamedIn = (text) => {
+  const quoted = String.raw`["']([\w.@-][\w./@-]*)["']`;
+  const segments = new RegExp(`${quoted}(?:\\s*/\\s*${quoted})+`, "g");
+  const candidates = [
+    ...[...text.matchAll(segments)].map(([whole]) => [...whole.matchAll(new RegExp(quoted, "g"))].map((match) => match[1]).join("/")),
+    ...[...text.matchAll(new RegExp(quoted, "g"))].map((match) => match[1] ?? "").filter((name) => name.includes("/")),
+  ];
+  return candidates.flatMap((candidate) => {
+    const matches = TRACKED.filter((path) => path === candidate || path.endsWith(`/${candidate}`));
+    return matches.some(pythonTree) ? matches.filter(pythonTree) : matches;
+  });
+};
+
+test("the scan finds a file named by its path or in segments, and prefers the Python trees", () => {
+  assert.deepEqual(filesNamedIn('ROOT = Path(__file__).parents[2]\nPAGE = ROOT / "lib" / "fitnessQuestionnaire.ts"\n'), ["lib/fitnessQuestionnaire.ts"]);
+  assert.deepEqual(filesNamedIn('SHARED = REPOSITORY / "contracts/machine-api.json"'), ["contracts/machine-api.json"]);
+  // simulation/viewer/index.html, not the copy the site serves under public/.
+  assert.deepEqual(filesNamedIn('VIEWER = "/viewer/index.html"'), []);
+  assert.deepEqual(filesNamedIn('PAGE = HERE / "viewer" / "index.html"'), ["simulation/viewer/index.html"]);
+  assert.deepEqual(filesNamedIn('out = tmp_path / "records" / "nothing-tracked.json"'), []);
+});
+
+test("every file outside the Python trees that a Python test opens runs the Python gates, alone in its pull request", () => {
+  const files = trackedUnder("raspberry-pi/tests/*.py", "simulation/*.py", "deploy/simulation-vercel/*.py");
+  const opened = new Set(
+    files.flatMap((file) => {
+      const text = readFileSync(join(root, file), "utf8");
+      return [...filesNamedIn(text), ...pagesNamedIn(text)];
+    }),
+  );
+  const outside = [...opened].filter((path) => !pythonTree(path)).sort();
+  for (const expected of ["lib/fitnessQuestionnaire.ts", "contracts/machine-api.json", "docs/raspberry-pi.md"]) {
+    assert.ok(outside.includes(expected), `${expected} not found among ${outside.join(", ")}`);
+  }
+  for (const path of outside) assert.equal(gates([path]).python, true, `${path} is read by a Python test`);
+  for (const path of SITE_FILES_READ_BY_PYTHON_TESTS) {
+    assert.ok(opened.has(path), `${path} is listed, and no Python test opens it`);
+    assert.deepEqual(gates([path]), EVERYTHING, path);
+    assert.deepEqual(gates([...SITE, path]), EVERYTHING, path);
+  }
+  // The other files of the site still run the Python gates for nothing.
+  assert.deepEqual(gates(["lib/ecg.ts"]), NODE_ONLY);
 });
 
 test("names that only look like a listed directory are not listed", () => {

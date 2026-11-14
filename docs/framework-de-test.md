@@ -2157,7 +2157,12 @@ Passent avant ces listes et lancent tout :
   `docs/guides/guide-console-locale.md` et `docs/client/manuel-operateur.md`,
   que `test_link_state.py` lit pour les mots des états de la liaison. Un test
   de `scripts/ci/gates-for-changes.test.mjs` relit les tests Python et échoue
-  si l'un ouvre une page de `docs/` que cette liste oublie.
+  si l'un ouvre une page de `docs/` que cette liste oublie ;
+* les fichiers du site qu'ouvre un test Python (`SITE_FILES_READ_BY_PYTHON_TESTS`) :
+  `lib/fitnessQuestionnaire.ts`, dont `test_roster_fitness.py` lit la date
+  limite d'aptitude. Le même fichier de tests relit les tests Python et
+  échoue si l'un nomme, par un chemin, un fichier hors de `raspberry-pi/` et
+  de `simulation/` dont le changement seul ne lancerait pas les gates Python.
 
 Lancent tout aussi : un fichier d'aucune sorte listée (un scénario JSON,
 `raspberry-pi/config/`, un Dockerfile, la CAO, `deploy/`, un fichier de
