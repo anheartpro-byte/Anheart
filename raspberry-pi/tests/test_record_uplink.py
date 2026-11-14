@@ -21,6 +21,7 @@ does not answer costs (the sending, nothing else).
 from __future__ import annotations
 
 import asyncio
+import functools
 import logging
 import os
 import re
@@ -3845,13 +3846,14 @@ class _HeldFirstOperation(RecordIo):
         if not self._first:
             return await super().run(work, timeout, late)
         self._first = False
+        return await super().run(functools.partial(self._held, work), timeout, late)
 
-        def held() -> T:
-            self.holding.set()
-            assert self.release.wait(5), "the test never let the disk go"
-            return work()
-
-        return await super().run(held, timeout, late)
+    def _held[T](self, work: Callable[[], T]) -> T:
+        """``work``, once the test lets the disk go: on the record I/O thread."""
+        self.holding.set()
+        released = self.release.wait(5)
+        assert released, "the test never let the disk go"
+        return work()
 
 
 async def test_the_register_waits_its_turn_behind_a_read_of_the_sending_rather_than_fail(
