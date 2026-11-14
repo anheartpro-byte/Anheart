@@ -4209,7 +4209,13 @@ changent pas.
    pas, quelle qu'en soit la cause, lève ce refus ; une écriture réussie le
    garde jusqu'au redémarrage, déjà demandé avant d'être dit au journal. Puis la console redémarre au repos :
    code de sortie 75, écrit comme un arrêt propre, que le service relance
-   (`Restart=on-failure`). Le processus qui démarre sur la révision le dit au
+   (`Restart=on-failure`). Chaque configuration appliquée est donc un
+   démarrage pour systemd : dix en 30 minutes, à la mise en service par
+   exemple, font avec le démarrage de la console onze démarrages, au delà de
+   `StartLimitBurst=10`, et laissent l'unité en échec, et
+   le Pi ne redémarre pas de lui même. Espacer les approbations, ou sinon
+   `sudo systemctl reset-failed anheart && sudo systemctl start anheart`
+   ([pi-image.md](pi-image.md#le-chien-de-garde)). Le processus qui démarre sur la révision le dit au
    site (`POST /api/machine/config/applied {revision, hash}`) et en porte
    l'empreinte dans chaque heartbeat (`config_hash`) et dans le document de
    configuration de chaque enregistrement (`machine_config`, donc dans le
@@ -4260,8 +4266,9 @@ changements, le dernier refus et le redémarrage demandé.
 son `.env` comme avant, et rien ne la bloque :
 
 * son démarrage ne change pas, son heartbeat dit `config_hash: null`, et la
-  fiche du site affiche « configuration appliquée ≠ approuvée » tant qu'une
-  révision approuvée n'est pas appliquée ;
+  fiche du site affiche « En attente de la machine » tant qu'une révision
+  approuvée n'est pas appliquée (« appliquée ≠ approuvée » est réservé à une
+  révision appliquée dont le heartbeat donne une autre empreinte) ;
 * sans lien (`MACHINE_API_KEY` vide), sans `RECORD_MACHINE_ID`, sans
   révision approuvée, ou face à un serveur antérieur à 1.15 (404), rien ne
   descend ;

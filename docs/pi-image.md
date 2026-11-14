@@ -508,7 +508,12 @@ cas d'une console tuée ; une console réveillée par son arrêt a clos le sien.
 | systemd | un onzième démarrage en 30 minutes est refusé (`StartLimitBurst=10`, `StartLimitIntervalSec=1800`) | plus de console : la page ne répond plus, `systemctl status anheart` dit `failed (Result: start-limit-hit)` | lire `journalctl -u anheart`, corriger, puis `sudo systemctl reset-failed anheart && sudo systemctl start anheart` |
 
 La limite de systemd est pour la console qui ne revient pas du tout ; celle qui
-revient s'est mise hors service bien avant. Les démarrages faits à la main
+revient s'est mise hors service bien avant. Une configuration appliquée depuis
+le tableau de bord (ANH-141) redémarre aussi la console, d'un arrêt propre :
+chacune compte dans les dix. Dix approbations en 30 minutes, à la mise en
+service, laissent l'unité en échec sans que le Pi redémarre de lui même :
+espacer les approbations, ou sinon `sudo systemctl reset-failed anheart && sudo
+systemctl start anheart` ([raspberry-pi.md, 12.7](raspberry-pi.md#127-la-configuration-tenue-par-le-tableau-de-bord-anh-141)). Les démarrages faits à la main
 comptent dans les dix : plus de dix `systemctl restart` en une demi-heure
 donnent la même erreur, et la même commande la lève.
 

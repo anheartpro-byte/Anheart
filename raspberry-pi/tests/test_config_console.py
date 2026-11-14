@@ -181,10 +181,17 @@ async def test_a_restart_waits_for_the_rest(
     monkeypatch.setattr(LocalPanel, "catalog_at_rest", moving)
     stop = asyncio.Event()
     panel.request_restart()
-    asyncio.get_running_loop().call_later(0.5, stop.set)
+    timer: list[int] = []
+
+    def stop_by_the_timer() -> None:
+        timer.append(1)
+        stop.set()
+
+    asyncio.get_running_loop().call_later(0.5, stop_by_the_timer)
     # Never at rest here: the stop event, not the restart, ends the run; the code still
     # says a restart, which the next rest would have taken.
     assert await panel.run(stop, FakeWeb()) == EXIT_RESTART
+    assert timer == [1], "the run ended by the timer: the restart never stopped it away from rest"
 
 
 async def test_a_failing_configuration_step_stops_nothing(

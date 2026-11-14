@@ -1480,8 +1480,12 @@ ne bloque un banc.
    clés d'exploitation ; une clé de sûreté qui change attend qu'un opérateur
    connecté appuie sur « Appliquer la configuration de sûreté » à la console,
    page Sécurité.
-4. La fiche affiche « configuration appliquée ≠ approuvée » tant que la
-   console n'a pas dit avoir appliqué la révision en vigueur.
+4. La fiche affiche « En attente de la machine » tant que la console n'a pas
+   dit avoir appliqué la révision en vigueur, et « appliquée ≠ approuvée » si
+   la révision appliquée n'est pas celle que dit le heartbeat. Chaque
+   révision appliquée redémarre la console : espacer les approbations à la mise
+   en service, pas plus de neuf en 30 minutes
+   ([raspberry-pi.md, 12.7](raspberry-pi.md#127-la-configuration-tenue-par-le-tableau-de-bord-anh-141)).
 
 Une clé du tableau de bord laissée dans le `.env` est ensuite ignorée, et le
 journal le dit au démarrage ; la retirer du `.env` n'est pas obligatoire.
