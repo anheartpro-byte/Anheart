@@ -108,6 +108,15 @@ at the console confirms it, and says what it applied or refused
 (``POST /api/machine/config/applied``, :mod:`src.config_sync`). A dashboard
 before 1.15 answers 404: the console keeps its configuration.
 
+Since 1.16 a drive fault the console cannot reset closes the machine's
+programmed sessions until its incident is closed and an intervention naming it
+is written in the dashboard's logbook (ANH-149): the dashboard refuses an
+automatic launch's start 409 ``drive_intervention_required``, and the poll
+answer carries ``drive_interventions_due`` (``drive_interventions`` of the
+shared file), how many of the machine's drive faults wait for their
+intervention. A bench launch is never refused for it. A console before 1.16
+reads the refusal as an unknown one: it never arms and sends no end.
+
 One exchange is outside this rule on purpose: **a stop**. It means the same
 under every contract, so the dashboard answers the status request whatever
 major the console announces, and the console ends its session on that answer
@@ -150,7 +159,7 @@ ErrorCode = NewType("ErrorCode", str)
 SoftwareVersion = NewType("SoftwareVersion", str)
 """What this build calls itself: a git tag such as ``pi-0.4.2``."""
 
-CONTRACT_VERSION: Final[ContractVersion] = ContractVersion("1.15")
+CONTRACT_VERSION: Final[ContractVersion] = ContractVersion("1.16")
 """The contract this console speaks. Pinned to ``contracts/machine-api.json``."""
 
 CONTRACT_HEADER: Final[str] = "X-Anheart-Contract"
@@ -186,13 +195,15 @@ ARMING_REFUSALS: Final[frozenset[ErrorCode]] = frozenset(
         ErrorCode("rider_busy"),
         ErrorCode("machine_busy"),
         ErrorCode("incident_open"),
+        ErrorCode("drive_intervention_required"),
         PROGRAMME_CHANGED,
     }
 )
 """The codes of the 409 a server answers a start it refuses (contract 1.6,
-``machine_busy`` since 1.9 for a bench launch, ``incident_open`` since 1.10 and
-``programme_changed`` since 1.12 for an automatic one; ``arming_refusals`` of
-the shared file). Pinned to the shared file."""
+``machine_busy`` since 1.9 for a bench launch, ``incident_open`` since 1.10,
+``programme_changed`` since 1.12 and ``drive_intervention_required`` since 1.16
+for an automatic one; ``arming_refusals`` of the shared file). Pinned to the
+shared file."""
 
 STABLE_CODES: Final[frozenset[ErrorCode]] = frozenset(
     {
