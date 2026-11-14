@@ -357,6 +357,8 @@ export const NON_SENSITIVE_MUTATIONS: Readonly<Record<string, string>> = {
     "Cron removes expired heartbeat and machine health history samples.",
   "machineKeys.recordKeyUse":
     "Machine HTTP authentication refreshes the key-use timestamp, without a rights change.",
+  "machineLogbook.backfillInterventionDue":
+    "Internal one-off: judges the drive fault incidents written before ANH-149; it writes no user decision.",
   "machineLogbook.generateUploadUrl":
     "Admin or org_admin prepares an upload URL; the entry that attaches it is audited.",
   "machineRegistry.generateUploadUrl":

@@ -9,7 +9,7 @@ import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { CONTRACT_VERSION } from "./lib/contract";
 import { manualResetOnly } from "./lib/logbook";
-import { LOGBOOK_LIST_LIMIT } from "./machineLogbook";
+import { BACKFILL_BATCH, LOGBOOK_LIST_LIMIT } from "./machineLogbook";
 import { registryRelease, registryUpload } from "./machineRegistry.fixtures";
 import {
   as,
@@ -124,6 +124,10 @@ describe("EX-3 who reads and writes the logbook", () => {
     ]);
     expect((await read(w, "orgAdmin"))?.writable).toEqual(["note"]);
     expect((await read(w, "manager"))?.writable).toEqual([]);
+    await w.t.run((ctx) => ctx.db.patch(w.machine, { isDeleted: true }));
+    const deleted = await read(w);
+    expect(deleted?.entries).toHaveLength(1);
+    expect(deleted?.writable).toEqual([]);
   });
 
   it("is written by hand by an Anheart admin, and by an org_admin of its organisation for notes only", async () => {
@@ -453,6 +457,90 @@ describe("EX-4 a drive fault the console cannot reset closes programmed sessions
       at: NOW + 500,
     });
     expect((await read(w))?.interventionsDue).toEqual([]);
+  });
+
+  it("judges a drive fault written before the rule, with no flag, until its intervention", async () => {
+    const w = await seedLaunchWorld(modules);
+    const legacy = await w.t.run((ctx) =>
+      ctx.db.insert("incidents", {
+        organizationId: w.orgA,
+        machineId: w.machine,
+        kind: "drive_fault",
+        rule: "OCF",
+        t: NOW,
+        severity: "medium",
+        occupied: false,
+        status: "closed",
+        openedAt: NOW,
+      }),
+    );
+    expect((await read(w))?.interventionsDue).toEqual([legacy]);
+    expect(await codeOf(launch(w))).toBe("drive_intervention_required");
+    vi.setSystemTime(NOW + 1000);
+    await intervention(w, legacy);
+    expect((await w.t.run((ctx) => ctx.db.get(legacy)))?.interventionDue).toBe(false);
+    expect((await read(w))?.interventionsDue).toEqual([]);
+    expect(await codeOf(launch(w))).toBeNull();
+  });
+
+  it("backfills the flag of the rows written before it, again and again the same", async () => {
+    const w = await seedLaunchWorld(modules);
+    const row = (kind: "drive_fault" | "safety_verdict", rule: string) =>
+      w.t.run((ctx) =>
+        ctx.db.insert("incidents", {
+          organizationId: w.orgA,
+          machineId: w.machine,
+          kind,
+          rule,
+          t: NOW,
+          severity: "medium",
+          occupied: false,
+          status: "closed",
+          openedAt: NOW,
+        }),
+      );
+    const blocking = await row("drive_fault", "OCF");
+    const resettable = await row("drive_fault", "OHF");
+    const verdict = await row("safety_verdict", "hr_critical");
+    const flags = () =>
+      w.t.run(async (ctx) =>
+        (await Promise.all([blocking, resettable, verdict].map((id) => ctx.db.get(id)))).map(
+          (incident) => incident?.interventionDue ?? null,
+        ),
+      );
+    expect(await w.t.mutation(internal.machineLogbook.backfillInterventionDue, {})).toEqual({
+      judged: 2,
+      done: true,
+    });
+    expect(await flags()).toEqual([true, false, null]);
+    await w.t.mutation(internal.machineLogbook.backfillInterventionDue, {});
+    expect(await flags()).toEqual([true, false, null]);
+    expect((await read(w))?.interventionsDue).toEqual([blocking]);
+  });
+
+  it("schedules the next batch while the table is not read through", async () => {
+    const w = await seedLaunchWorld(modules);
+    await w.t.run(async (ctx) => {
+      for (let i = 0; i <= BACKFILL_BATCH; i++) {
+        await ctx.db.insert("incidents", {
+          organizationId: w.orgA,
+          machineId: w.otherMachine,
+          kind: "safety_verdict",
+          rule: `rule_${i}`,
+          t: NOW + i,
+          severity: "low",
+          occupied: false,
+          status: "closed",
+          openedAt: NOW,
+        });
+      }
+    });
+    expect(await w.t.mutation(internal.machineLogbook.backfillInterventionDue, {})).toEqual({
+      judged: 0,
+      done: false,
+    });
+    const scheduled = await w.t.run((ctx) => ctx.db.system.query("_scheduled_functions").collect());
+    expect(scheduled.map((job) => job.name)).toContain("machineLogbook:backfillInterventionDue");
   });
 
   it("leaves a fault the console resets, and another machine's intervention, out of it", async () => {

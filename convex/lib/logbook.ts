@@ -115,11 +115,20 @@ async function intervened(
   return last !== null && last._creationTime > since;
 }
 
+/** The full rule, for one incident: whether it closes programmed sessions now. */
+async function judged(ctx: QueryCtx, incident: Doc<"incidents">): Promise<boolean> {
+  return (
+    incident.kind === "drive_fault" &&
+    manualResetOnly(incident.rule) &&
+    !(incident.status === "closed" && (await intervened(ctx, incident)))
+  );
+}
+
 /**
- * Keep the incident's `interventionDue` true while it is a drive fault the
- * console cannot reset and is not resolved: not closed, or closed with no
- * intervention written since it last opened. Called wherever one of these
- * changes: its opening and every join, its closing, an intervention naming it.
+ * Keep the incident's `interventionDue` as the rule judges it now: on a drive
+ * fault, true or false; on another kind, absent. Called wherever the judgement
+ * can change: its opening and every join, its closing, an intervention naming
+ * it, and the backfill of the rows written before ANH-149.
  */
 export async function refreshInterventionDue(
   ctx: MutationCtx,
@@ -127,30 +136,37 @@ export async function refreshInterventionDue(
 ): Promise<void> {
   const incident = await ctx.db.get(incidentId);
   if (incident === null) return;
-  const due =
-    incident.kind === "drive_fault" &&
-    manualResetOnly(incident.rule) &&
-    !(incident.status === "closed" && (await intervened(ctx, incident)));
-  if ((incident.interventionDue ?? false) !== due)
-    await ctx.db.patch(incident._id, { interventionDue: due ? true : undefined });
+  const flag = incident.kind === "drive_fault" ? await judged(ctx, incident) : undefined;
+  if (incident.interventionDue !== flag)
+    await ctx.db.patch(incident._id, { interventionDue: flag });
 }
 
 /**
- * The drive fault incidents of the machine that still close its programmed
- * sessions (`interventionDue`). Read by an index on those alone: a machine's
- * resolved faults, however many, are never read.
+ * The drive fault incidents of the machine that close its programmed
+ * sessions: those flagged so, and those never judged (written before ANH-149,
+ * or before a backfill), judged here by the full rule. A machine's resolved
+ * faults, flagged false, are never read; the read is right whether or not the
+ * backfill ran.
  */
 export async function driveInterventionsDue(
   ctx: QueryCtx,
   machineId: Id<"machines">,
 ): Promise<Id<"incidents">[]> {
-  const due = await ctx.db
-    .query("incidents")
-    .withIndex("by_machine_and_intervention_due", (q) =>
-      q.eq("machineId", machineId).eq("interventionDue", true),
-    )
-    .collect();
-  return due.map((incident) => incident._id);
+  const rows = (interventionDue: true | undefined) =>
+    ctx.db
+      .query("incidents")
+      .withIndex("by_machine_and_kind_and_intervention_due", (q) =>
+        q
+          .eq("machineId", machineId)
+          .eq("kind", "drive_fault")
+          .eq("interventionDue", interventionDue),
+      )
+      .collect();
+  const due = (await rows(true)).map((incident) => incident._id);
+  for (const legacy of await rows(undefined)) {
+    if (await judged(ctx, legacy)) due.push(legacy._id);
+  }
+  return due;
 }
 
 /**
