@@ -68,7 +68,8 @@ var state = {
   profilesDigest: null,  // the digest of the list shown, sent with a start: the console refuses another list's
   roster: null,          // the last /api/roster answer: names live here, in this page's memory only
   rosterShown: null,     // the riders the list shows, as one string: rebuilt only when it changes
-  rosterAt: 0,           // performance.now() when that answer came: the list ages from it on this page
+  rosterAt: 0,           // performance.now() when that answer was asked for: the list ages from it here
+  rosterReadFailed: null, // why the last /api/roster read got no list, until one does
   rosterOffered: [],     // the riders offered now: none once the list is past its age
   riderLost: false,      // the rider chosen here is no longer in the list
   ecg: [],               // numbers, with nulls marking a discontinuity
@@ -3823,9 +3824,22 @@ function durationSeconds() {
   list no longer holds is taken out of the choice, and the page says so.
 */
 function loadRoster() {
-  return api("/api/roster").then(renderRoster).catch(function (error) {
-    problem(el("roster-note"), error);
-  });
+  // Aged from the request, not the answer: an answer slow to come never lengthens the offer.
+  var asked = performance.now();
+  return api("/api/roster")
+    .then(function (roster) {
+      state.rosterReadFailed = null;
+      renderRoster(roster, asked);
+    })
+    .catch(function (error) {
+      // Kept until a list comes: the refresh every 500 ms must not wipe it.
+      state.rosterReadFailed = error && error.message ? error.message : String(error);
+      if (state.roster) {
+        showRoster();
+      } else {
+        problem(el("roster-note"), state.rosterReadFailed);
+      }
+    });
 }
 
 function rosterAge(seconds) {
@@ -3835,13 +3849,13 @@ function rosterAge(seconds) {
   return seconds < 120 ? Math.round(seconds) + " s" : Math.floor(seconds / 60) + " min";
 }
 
-function renderRoster(roster) {
+function renderRoster(roster, asked) {
   state.roster = roster;
-  state.rosterAt = performance.now();
+  state.rosterAt = asked === undefined ? performance.now() : asked;
   showRoster();
 }
 
-/* How old the list is now, on this page's clock: its age when it came, plus since. */
+/* How old the list is now, on this page's clock: its age when asked for, plus since. */
 function rosterAgeNow(roster) {
   return roster.age_s + (performance.now() - state.rosterAt) / 1000;
 }
@@ -3887,10 +3901,12 @@ function showRoster() {
   }
   select.value = kept;
   var note = el("roster-note");
-  if (roster.state !== "current") {
-    problem(note, roster.detail);
-  } else if (aged) {
+  if (aged) {
     problem(note, rosterStaleWords(rosterAgeNow(roster), roster.max_age_s));
+  } else if (state.rosterReadFailed !== null) {
+    problem(note, state.rosterReadFailed);
+  } else if (roster.state !== "current") {
+    problem(note, roster.detail);
   } else if (roster.problem) {
     problem(
       note,

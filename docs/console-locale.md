@@ -1562,9 +1562,14 @@ temps) ne vieillit ni ne rajeunit la liste. Au-delà de 900 s, la phrase donne c
 la seconde, arrondi à la seconde supérieure (`recue il y a 15 min 1 s`) : une liste
 périmée ne se lit jamais « 15 min » ou moins. La page relit la liste toutes les 10 s
 et, entre deux réponses, la vieillit sur sa propre horloge à partir de l'âge reçu
-(`age_s`) : l'âge affiché avance, et dès que la liste passe `max_age_s` (900 s) la page
-ne propose plus personne et donne la même phrase, sans attendre la réponse suivante.
-La console refuse un tel départ à l'instant même, quoi que la page montre. L'âge du
+(`age_s`), compté depuis l'envoi de sa demande : une réponse lente à venir n'allonge
+pas l'offre. L'âge affiché avance, et dès que la liste passe `max_age_s` (900 s) la
+page ne propose plus personne et donne la même phrase, sans attendre la réponse
+suivante. Une lecture de `/api/roster` sans réponse reste dite sous la liste, en
+rouge, jusqu'à la réponse suivante. Limite : l'horloge de la page s'arrête pendant la
+veille de l'appareil qui l'affiche ; au réveil, elle compte la liste plus jeune
+qu'elle n'est jusqu'à la réponse suivante (10 s au plus). La console refuse un départ
+sur une liste périmée à l'instant même, quoi que la page montre. L'âge du
 **passager**, lui, se compte sur
 l'heure murale (année de naissance) : sur le Pi, une horloge que personne ne tient
 refuse toute personne à bord ; sur le Mac du banc, qui ne juge pas son horloge
