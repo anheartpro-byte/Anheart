@@ -11,7 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import replace
 from http import HTTPStatus
 from pathlib import Path
@@ -26,12 +26,24 @@ from src.cloud_sync import CloudSync
 from src.contract import CONTRACT_VERSION, SERVER_VERSION_FIELD
 from src.health import HealthWatch
 from src.health_system import Celsius, SystemHealth
-from src.local_panel import LocalPanel, build_panel, describe_start_refusal, record_preflight
+from src.local_panel import (
+    LocalPanel,
+    build_panel,
+    describe_start_refusal,
+    record_preflight,
+    record_source,
+)
 from src.motor.drive import DriveFault
 from src.record.logbook import ACTIVE as LOGBOOK_ACTIVE
 from src.record.logbook import DIRECTORY as LOGBOOK
 from src.record.session import operator_alias
-from src.record_uplink import LOST_STOP, NOT_LINKED, NOTHING_LOST, SESSION_RUNS
+from src.record_uplink import (
+    LOST_STOP,
+    NOT_LINKED,
+    NOTHING_LOST,
+    RELEASED_BEFORE,
+    SESSION_RUNS,
+)
 from src.result import Err, Ok, Result
 from src.sim.bitalino import SimulatedBitalinoClient
 from src.training.preflight import (
@@ -582,7 +594,10 @@ async def test_the_panel_notes_an_acknowledgement_in_the_logbook_by_alias(
     assert journal is not None
     try:
 
-        async def released(_self: CloudSync) -> Result[tuple[str, ...], str]:
+        async def released(
+            _self: CloudSync, noted: Callable[[str], None]
+        ) -> Result[tuple[str, ...], str]:
+            noted("lost_stops_acknowledged: fin refusee, k17remote")
             return Ok(("fin refusee, k17remote",))
 
         monkeypatch.setattr(CloudSync, "acknowledge_lost_stops", released)
@@ -596,11 +611,31 @@ async def test_the_panel_notes_an_acknowledgement_in_the_logbook_by_alias(
         assert line["detail"] == "lost_stops_acknowledged: fin refusee, k17remote"
         assert line["actor"] == operator_alias("Mme\nDurand")
 
-        async def refused(_self: CloudSync) -> Result[tuple[str, ...], str]:
+        async def refused(
+            _self: CloudSync, _noted: Callable[[str], None]
+        ) -> Result[tuple[str, ...], str]:
             return Err(SESSION_RUNS)
 
         monkeypatch.setattr(CloudSync, "acknowledge_lost_stops", refused)
         assert await r.panel.acknowledge_lost_stops(OPERATOR) == Err(SESSION_RUNS)
+    finally:
+        await r.panel.close()
+
+
+async def test_what_the_sending_says_goes_to_the_logbook_whatever_runs(tmp_path: Path) -> None:
+    """ANH-145: an acknowledgement an earlier run made, which the register tells the next
+    start, is a line of the logbook, written by the system: never a session's record."""
+    r = rig(tmp_path, record_root=tmp_path / "records", preflight=True)
+    journal = r.journal
+    assert journal is not None
+    try:
+        record_source(journal, r.clock).logbook(RELEASED_BEFORE + "fin refusee, k1")
+        journal.drain()
+        logbook = (journal.root / LOGBOOK / LOGBOOK_ACTIVE).read_text(encoding="utf-8")
+        line = cast("Mapping[str, object]", json.loads(logbook.splitlines()[-1]))
+        assert line["detail"] == RELEASED_BEFORE + "fin refusee, k1"
+        assert line["kind"] == "warning"
+        assert line["actor"] == "system"
     finally:
         await r.panel.close()
 
@@ -611,7 +646,10 @@ async def test_a_console_that_records_nothing_logs_an_acknowledgement_only(
     rig_ = linked(tmp_path, preflight=True)
     try:
 
-        async def released(_self: CloudSync) -> Result[tuple[str, ...], str]:
+        async def released(
+            _self: CloudSync, noted: Callable[[str], None]
+        ) -> Result[tuple[str, ...], str]:
+            noted("lost_stops_acknowledged: fin abandonnee, k1")
             return Ok(("fin abandonnee, k1",))
 
         monkeypatch.setattr(CloudSync, "acknowledge_lost_stops", released)

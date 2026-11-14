@@ -1253,7 +1253,7 @@ suivent sans changement.
 | 6 | `clock` | bloquant | avertissement | horloge synchronisée, erreur garantie (`maxerror` du noyau) sous 5 s. Une horloge temps réel seule ne suffit pas. Sur un système qui ne peut pas être interrogé (le Mac du banc), l'erreur est inconnue : rouge avec une personne à bord, orange au banc. Avec le variateur simulé (`MOTOR_BACKEND=sim` : aucun moteur réel, personne dans une capsule simulée), cette erreur inconnue est orange même avec une personne à bord ; une horloge que personne ne tient y reste rouge |
 | 7 | `contract` | bloquant | bloquant | aucun refus de contrat du tableau de bord ; console non reliée : sans objet ; tableau de bord muet : orange, non vérifié |
 | 8 | `medical` | bloquant | sans objet | paramètres médicaux signés. La version attendue n'est pas jugée (aucune référence du serveur) |
-| 9 | `incidents` | bloquant | avertissement | aucun incident grave ouvert ou analysé annoncé par le dernier poll (`incidents_open_high`, contrat 1.10, ANH-145, lu sur le lien lui-même), **et** ce compte tient toutes les séances mal terminées : aucune séance de cette exécution terminée sur `emergency_stop`, `safety_verdict` ou `tick_exception` dont le tableau de bord n'a pas acquitté la fin, aucun enregistrement d'une exécution précédente dont il n'a pas acquitté la fin (elle n'est connue qu'une fois lu), et un poll demandé après le dernier acquittement d'une telle fin, qui a rendu un compte lisible (`CloudSync.unreported_stop`) ; une séance que l'envoi abandonne (déclaration ou fin refusée pour de bon, fin abandonnée) est écrite à côté des enregistrements (`.sync-lost-stops.json`) et retient, redémarrage compris (un enregistrement illisible, toujours dû, est listé et retient de nouveau à chaque démarrage), jusqu'à l'acquittement nommé de l'opérateur, page Pré-vol, qui ne lève que ces séances perdues ([console-locale.md](console-locale.md#acquitter-une-séance-perdue-anh-145)) ; une fin que le lien n'a pas vue compte comme une fin inconnue. Un compte non nul ou une telle séance ferme tout départ avec une personne à bord, et n'est qu'un avertissement au banc (EX-4 d'ANH-145) ; sans compte annoncé (serveur antérieur, aucun poll reçu) et sans telle séance, orange « non annonces », console non reliée comprise |
+| 9 | `incidents` | bloquant | avertissement | aucun incident grave ouvert ou analysé annoncé par le dernier poll (`incidents_open_high`, contrat 1.10, ANH-145, lu sur le lien lui-même), **et** ce compte tient toutes les séances mal terminées : aucune séance de cette exécution terminée sur `emergency_stop`, `safety_verdict` ou `tick_exception` dont le tableau de bord n'a pas acquitté la fin, aucun enregistrement d'une exécution précédente dont il n'a pas acquitté la fin (elle n'est connue qu'une fois lu), et un poll demandé après le dernier acquittement d'une telle fin, qui a rendu un compte lisible (`CloudSync.unreported_stop`) ; une séance que l'envoi abandonne (déclaration ou fin refusée pour de bon), et la fin d'une séance sans enregistrement que le redémarrage oublierait, sont écrites à côté des enregistrements (`.sync-lost-stops.json`) et retiennent, redémarrage compris (un enregistrement illisible, toujours dû, est listé et retient de nouveau à chaque démarrage), jusqu'à l'acquittement nommé de l'opérateur, page Pré-vol, qui ne lève que ces séances perdues ([console-locale.md](console-locale.md#acquitter-une-séance-perdue-anh-145)) ; une fin que le lien n'a pas vue compte comme une fin inconnue. Un compte non nul ou une telle séance ferme tout départ avec une personne à bord, et n'est qu'un avertissement au banc (EX-4 d'ANH-145) ; sans compte annoncé (serveur antérieur, aucun poll reçu) et sans telle séance, orange « non annonces », console non reliée comprise |
 | 10 | `bitalino` | bloquant | avertissement | BITalino connecté, aucune lecture de sa batterie attendue ni en cours, batterie lue à cette passe au moins `BITALINO_MIN_BATTERY_PCT` (30 % par défaut), lue il y a moins de 30 min |
 | 11 | `ecg` | bloquant | sans objet | qualité ECG `good` sans interruption depuis 30 s |
 | 12 | `temperature` | avertissement | avertissement | Pi sous 70 °C, mesuré par le pré-vol à chaque pas (zone thermique du noyau), console reliée ou non ; non mesurée (hors Linux) : orange |
@@ -3302,12 +3302,39 @@ lequel la même requête serait encore refusée.
 - Face à un Convex antérieur au contrat 1.1 : les événements restent dus, un
   lot renvoyé peut être stocké deux fois, et la séance est datée par la
   console ([deploiement.md](deploiement.md#36-ce-que-demande-la-synchronisation-par-relecture-du-journal)).
-- La fin d'un lancement refusé n'est jamais abandonnée : elle passe en tête,
-  et une séance qui arrive attend derrière. Une fin de séance pas encore liée
-  à son enregistrement, déplacée par celle d'un lancement refusé, est abandonnée
-  en mémoire avec un avertissement ; son enregistrement reste sur le disque.
-  Cas connu : une séance locale démarrée et finie pendant les quelques secondes
-  d'une demande `training/start`, point de suivi hors de cette livraison.
+- Aucune fin n'est abandonnée pour une autre. Celle d'un lancement refusé
+  passe en tête, et une séance qui arrive attend derrière. Une fin de séance
+  pas encore liée à son enregistrement, déplacée par une autre fin, attend
+  derrière elle en mémoire (ANH-144), et retient comme une fin pas encore
+  reçue. Une telle fin qui a pu être un arrêt (ou de fin inconnue), déplacée
+  ou non, est aussi écrite au registre (`.sync-lost-stops.json`, membre
+  `pending`, sous le nom de l'exécution de la console qui l'attend, `run`)
+  dès que le pas du lien voit sa fin, avant tout échange avec le tableau de
+  bord (battement de cœur, programmes, poll, qui peuvent attendre chacun 3 s)
+  et avant que sa fin parte. Le démarrage suivant la lit comme une séance
+  perdue (`fin perdue au redemarrage`), à acquitter. Une console arrêtée entre
+  la fin et ce pas du lien (une seconde environ) ne l'a pas écrite, et rien ne
+  la retient après le redémarrage ; de même si le registre ne s'écrit pas
+  (disque plein ou en panne, dit une fois au journal du système) : la ligne
+  n'est alors qu'en mémoire. Elle en sort quand le
+  tableau de bord a sa fin, quand il la refuse pour de bon (perte `fin
+  refusee`) ou refuse pour de bon la déclaration de la séance (perte
+  `declaration refusee`), ou quand la séance est liée à son enregistrement,
+  que le démarrage suivant liste.
+- Retour à une image antérieure, deux cas. Une image qui a déjà le registre
+  d'ANH-145 sans ces suites (`330bbbd` par exemple) refuse un registre qui
+  porte `released`, `pending` ou `run` (membres inconnus) et le lit comme
+  illisible : elle retient une personne à bord (`registre des seances perdues
+  illisible`) jusqu'à l'acquittement nommé de l'opérateur, page Pré-vol. Le
+  côté sûr, mais un acquittement à prévoir. Une image d'avant ANH-145, comme
+  l'image 1.9 du banc `d222a0d`, ne lit jamais `.sync-lost-stops.json` :
+  **revenir à `d222a0d` supprime toute retenue pour une séance perdue**,
+  aucune n'est plus retenue après le retour arrière.
+- L'annonce, au démarrage, de ce qu'un acquittement d'avant a levé
+  (`lost_stops_released_before_start`) passe par la file du journal : un fil
+  du journal mort ou une file pleine la perd du journal de bord, et seul le
+  journal du système la garde. Le registre est vidé de ces levées après
+  l'annonce, qu'elle ait atteint le journal de bord ou non.
 
 Vérifié par les tests automatiques, en simulation et en temps simulé
 (`tests/test_record_cursor.py`, `test_record_upload.py`,

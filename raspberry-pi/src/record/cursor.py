@@ -184,6 +184,18 @@ class LostStops:
 
     schema_version: Literal[1] = 1
     lost: tuple[str, ...] = ()
+    released: tuple[str, ...] = ()
+    """The losses the operator acknowledged since the console last started: the write that
+    releases them carries them, so that a write which lands late, or just before a restart,
+    is still told in the logbook by the next start, which then empties this."""
+
+    pending: tuple[str, ...] = ()
+    """The ends of sessions without a record, of the run ``run``, that may have been a stop and
+    wait in memory for the dashboard: each as the loss it becomes if that run stops first.
+    Any other run that reads them holds them as losses."""
+
+    run: str = ""
+    """Which run of the console wrote ``pending``."""
 
 
 _LOST_STOPS: Final[TypeAdapter[LostStops]] = TypeAdapter(LostStops)
@@ -248,24 +260,31 @@ def store_baseline(root: Path, baseline: Baseline) -> Result[None, CursorError]:
     return _write(root / BASELINE_NAME, _BASELINE.dump_json(baseline))
 
 
-def load_lost_stops(root: Path) -> tuple[str, ...]:
-    """The losses ``root`` holds; none when there is no register. A register that cannot be
-    read is one loss (:data:`LOST_STOPS_UNREADABLE`): it may have held some. Never raises."""
+def load_lost_stops(root: Path) -> LostStops:
+    """The register ``root`` holds; an empty one when there is none. A register that cannot
+    be read is one loss (:data:`LOST_STOPS_UNREADABLE`): it may have held some. Never raises."""
     try:
         raw = (root / LOST_STOPS_NAME).read_bytes()
     except FileNotFoundError:
-        return ()
+        return LostStops()
     except OSError:
-        return (LOST_STOPS_UNREADABLE,)
+        return LostStops(lost=(LOST_STOPS_UNREADABLE,))
     try:
-        return _LOST_STOPS.validate_json(raw).lost
+        return _LOST_STOPS.validate_json(raw)
     except ValueError:
-        return (LOST_STOPS_UNREADABLE,)
+        return LostStops(lost=(LOST_STOPS_UNREADABLE,))
 
 
-def store_lost_stops(root: Path, lost: tuple[str, ...]) -> Result[None, CursorError]:
-    """Write the losses of ``root``, as a cursor is written. Blocking; never raises."""
-    return _write(root / LOST_STOPS_NAME, _LOST_STOPS.dump_json(LostStops(lost=lost)))
+def store_lost_stops(
+    root: Path,
+    lost: tuple[str, ...],
+    released: tuple[str, ...],
+    pending: tuple[str, ...] = (),
+    run: str = "",
+) -> Result[None, CursorError]:
+    """Write the register of ``root``, as a cursor is written. Blocking; never raises."""
+    register = LostStops(lost=lost, released=released, pending=pending, run=run)
+    return _write(root / LOST_STOPS_NAME, _LOST_STOPS.dump_json(register))
 
 
 def _write(target: Path, document: bytes) -> Result[None, CursorError]:

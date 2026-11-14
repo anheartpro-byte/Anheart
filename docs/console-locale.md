@@ -2661,7 +2661,7 @@ Les codes d'un refus immédiat (`code` du corps 409 ou 412) : `start_pending`,
 | POST | `/api/presence` | - | signal de présence de l'accompagnant connecté (règle `attendant_absent`) ; ne relance pas le délai sans action de la session ; la page ne l'envoie que connectée | 200 `{"at": …}` ; 401 `operator_required` |
 | GET | `/api/preflight` | - | le pré-vol tel que la console le juge maintenant, au banc et avec une personne à bord ([section 17](#17-page--pre-vol--anh-142)) | 200 `{running, last, battery_pct, bench, occupied, unreported_stop, acknowledgeable}` (`unreported_stop` : pourquoi une personne à bord est retenue pour une séance que le tableau de bord ne compte pas, ou `null` ; `acknowledgeable` : cette retenue est une séance perdue, la seule que l'opérateur peut acquitter, ANH-145) ; `null` sur une console sans pré-vol |
 | POST | `/api/preflight/run` | - | « Relancer » : une nouvelle passe, la batterie du BITalino relue au repos ; ne lance et ne refuse rien | 202, le même objet ; 409 sur une console sans pré-vol |
-| POST | `/api/preflight/acknowledge` | - | « Acquitter une seance perdue » (ANH-145) : l'opérateur connecté lève les seules séances perdues (refusées pour de bon, illisibles, abandonnées), écrites au journal de bord ; ne lance rien | 200, l'objet du pré-vol ; 401 `operator_required` ; 409 pendant une séance, quand aucune séance n'est perdue (une retenue qui se lèvera d'elle-même reste), avant la liste des enregistrements, ou console non reliée |
+| POST | `/api/preflight/acknowledge` | - | « Acquitter une seance perdue » (ANH-145) : l'opérateur connecté lève les seules séances perdues (refusées pour de bon, illisibles), écrites au journal de bord ; ne lance rien | 200, l'objet du pré-vol ; 401 `operator_required` ; 409 pendant une séance, quand aucune séance n'est perdue (une retenue qui se lèvera d'elle-même reste), avant la liste des enregistrements, ou console non reliée |
 | POST | `/api/service/restore` | - | remet en service une console hors service, par l'opérateur connecté ; ne lance rien | 200 `{out_of_service, unclean_starts, threshold, window_s, unclean_stop, open_record, persisted}` (`persisted: false` : vaut jusqu'au prochain redémarrage seulement) ; 401 `operator_required` ; 409 (console en service, ou console qui ne garde pas d'état de redémarrage) |
 
 ### Enregistrements
@@ -2951,35 +2951,63 @@ tableau de bord en échec : `refusee par la machine : pre-vol : <raison>`.
 
 Tant qu'une personne à bord est retenue pour une séance mal terminée que le
 tableau de bord ne compte pas encore, la carte le dit sous `Relancer`
-(`Personne a bord retenue : <raison>`) ; pour une séance perdue seulement,
+(`Personne a bord retenue : <raison>`, qui nomme toutes les séances perdues, séparées par ` ; `, puisque l'acquittement les lève toutes) ; pour une séance perdue seulement,
 elle propose `Acquitter une seance perdue` (`POST /api/preflight/acknowledge`,
 au nom de l'opérateur).
 
 **Ce que l'acquittement couvre : les seules séances perdues**, celles que le
 tableau de bord ne recevra jamais et qui ont pu finir sur un arrêt (ou dont la
 fin est inconnue) : une déclaration ou une fin qu'il a refusée pour de bon, un
-enregistrement illisible, la fin d'une séance sans enregistrement abandonnée
-pour la suivante (`seance mal terminee ou de fin inconnue que le tableau de
-bord ne recevra pas (...) : a acquitter a la console, page Pre-vol`). Les
-refus et la fin abandonnée, qu'aucun démarrage ne renverra, sont écrits à côté
+enregistrement illisible (`seance mal terminee ou de fin inconnue que le
+tableau de bord ne recevra pas (...) : a acquitter a la console, page
+Pre-vol`). La fin d'une séance sans enregistrement n'est jamais abandonnée
+pour la suivante : elle attend derrière, en mémoire, et retient comme une fin
+pas encore reçue (ANH-144). Si elle a pu finir sur un arrêt (ou de fin
+inconnue), elle est aussi écrite au registre dès que le pas du lien voit sa
+fin (une seconde environ), avant tout échange avec le tableau de bord et
+avant que sa fin parte : une console qui s'arrête après ce pas et avant de
+l'avoir envoyée la retrouve au démarrage suivant
+comme une séance perdue (`fin perdue au redemarrage`), à acquitter. Cette
+ligne disparaît quand le tableau de bord a sa fin, quand il la refuse pour de
+bon (elle devient la perte `fin refusee`), quand il refuse pour de bon la
+déclaration de la séance (perte `declaration refusee`), ou quand la séance
+est liée à son enregistrement, que le démarrage suivant liste. Les refus, qu'aucun démarrage ne renverra, sont
+écrits à côté
 des enregistrements (`.sync-lost-stops.json`, comme un curseur) et
 **retiennent encore après un redémarrage de la console**, jusqu'à
 l'acquittement ; le curseur qui clôt une telle séance n'est écrit qu'une
 fois elle écrite au registre (sinon le démarrage suivant la renvoie, et elle
 est perdue de nouveau, une seule fois). Une console qui n'enregistre rien les
-garde en mémoire seulement. Reste en mémoire seulement, et oubliée par un
-redémarrage à cet instant, la perte d'une séance sans enregistrement, qui n'a
-pas de curseur à retenir : avant la première liste des enregistrements d'une
-exécution précédente (le registre de celle-ci n'est pas écrit avant d'être
-lu, pour ne pas l'écraser), et, pour une fin abandonnée, jusqu'au pas suivant
-(une seconde environ). Un enregistrement illisible reste dû sur le disque : l'acquittement
+garde en mémoire seulement. Une perte arrivée avant la première liste des
+enregistrements d'une exécution précédente est ajoutée au registre de
+celle-ci, jamais écrite par-dessus. Reste en mémoire seulement jusqu'au pas
+suivant de l'envoi (une seconde environ), et oubliée par un redémarrage à cet
+instant, ce qui d'une séance sans enregistrement n'a pas de curseur à
+retenir : la perte d'une déclaration refusée de la séance en cours, et la fin
+qui a pu être un arrêt, avant d'être écrite au registre. Un enregistrement illisible reste dû sur le disque : l'acquittement
 le lève pour cette exécution seulement, en mémoire, et le démarrage suivant le
 liste et le retient de nouveau, jusqu'à ce qu'il soit lu et envoyé ou
 acquitté encore. L'acquittement efface ces séances, celles affichées quand il
 est demandé et elles seules : une séance perdue pendant qu'il s'écrit retient
-encore. Une ligne `lost_stops_acknowledged`
-est écrite au journal de bord (`logbook/events.jsonl`), avec l'alias de
-l'opérateur et ce qui a été levé ; le nom va aussi au journal du système.
+encore. Le journal de bord (`logbook/events.jsonl`) en garde, avec l'alias
+de l'opérateur, ces lignes, chacune avec les séances concernées :
+
+* `lost_stops_acknowledgement_requested` : la demande, écrite dès la
+  décision et avant le registre. Elle ne dit pas encore que les séances sont
+  levées ;
+* `lost_stops_acknowledged` : la levée, une fois le registre écrit (ou tout
+  de suite, pour une console qui n'enregistre rien ou un enregistrement
+  illisible, levé en mémoire seulement) ;
+* `lost_stops_unwritten` : le refus, quand le registre ne s'écrit pas. Rien
+  n'est levé, sauf si l'écriture arrive après son attente.
+
+Une demande que ne suit aucune des deux autres a été coupée par un arrêt de
+la console. Le registre écrit par l'acquittement garde ce qu'il a levé : le
+démarrage suivant écrit au journal de bord, séance ouverte ou non,
+`lost_stops_released_before_start` avec ces séances (ligne du système), puis
+l'efface. Une écriture arrivée après son attente, ou juste avant un
+redémarrage, ne lève donc jamais rien que le journal de bord ne dise. Le nom
+va aussi au journal du système.
 
 **Ce qu'il ne couvre pas**, refusé en 409 avec la raison : une retenue qui se
 lèvera d'elle-même quand le lien aura livré la séance (une fin pas encore
