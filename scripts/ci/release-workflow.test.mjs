@@ -147,6 +147,8 @@ const SITE = "Vérifier que le site sert le commit et la version de ce commit";
 const SIMULATION = "Vérifier que la simulation sert le commit et la page de ce commit";
 const MACHINES = "Dire la version du Pi et comment mettre une machine à jour à la main";
 const CONSOLE_UPDATE_TIME = "entre l'étape 3 (les tags sont posés) et l'approbation de l'étape 4 (Convex)";
+/** The same time, where it opens a cell of the table of 3.3: with its capital. */
+const CONSOLE_UPDATE_ROW = CONSOLE_UPDATE_TIME.charAt(0).toUpperCase() + CONSOLE_UPDATE_TIME.slice(1);
 const FIRST_CONTRACT_UPDATE = `- Premier déploiement d'un Convex qui exige le contrat : les consoles d'abord, ${CONSOLE_UPDATE_TIME}, depuis le commit qui vient d'être tagué ; Convex ensuite.`;
 const MAJOR_TRANSITION = "- Entre deux majeures versionnées : une release dont Convex sert les deux majeures d'abord (ordre de la pipeline), puis les consoles, puis une release qui retire l'ancienne majeure quand plus aucune console en service ne la parle.";
 
@@ -1444,7 +1446,7 @@ test("S-2 the three contract transitions and the console update time agree in th
     const preparation = production.split("\n").find((line) => line.startsWith("| Avant de lancer la pipeline pour de bon |"));
     assert.ok(preparation, "the other preparations must remain");
     assert.doesNotMatch(preparation, /consoles/i);
-    const timing = production.split("\n").find((line) => line.startsWith(`| ${CONSOLE_UPDATE_TIME} |`));
+    const timing = production.split("\n").find((line) => line.startsWith(`| ${CONSOLE_UPDATE_ROW} |`));
     assert.ok(timing, "3.3 must use the exact update time");
     assert.match(timing, /Pour le premier déploiement d'un Convex qui exige le contrat/);
     assert.match(timing, /mettre les consoles en service à jour depuis le commit qui vient d'être tagué, puis approuver Convex/);
