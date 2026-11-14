@@ -588,13 +588,40 @@ def test_a_process_whose_coverage_data_is_unreadable_fails_the_gate(project: Pat
     assert "[gate] TESTS FAILED, 1 reason(s):" in result.stdout
 
 
+DIFFERING_IDS: Final[str] = (
+    WHICH_PROCESS
+    + "import pytest\n\n\n"
+    + 'def named(value: int) -> str:\n    return f"{value}-{SHARE}"\n\n\n'
+    + '@pytest.mark.parametrize("build", [1, 2], ids=named)\n'
+    + "def test_built(build: int) -> None:\n    assert build\n"
+)
+"""A test module whose ids differ between the two processes, by the share each is given.
+
+Never by an object's address (``ids=str`` on two lambdas did): two processes
+can place a lambda at the same address, and then the ids agree by chance."""
+
+
+def collected_ids(share: str, monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """The ids :data:`DIFFERING_IDS` gives in the process handed ``share``."""
+    monkeypatch.setattr(sys, "argv", ["pytest", f"--pi-gate-share={share}"])
+    namespace: dict[str, object] = {}
+    exec(DIFFERING_IDS, namespace)  # noqa: S102  # our own fixed source, as the runner would import it
+    named = cast(Callable[[int], str], namespace["named"])
+    return [named(value) for value in (1, 2)]
+
+
+def test_the_ids_that_differ_do_so_by_process_never_by_chance(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The same in one process however often it runs, different from the other's, always."""
+    first = collected_ids("0/2", monkeypatch)
+    assert first == ["1-0/2", "2-0/2"]
+    assert collected_ids("0/2", monkeypatch) == first
+    assert collected_ids("1/2", monkeypatch) == ["1-1/2", "2-1/2"]
+
+
 def test_ids_that_differ_between_processes_fail_the_gate(project: Path) -> None:
-    (project / "tests/test_ids.py").write_text(
-        "import pytest\n\n\n"
-        '@pytest.mark.parametrize("build", [lambda: 1, lambda: 2], ids=str)\n'
-        "def test_built(build) -> None:\n    assert build()\n",
-        encoding="utf-8",
-    )
+    (project / "tests/test_ids.py").write_text(DIFFERING_IDS, encoding="utf-8")
     result = run_gate(project)
     assert result.returncode == 1
     assert "process 1 did not collect the same tests as process 0" in result.stdout
