@@ -926,6 +926,36 @@ async def test_a_batch_on_its_way_when_a_session_is_armed_does_not_hold_its_firs
     assert len(link.sent) == 2
 
 
+async def test_the_reader_of_a_session_set_aside_for_the_next_finds_its_identifier(
+    tmp_path: Path,
+) -> None:
+    """ANH-146: never declared before another session ended, it is read again from its
+    record, as another object, and declared then: the rider's feedback, which reads the
+    identifier through the reader taken while it ran, finds it there."""
+    b = bench(tmp_path)
+    b.link.answer(LOCAL_PATH, DOWN)
+    b.uplink.begin(armed(b.clock))
+    first = recording(tmp_path, b.clock, "ref-first")
+    b.disk.current = first.path
+    reader = b.uplink.session_id_reader()
+    assert reader is not None
+    await b.run(3)
+    b.uplink.finished(ENDED)
+    first.close("operator_stop", stop=None)
+    b.uplink.begin(armed(b.clock))
+    second = recording(tmp_path, b.clock, "ref-second")
+    b.disk.current = second.path
+    await b.run(3)
+    b.uplink.finished(ENDED)
+    second.close("operator_stop", stop=None)
+    b.disk.current = None
+    assert reader() is None, "not declared yet"
+
+    del b.link.answers[LOCAL_PATH]
+    await b.run(int(RETRY_PERIOD) * 3)
+    assert reader() == b.link.declared["ref-first"]
+
+
 async def test_a_stop_forwarded_is_kept_with_its_session_and_gone_with_it(tmp_path: Path) -> None:
     """It neither hides a stop asked for in the next session nor stands for one."""
     b = bench(tmp_path, recording=False)

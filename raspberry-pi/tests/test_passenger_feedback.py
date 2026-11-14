@@ -458,19 +458,25 @@ async def test_p5_the_session_s_identifier_learned_after_the_entry_lets_it_go() 
 
 
 @pytest.mark.parametrize(
-    ("status", "code"),
+    ("status", "code", "final"),
     [
-        (400, "feedback_window_closed"),
-        (400, "feedback_not_eligible"),
-        (404, "session_not_found"),
-        (400, "invalid_request"),
+        (400, "feedback_window_closed", False),
+        (400, "feedback_not_eligible", False),
+        (404, "session_not_found", False),
+        (400, "invalid_request", False),
+        (404, "session_not_found", True),
+        (413, "payload_too_large", True),
+        (404, "machine_not_found", True),
+        (400, "session_not_pending", True),
     ],
 )
 async def test_p5_a_final_refusal_is_said_with_its_code_and_never_sent_again(
-    status: int, code: str
+    status: int, code: str, final: bool
 ) -> None:
+    """Final when the link says so (the contract's final codes, ANH-146), and for the
+    codes of this route even when it does not."""
     ticking, store = entered()
-    link = Link(answers=[Refusal("refused", final=True, status=status, code=ErrorCode(code))])
+    link = Link(answers=[Refusal("refused", final=final, status=status, code=ErrorCode(code))])
     await store.step(link)
     current = offered(store)
     assert (current.delivery, current.code, current.can_submit) == (
@@ -489,10 +495,9 @@ async def test_p5_a_final_refusal_is_said_with_its_code_and_never_sent_again(
     [
         Refusal("failed", final=False, status=400, code=ErrorCode("request_failed")),
         Refusal("refused", final=False, status=400, code=None),
-        Refusal("refused", final=True, status=403, code=None),
-        Refusal("refused", final=True, status=400, code=ErrorCode("payload_too_large")),
+        Refusal("refused", final=False, status=409, code=ErrorCode("rider_busy")),
     ],
-    ids=["request_failed", "no_code", "no_code_final", "other_code"],
+    ids=["request_failed", "no_code", "other_code"],
 )
 async def test_p5_any_other_refusal_waits_and_is_tried_again_then_taken(
     refusal: Refusal,
@@ -502,9 +507,15 @@ async def test_p5_any_other_refusal_waits_and_is_tried_again_then_taken(
     await store.step(link)
     current = offered(store)
     assert (current.delivery, current.code, current.can_submit) == (
-        Delivery.WAITING_LINK,
-        None,
+        Delivery.REFUSED_FOR_NOW,
+        refusal.code,
         True,
+    )
+    # The card says what happens, and why: no word of a link that works.
+    said = describe_delivery(current.delivery, current.code)
+    assert said == (
+        "Refusé pour l'instant par le tableau de bord : nouvel essai dans 15 s "
+        f"({'sans code' if refusal.code is None else refusal.code})"
     )
     await store.step(link)
     assert len(link.sent) == 1, "nothing again before the retry period"

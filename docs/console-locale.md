@@ -1500,20 +1500,21 @@ le rangerait avec les événements de la séance.
 | État | Ce que la console fait |
 |---|---|
 | (vide) | rien de saisi encore |
-| En attente du tableau de bord | lien coupé, version du serveur pas encore connue, ou refus qui peut être du moment (`request_failed`, refus sans code ou avec un autre code) : nouvel essai 15 s après un échec |
+| En attente du tableau de bord | lien coupé, ou version du serveur pas encore connue : nouvel essai 15 s après un échec |
+| Refusé pour l'instant par le tableau de bord : nouvel essai dans 15 s (code) | refus qui peut être du moment (`request_failed`, refus sans code ou avec un code que le contrat ne dit pas définitif) : la ligne donne le code, sans valeur, et la console renvoie le retour 15 s plus tard |
 | En attente de la séance sur le tableau de bord | une séance démarrée à la machine n'a son identifiant qu'une fois déclarée : envoi dès qu'elle l'est |
 | Serveur trop ancien (contrat 1.7 requis) : non envoyé | rien n'est envoyé ; envoi si le serveur annonce 1.7 plus tard |
 | En attente de la fin de séance sur le serveur : nouvel essai | le tableau de bord ne prend un retour qu'une fois la fin de la séance reçue (`feedback_session_not_ended`), et la console n'envoie cette fin qu'après l'acquittement de ses points : nouvel essai 15 s plus tard, ce refus n'est pas définitif |
 | Envoyé au tableau de bord | fait, une seule fois ; **Fermer** ferme la carte |
-| Refusé par le tableau de bord (code) | refus définitif, pour ces quatre codes stables seulement : `feedback_not_eligible`, `feedback_window_closed`, `session_not_found`, `invalid_request` ; la saisie est effacée, la ligne ne dit que le code, sans valeur |
+| Refusé par le tableau de bord (code) | refus définitif : un code que le contrat dit définitif (`invalid_request`, `session_not_found`, `session_not_pending`, `machine_not_found`, `payload_too_large`, lus par le lien comme pour tout envoi), ou un des deux codes de cette route, `feedback_not_eligible` et `feedback_window_closed` ; la saisie est effacée, la ligne ne dit que le code, sans valeur |
 | Abandonné : plus de 24 h depuis la fin de la séance | la fenêtre du tableau de bord est fermée : la saisie est effacée |
 
 La console garde au plus huit retours en attente ; au-delà, le plus ancien est
 abandonné et la carte le compte (« retour(s) abandonné(s) : trop de retours en
-attente »). Limite connue : si une séance démarrée à la machine se termine sans
-avoir été déclarée (lien coupé pendant toute la séance), puis qu'une autre la
-suit avant le retour du lien, le retour de la première peut rester en attente
-de son identifiant jusqu'à l'abandon de 24 h.
+attente »). Une séance démarrée à la machine qui se termine sans avoir été
+déclarée (lien coupé pendant toute la séance), suivie d'une autre avant le
+retour du lien, est relue plus tard depuis son enregistrement et déclarée
+alors : son retour trouve son identifiant à ce moment (ANH-146).
 
 ### Le passager : la liste du tableau de bord (ANH-84)
 
