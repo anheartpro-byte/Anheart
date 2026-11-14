@@ -2149,9 +2149,15 @@ Passent avant ces listes et lancent tout :
 * `CHANGELOG.md`, où qu'il soit : c'est du Markdown, mais l'outillage de
   release et ses tests le lisent. Il lance tout tant qu'on ne sait pas quelle
   gate est seule à le lire ;
-* `docs/pi-image.md` : une page de documentation, mais
-  `raspberry-pi/tests/test_pi_install.py` compare son tableau de versions aux
-  fichiers qui figent ces versions.
+* les pages de `docs/` qu'ouvre un test Python (`PAGES_READ_BY_PI_TESTS`) :
+  `docs/pi-image.md`, dont `raspberry-pi/tests/test_pi_install.py` compare le
+  tableau de versions aux fichiers qui figent ces versions ;
+  `docs/raspberry-pi.md`, dont `test_drive_faults_complete.py` tient la table
+  du 6.1 au code ; et, avec elle, `docs/console-locale.md`,
+  `docs/guides/guide-console-locale.md` et `docs/client/manuel-operateur.md`,
+  que `test_link_state.py` lit pour les mots des états de la liaison. Un test
+  de `scripts/ci/gates-for-changes.test.mjs` relit les tests Python et échoue
+  si l'un ouvre une page de `docs/` que cette liste oublie.
 
 Lancent tout aussi : un fichier d'aucune sorte listée (un scénario JSON,
 `raspberry-pi/config/`, un Dockerfile, la CAO, `deploy/`, un fichier de
@@ -2244,8 +2250,9 @@ contrôles de la documentation :
   (`npm run test:lib -- lib/legacyModeReferences.test.ts`). C'est le seul
   test de cette sorte relevé le 8 octobre 2026 : les autres tests du site et
   de Convex ne lisent que leurs propres dossiers, ou `contracts/`, dont tout
-  changement lance toutes les gates ; côté Python, `test_pi_install.py` lit
-  `docs/pi-image.md` et `.github/`, qui les lancent toutes aussi.
+  changement lance toutes les gates ; côté Python, les pages de `docs/`
+  qu'ouvrent les tests (liste ci-dessus) et `.github/` les lancent toutes
+  aussi.
 
 `scripts/ci/ci-workflow.test.mjs` tient les deux : chaque fichier de test de
 `scripts/ci` est lancé par une étape, et une seule, d'un job obligatoire sans

@@ -342,6 +342,151 @@ def test_every_fault_is_described_in_french_and_categorised() -> None:
     assert DriveFault.NO_FAULT_STORED.category is FaultCategory.NONE
 
 
+DOCS: Final[Path] = Path(__file__).resolve().parents[2] / "docs"
+
+CATEGORY_WORDS: Final[Mapping[FaultCategory, str]] = {
+    FaultCategory.NONE: "aucun",
+    FaultCategory.COMMUNICATION: "communication",
+    FaultCategory.SUPPLY: "alimentation",
+    FaultCategory.MOTOR: "moteur",
+    FaultCategory.DRIVE_HARDWARE: "materiel variateur",
+    FaultCategory.THERMAL: "thermique",
+    FaultCategory.CONFIGURATION: "configuration",
+    FaultCategory.EXTERNAL: "externe",
+    FaultCategory.LOAD: "charge",
+    FaultCategory.FEEDBACK: "retour vitesse",
+    FaultCategory.SAFETY: "securite (STO)",
+    FaultCategory.INPUT: "entree analogique",
+    FaultCategory.BRAKE: "frein",
+    FaultCategory.UNIDENTIFIED: "non identifie",
+}
+"""How the table of section 6.1 of ``docs/raspberry-pi.md`` names each category."""
+
+
+PAGE: Final[str] = (DOCS / "raspberry-pi.md").read_text(encoding="utf-8")
+
+HEADER: Final[tuple[str, ...]] = (
+    "LFT",
+    "Mnemonique",
+    "Membre `DriveFault`",
+    "Categorie",
+    "Rearmable depuis la console",
+    "Signification (texte affiche)",
+)
+"""The cells of the header of the table of section 6.1."""
+
+
+def _section(page: str) -> str:
+    return page.split("### 6.1 La table", 1)[1].split("\n### ", 1)[0]
+
+
+def _is_separator(line: str) -> bool:
+    """A delimiter row: cells of ``-`` and ``:`` only (and spaces), outer pipes or not."""
+    cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+    return "|" in line and all(cell and set(cell) <= set("-:") and "-" in cell for cell in cells)
+
+
+def _documented_faults(page: str) -> list[tuple[str, ...]]:
+    """The rows of the table of section 6.1 of ``docs/raspberry-pi.md``, cell by cell.
+
+    The table is what Markdown makes of it: the line before its first delimiter
+    row, then every line down to the first blank one, a line without pipes
+    included. Each is read, however it is spaced or indented, and must be the
+    header, a separator (cells made only of ``-``, ``:`` and spaces, wherever it
+    stands), or a row of as many cells as the header between an opening and a
+    closing pipe. Any other fails: no row can be shown on the page and passed
+    over here.
+    """
+    lines = _section(page).splitlines()
+    start = next(index for index, line in enumerate(lines) if _is_separator(line)) - 1
+    end = next(
+        (index for index in range(start, len(lines)) if not lines[index].strip()), len(lines)
+    )
+    rows: list[tuple[str, ...]] = []
+    for line in lines[start:end]:
+        written = line.strip()
+        cells = tuple(cell.strip() for cell in written.split("|")[1:-1])
+        malformed = f"6.1 : ligne de la table mal formée : {line!r}"
+        assert written.startswith("|"), malformed
+        assert written.endswith("|"), malformed
+        assert len(cells) == len(HEADER), malformed
+        assert all(cells), malformed
+        if _is_separator(written):
+            continue
+        rows.append(cells)
+    assert rows[0] == HEADER, rows[0]
+    return rows[1:]
+
+
+def _held_to_the_code(page: str) -> None:
+    """The table of section 6.1 and the code agree, row by row and code by code."""
+    rows = _documented_faults(page)
+    codes = [code for code, *_ in rows]
+    assert codes == [*(str(int(code)) for code in sorted(LFT_FAULT_CODES)), "autre"]
+    for code, mnemonic, member, category, resettable, meaning in rows:
+        fault = DriveFault.UNKNOWN if code == "autre" else LFT_FAULT_CODES[RawRegister(int(code))]
+        assert (mnemonic, member, category, resettable, meaning) == (
+            f"`{fault.mnemonic}`",
+            f"`{fault.name}`",
+            CATEGORY_WORDS[fault.category],
+            "oui" if fault.resettable else "non",
+            fault.meaning,
+        ), f"LFT {code}"
+
+
+def test_each_code_keeps_the_category_and_the_words_the_documented_table_gives_it() -> None:
+    """Code by code, what the operator is told and how the fault is classed.
+
+    The table of section 6.1 is the documented account of every LFT code: its
+    mnemonic, its member, its category, whether the console may reset it, and
+    the exact words shown. Each row is held to the code, and the code to the
+    table: a code added, removed, reclassed or reworded on one side alone
+    fails here, whichever side it is.
+    """
+    assert set(CATEGORY_WORDS) == set(FaultCategory)
+    _held_to_the_code(PAGE)
+
+
+ROW_2: Final[str] = next(line for line in _section(PAGE).splitlines() if line.startswith("| 2 | "))
+"""The row of LFT 2 as the page writes it, to write it again otherwise."""
+
+RECLASSED_2: Final[str] = ROW_2.replace("| materiel variateur |", "| configuration |")
+
+
+@pytest.mark.parametrize(
+    "added",
+    [
+        pytest.param("|" + RECLASSED_2[2:-2].replace(" | ", "|") + "|", id="sans espaces"),
+        pytest.param(RECLASSED_2, id="bien formee"),
+        pytest.param("   " + RECLASSED_2, id="en retrait"),
+        pytest.param(RECLASSED_2[2:], id="sans barre initiale"),
+        pytest.param(RECLASSED_2[2:-2], id="sans barres"),
+        pytest.param(RECLASSED_2.rsplit(" | ", 1)[0] + " |", id="cinq cellules"),
+        pytest.param(RECLASSED_2[:-2], id="non fermee"),
+    ],
+)
+def test_a_second_row_for_a_code_fails_however_it_is_written(added: str) -> None:
+    """A contradictory second row of LFT 2, shown by the page, is never passed over."""
+    assert RECLASSED_2 != ROW_2
+    page = PAGE.replace(ROW_2, f"{ROW_2}\n{added}", 1)
+    with pytest.raises(AssertionError):
+        _held_to_the_code(page)
+
+
+def test_the_table_reads_the_same_spaced_as_a_formatter_writes_it() -> None:
+    """Separators found by their cells, not by their place, and cells padded with spaces."""
+    lines = _section(PAGE).splitlines()
+    table = [line for line in lines if line.startswith("|")]
+    padded = "\n".join(
+        "| " + " | ".join(cell.strip().ljust(12) for cell in line.split("|")[1:-1]) + " |"
+        for line in table
+    )
+    page = PAGE.replace("\n".join(table), padded.replace("|---:", "| ---:"), 1)
+    assert page != PAGE
+    assert "| ---:" in page
+    _held_to_the_code(page)
+
+
 def test_dangerous_and_unknown_faults_are_never_reset_from_the_console() -> None:
     by_mnemonic = {fault.mnemonic: fault for fault in DriveFault}
     for mnemonic in NEVER_RESET_FROM_THE_CONSOLE:

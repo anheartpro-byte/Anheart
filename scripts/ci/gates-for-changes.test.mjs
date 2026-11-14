@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { classify, decide } from "./gates-for-changes.mjs";
+import { classify, decide, PAGES_READ_BY_PI_TESTS } from "./gates-for-changes.mjs";
 
 const script = fileURLToPath(new URL("gates-for-changes.mjs", import.meta.url));
 const root = fileURLToPath(new URL("../../", import.meta.url));
@@ -165,6 +167,10 @@ test("the CI itself, manifests, lockfiles and files tested on both sides run eve
     "contracts/machine-api.json",
     "contracts/README.md",
     "docs/pi-image.md",
+    "docs/raspberry-pi.md",
+    "docs/console-locale.md",
+    "docs/guides/guide-console-locale.md",
+    "docs/client/manuel-operateur.md",
   ];
   for (const path of forced) {
     const { kind, ...needed } = classify(path);
@@ -172,6 +178,54 @@ test("the CI itself, manifests, lockfiles and files tested on both sides run eve
     assert.deepEqual(needed, EVERYTHING, path);
     assert.deepEqual(gates([...DOCS, path]), EVERYTHING, path);
   }
+});
+
+/** @param {string[]} patterns */
+const trackedUnder = (...patterns) =>
+  spawnSync("git", ["ls-files", "-z", "--", ...patterns], { cwd: root, encoding: "utf8" })
+    .stdout.split("\0")
+    .filter(Boolean);
+
+/** The pages of docs/ the repository tracks. */
+const DOC_PAGES = trackedUnder("docs/*.md");
+
+/**
+ * The pages of docs/ a Python source names, if it names docs at all: each quoted
+ * name ending in `.md`, taken under docs/ as written (`"guides/x.md"`), or by its
+ * final name in any folder of docs/, for a path written in segments
+ * (`DOCS / "guides" / "x.md"`). Limit: a name built while the test runs (an
+ * f-string, a variable, a glob) is not seen; nor is a page whose final name is
+ * split from its `.md`.
+ * @param {string} text
+ */
+const pagesNamedIn = (text) => {
+  if (!/["']docs["']|["']docs\//.test(text)) return [];
+  return [...text.matchAll(/["'](?:docs\/)?([\w/.-]+\.md)["']/g)].flatMap(([, name = ""]) =>
+    DOC_PAGES.filter((page) => page === `docs/${name}` || page.endsWith(`/${name}`)),
+  );
+};
+
+test("the scan finds a page of docs/ named whole or in segments, and nothing in a source that names no docs", () => {
+  assert.ok(DOC_PAGES.includes("docs/guides/guide-tableau-de-bord.md"), "the pages of docs/ were not read");
+  assert.deepEqual(pagesNamedIn('DOCS = ROOT / "docs"\nPAGE = DOCS / "guides" / "guide-tableau-de-bord.md"\n'), ["docs/guides/guide-tableau-de-bord.md"]);
+  assert.deepEqual(pagesNamedIn('PAGE = ROOT / "docs" / "client" / "manuel-operateur.md"'), ["docs/client/manuel-operateur.md"]);
+  assert.deepEqual(pagesNamedIn('PAGES = ("docs/securite.md", "guides/guide-console-locale.md")'), ["docs/securite.md", "docs/guides/guide-console-locale.md"]);
+  assert.deepEqual(pagesNamedIn('out = tmp / "summary.md"'), []);
+  assert.deepEqual(pagesNamedIn('DOCS = ROOT / "docs"\nout = tmp / "summary.md"'), []);
+});
+
+test("every page of docs/ a Python test opens runs the Python gates, alone in its pull request", () => {
+  // The Python files of raspberry-pi/tests/, simulation/ and the hosted simulation, and the pages they name.
+  const files = trackedUnder("raspberry-pi/tests/*.py", "simulation/*.py", "deploy/simulation-vercel/*.py");
+  assert.ok(files.length > 100, "the Python tests were not read");
+  const opened = new Set(files.flatMap((file) => pagesNamedIn(readFileSync(join(root, file), "utf8"))));
+  assert.deepEqual([...opened].sort(), [...PAGES_READ_BY_PI_TESTS].sort());
+  for (const page of PAGES_READ_BY_PI_TESTS) {
+    assert.deepEqual(gates([page]), EVERYTHING, page);
+    assert.deepEqual(gates([...DOCS, page]), EVERYTHING, page);
+  }
+  // Any other page still runs nothing of its own.
+  assert.deepEqual(gates(["docs/securite.md", "docs/guides/guide-tableau-de-bord.md"]), NOTHING);
 });
 
 test("names that only look like a listed directory are not listed", () => {

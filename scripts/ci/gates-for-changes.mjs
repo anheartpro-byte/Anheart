@@ -28,6 +28,23 @@ import { fileURLToPath } from "node:url";
 export const FILTERED_EVENT = "pull_request";
 
 /**
+ * The pages of docs/ a Python test opens, each with the test that reads it.
+ * The tests of this script hold the list to the tests of raspberry-pi/ and
+ * simulation/: a page they open and this list forgets fails there.
+ * @type {ReadonlyArray<string>}
+ */
+export const PAGES_READ_BY_PI_TESTS = [
+  // test_pi_install.py: its table of versions, against the files that pin them.
+  "docs/pi-image.md",
+  // test_drive_faults_complete.py: the table of 6.1, code by code;
+  // test_link_state.py: the words of the link states, with the three below.
+  "docs/raspberry-pi.md",
+  "docs/console-locale.md",
+  "docs/guides/guide-console-locale.md",
+  "docs/client/manuel-operateur.md",
+];
+
+/**
  * Checked first, whatever the lists below say: these run every gate.
  * @type {ReadonlyArray<{ name: string, test: (path: string) => boolean }>}
  */
@@ -59,10 +76,10 @@ export const EVERYTHING = [
     test: (path) => /(^|\/)changelog\.md$/i.test(path),
   },
   {
-    // A page of docs/, but read by the Pi gate: raspberry-pi/tests/test_pi_install.py
-    // compares its table of versions with the files that pin those versions.
-    name: "pinned versions of the Pi, read by its tests",
-    test: (path) => path === "docs/pi-image.md",
+    // Pages of docs/, but read by the Pi gate: a Python test opens each one and
+    // fails when it and the code disagree (PAGES_READ_BY_PI_TESTS).
+    name: "page of docs/ read by the Pi tests",
+    test: (path) => PAGES_READ_BY_PI_TESTS.includes(path),
   },
 ];
 
