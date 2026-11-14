@@ -18,6 +18,7 @@ import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
+from src import config_sync
 from src.clock import ManualClock
 from src.cloud_sync import TOO_LARGE_ANSWER, Document, Refused, Unreachable
 from src.config_sync import (
@@ -143,6 +144,7 @@ def make_rig(
     applied: AppliedConfig | None = None,
     signer: Ed25519PrivateKey | None = None,
     machine_id: str = "machine-1",
+    say: Callable[[str], None] | None = None,
 ) -> Rig:
     clock = ManualClock()
     key = Ed25519PrivateKey.generate() if signer is None else signer
@@ -158,7 +160,7 @@ def make_rig(
         public_key=public,
         path=path,
         at_rest=lambda: rest[0],
-        say=said.append,
+        say=said.append if say is None else say,
         machine_id=machine_id,
         local={},
         medical=signed(),
@@ -429,6 +431,38 @@ async def test_a_file_the_disk_refuses_keeps_the_configuration_in_force(tmp_path
     assert "non enregistre" in rig.said[-1]
     assert rig.sync.view().pending is not None
     assert rig.holds == [True, False], "a write that failed lifts the hold: nothing restarts"
+
+
+async def test_r2_a_write_stopped_by_anything_lifts_the_hold(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def broken(_path: Path, _content: bytes) -> Result[None, str]:
+        raise RuntimeError("injected: not an OSError")
+
+    monkeypatch.setattr(config_sync, "replace_file", broken)
+    rig = make_rig(tmp_path / "c.json")
+    rig.sign(payload(BASE, revision=3))
+    with pytest.raises(RuntimeError, match="injected"):
+        await rig.step()
+    assert rig.holds == [True, False]
+    assert rig.restarts == []
+
+
+async def test_r2_the_restart_is_asked_before_it_is_said(tmp_path: Path) -> None:
+    """A line that fails to be written, once the file is: the restart is already asked,
+    so the hold it keeps ends with the process."""
+
+    def failing(words: str) -> None:
+        if "redemarrage controle" in words:
+            raise RuntimeError("injected: the log refuses the line")
+
+    rig = make_rig(tmp_path / "c.json", say=failing)
+    rig.sign(payload(BASE, revision=3))
+    with pytest.raises(RuntimeError, match="injected"):
+        await rig.step()
+    assert rig.restarts == [1]
+    assert rig.holds == [True]
+    assert rig.path.exists()
 
 
 @pytest.mark.parametrize("safety", [False, True])

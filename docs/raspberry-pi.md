@@ -4167,7 +4167,8 @@ changent pas.
    la refuse quand un verrou dépasse le niveau de validation du registre
    ([securite.md, 6](securite.md#6-avant-la-première-personne-à-bord), point 8).
 2. La console interroge `GET /api/machine/config` **au repos seulement**
-   (aucune séance, aucun départ en attente, aucun lancement du site en main),
+   (aucune séance, aucun départ en attente ou en cours d'armement, aucun
+   lancement du site en main),
    à son démarrage puis au plus une fois par minute, et **seulement quand
    `RECORD_MACHINE_ID` est posé** : sans lui, elle ne saurait pas distinguer sa
    configuration de celle d'une autre machine, signée par la même clé. Elle ne
@@ -4198,12 +4199,15 @@ changent pas.
    comprise, dans `data/config.applied.json` (sur le Pi
    `/var/lib/anheart/data/config.applied.json`) en un remplacement atomique
    (fichier privé, `fsync`, renommage), si la console est encore au repos une
-   fois la réponse reçue. Dès avant l'écriture et jusqu'au redémarrage, tout
+   fois la réponse reçue : un départ en cours d'armement à ce moment fait
+   attendre l'écriture jusqu'au repos suivant. Dès avant l'écriture et jusqu'au
+   redémarrage, tout
    départ est refusé, manuel, de banc, programmé ou lancé du site
    (`demarrage refuse : redemarrage pour la nouvelle configuration en cours`,
    un lancement du site finit en échec avec cette raison) : aucune séance ne
-   s'arme sur les valeurs que la console quitte. Une écriture qui échoue lève
-   ce refus. Puis la console redémarre au repos :
+   s'arme sur les valeurs que la console quitte. Une écriture qui n'aboutit
+   pas, quelle qu'en soit la cause, lève ce refus ; une écriture réussie le
+   garde jusqu'au redémarrage, déjà demandé avant d'être dit au journal. Puis la console redémarre au repos :
    code de sortie 75, écrit comme un arrêt propre, que le service relance
    (`Restart=on-failure`). Le processus qui démarre sur la révision le dit au
    site (`POST /api/machine/config/applied {revision, hash}`) et en porte

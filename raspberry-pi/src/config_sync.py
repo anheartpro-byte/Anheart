@@ -607,26 +607,32 @@ class ConfigSync:
         """Write ``stored`` as it came at ``path``, then restart the console at rest. Never
         raises.
 
-        Still at rest after the answer was awaited, or nothing is written. Every start
-        is refused from before the write until the process ends for its restart: no
-        session arms on the values the console is leaving. A write that fails lifts it.
+        Still at rest after the answer was awaited (no session, and no start arming),
+        or nothing is written. Every start is refused from before the write until the
+        process ends for its restart: no session arms on the values the console is
+        leaving. A write that does not complete, whatever stopped it, lifts it.
         """
         if not self._at_rest():
             self._say(f"{words} ; non enregistre : la console n'est plus au repos")
             return Err("console plus au repos")
         self._hold(True)
         content = STORED_LIST.dump_json(stored) + b"\n"
-        written = await anyio.to_thread.run_sync(partial(replace_file, path, content))
+        written: Result[None, str] = Err("ecriture interrompue")
+        try:
+            written = await anyio.to_thread.run_sync(partial(replace_file, path, content))
+        finally:
+            if isinstance(written, Err):
+                self._hold(False)
         if isinstance(written, Err):
-            self._hold(False)
             self._say(
                 f"{words} ; non enregistre ({written.error}) : la configuration en vigueur reste"
             )
             return written
         self._pending = None
         self._restarting = True
-        self._say(f"{words} : redemarrage controle de la console au repos")
+        # Asked before it is said: a line that fails to be written leaves no hold behind.
         self._restart()
+        self._say(f"{words} : redemarrage controle de la console au repos")
         return Ok(None)
 
     async def _acknowledge(self) -> None:

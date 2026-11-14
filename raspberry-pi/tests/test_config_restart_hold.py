@@ -22,10 +22,11 @@ from src import local_panel
 from src.clock import ManualClock
 from src.cloud_sync import AutoLaunch, BenchLaunch
 from src.config_sync import CONFIG_PATH, MACHINE_UNASSIGNED
+from src.control_surface import StartManual
 from src.local_panel import RESTART_PENDING, LocalPanel, build_panel
 from src.result import Err, Ok
 from src.training.runtime import RestartPending, RuntimeState
-from src.training.types import Ballast
+from src.training.types import Ballast, Occupancy
 from src.units import Bpm
 from tests.roster_support import RIDER_ID
 from tests.test_cloud_sync import OPERATOR as DASHBOARD_CONFIRMER
@@ -184,3 +185,25 @@ async def test_r2_an_unnamed_machine_asks_for_no_configuration_and_says_why(
     assert panel.services.config_view().refusal == MACHINE_UNASSIGNED
     assert caplog.text.count(MACHINE_UNASSIGNED) == 1
     await panel.close()
+
+
+async def test_r2_a_start_being_armed_is_not_rest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """R2: from the mailbox to its arming, a start keeps the console away from rest, so
+    no configuration is written under it; refused or armed, rest is judged as before."""
+    rig = console(tmp_path, monkeypatch=monkeypatch)
+    seen: list[bool] = []
+
+    async def arming(panel: LocalPanel, _command: StartManual) -> None:
+        seen.append(panel.catalog_at_rest())
+
+    monkeypatch.setattr(LocalPanel, "_start_manual", arming)
+    surface = rig.panel.surface
+    assert isinstance(surface.attest_estop_wiring(OPERATOR), Ok)
+    assert isinstance(surface.submit_start_manual(occupancy=Occupancy.BENCH, operator=OPERATOR), Ok)
+    assert not rig.panel.catalog_at_rest(), "waiting in the mailbox"
+    await rig.panel.control_cycle()
+    assert seen == [False], "being armed"
+    assert rig.panel.catalog_at_rest()
+    await rig.panel.close()

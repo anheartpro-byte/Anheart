@@ -140,7 +140,7 @@ import logging
 import os
 import signal
 from abc import abstractmethod
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Coroutine, Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
 from threading import Event as ThreadEvent
@@ -1196,6 +1196,7 @@ class LocalPanel:
     """The console, wired. Build it with :func:`build_panel`."""
 
     __slots__ = (
+        "_arming",
         "_catalog",
         "_clock",
         "_cloud",
@@ -1306,6 +1307,7 @@ class LocalPanel:
         self._operators: OperatorSync | None = None
         # The machine's configuration from the dashboard (ANH-141): only with a link.
         self._machine_config: ConfigSync | None = None
+        self._arming: bool = False
         # A configuration was applied: the console restarts at its next rest.
         self._restart: bool = False
         self._stop: asyncio.Event | None = None
@@ -1607,9 +1609,9 @@ class LocalPanel:
             case None:
                 pass
             case StartSession():
-                await self._start_programme(command)
+                await self._arming_through(self._start_programme(command))
             case StartManual():
-                await self._start_manual(command)
+                await self._arming_through(self._start_manual(command))
             case SetManualTarget(output_rpm=output_rpm):
                 self._record_command(record_commands.SetManualTarget(output_rpm), command.operator)
                 target = runtime.set_manual_target(output_rpm)
@@ -1624,6 +1626,15 @@ class LocalPanel:
                 self._surface.note_taken(command)
             case _ as unreachable:
                 assert_never(unreachable)
+
+    async def _arming_through(self, start: Coroutine[object, object, None]) -> None:
+        """Run a start: until it is armed or refused, the console is not at rest
+        (:meth:`catalog_at_rest`), so no configuration is written under it (ANH-141)."""
+        self._arming = True
+        try:
+            await start
+        finally:
+            self._arming = False
 
     def _answer[T, E](
         self, command: Command, outcome: Result[T, E], words: Callable[[E], str]
@@ -2224,13 +2235,14 @@ class LocalPanel:
         """Whether the programmes may change now (ANH-138 EX-2, EX-5).
 
         No session (the runtime idle or finished), no start waiting in the
-        mailbox, and no launch from the dashboard offered, being confirmed or
-        not yet armed. Read from memory only.
+        mailbox or being armed, and no launch from the dashboard offered, being
+        confirmed or not yet armed. Read from memory only.
         """
         cloud = self._cloud
         return (
             self._runtime.state in (RuntimeState.IDLE, RuntimeState.FINISHED)
             and self._surface.pending is None
+            and not self._arming
             and (cloud is None or not cloud.launch_in_hand)
         )
 
