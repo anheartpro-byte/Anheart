@@ -1,4 +1,7 @@
+import re
 from dataclasses import replace
+from pathlib import Path
+from typing import Final
 
 import pytest
 
@@ -44,6 +47,26 @@ def test_only_json_true_grants_fitness_or_consent(field: str, value: object) -> 
 def test_unusable_fitness_expiry_is_unknown(value: object) -> None:
     assert parsed("fitnessValidUntil", value).fitness_valid_until is None
     assert parsed("fitnessValidUntil", value, absent=True).fitness_valid_until is None
+
+
+SITE_QUESTIONNAIRE: Final[Path] = (
+    Path(__file__).resolve().parents[2] / "lib" / "fitnessQuestionnaire.ts"
+)
+
+
+def test_the_latest_fitness_expiry_is_the_one_the_site_and_convex_accept() -> None:
+    """The bound is written twice, here and in ``lib/fitnessQuestionnaire.ts``, which the
+    site and Convex read. The site's test compares them, but runs only when the site or
+    Convex changes: this one runs whenever the Pi's code does."""
+    written = re.search(
+        r"^export const LATEST_FITNESS_MILLIS = ([\d_]+);$",
+        SITE_QUESTIONNAIRE.read_text(encoding="utf-8"),
+        re.MULTILINE,
+    )
+    assert written is not None
+    latest = int(written.group(1).replace("_", ""))
+    assert parsed("fitnessValidUntil", latest).fitness_valid_until == latest
+    assert parsed("fitnessValidUntil", latest + 1).fitness_valid_until is None
 
 
 @pytest.mark.parametrize("value", [0, 1_700_000_000_000.0, 4_133_980_800_000])

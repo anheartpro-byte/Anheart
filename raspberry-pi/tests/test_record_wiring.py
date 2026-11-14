@@ -46,7 +46,7 @@ from src.training.safety import SafetyLimits
 from src.training.types import Occupancy
 from src.units import Bpm, Metres, Monotonic, MotorRpm, OutputRpm, RpmPerSecond, UnixMillis
 from tests.record_journal_support import refuse_writes
-from tests.roster_support import RIDER_ID
+from tests.roster_support import RIDER, RIDER_ID
 from tests.sto_support import ready_sto
 from tests.test_cloud_sync import (
     LAUNCH,
@@ -229,6 +229,12 @@ async def test_ex1_a_dashboard_launch_is_recorded_with_its_identifiers_and_remot
     manifest = recording.manifest
     assert (manifest.kind, manifest.occupancy) == ("auto", "occupied")
     assert (manifest.session_id, manifest.subject_id) == ("remote-1", RIDER_ID)
+    # The rider's fitness, as the roster gave it: fit, under that questionnaire.
+    assert (manifest.subject_fit, manifest.fitness_questionnaire_version) == (
+        True,
+        RIDER.questionnaire_version,
+    )
+    assert RIDER.questionnaire_version == "0.1.0"
     assert manifest.operator == operator_alias("Dr Manager (tableau de bord)")
     assert manifest.profile is not None
     assert manifest.profile.subject_hr_max == 170

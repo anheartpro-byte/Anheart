@@ -45,6 +45,18 @@ export const PAGES_READ_BY_PI_TESTS = [
 ];
 
 /**
+ * Files of the site a Python test opens, each with the test that reads it: the rules of
+ * the site would let a pull request that changes one of them alone skip the Python gates.
+ * The tests of this script read the Python tests: every file outside raspberry-pi/ and
+ * simulation/ they name must run the Python gates, and each file here must be one of them.
+ * @type {ReadonlyArray<string>}
+ */
+export const SITE_FILES_READ_BY_PYTHON_TESTS = [
+  // test_roster_fitness.py: the latest fitness expiry the site and Convex accept.
+  "lib/fitnessQuestionnaire.ts",
+];
+
+/**
  * Checked first, whatever the lists below say: these run every gate.
  * @type {ReadonlyArray<{ name: string, test: (path: string) => boolean }>}
  */
@@ -80,6 +92,11 @@ export const EVERYTHING = [
     // fails when it and the code disagree (PAGES_READ_BY_PI_TESTS).
     name: "page of docs/ read by the Pi tests",
     test: (path) => PAGES_READ_BY_PI_TESTS.includes(path),
+  },
+  {
+    // A file of the site, but read by the Pi gate (SITE_FILES_READ_BY_PYTHON_TESTS).
+    name: "file of the site read by the Python tests",
+    test: (path) => SITE_FILES_READ_BY_PYTHON_TESTS.includes(path),
   },
 ];
 

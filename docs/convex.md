@@ -2076,7 +2076,11 @@ ni notes de validation.
 
 Le champ date du site a pour maximum le 1er janvier 2101. Une date choisie
 donne la fin de journée locale, bornée à `2101-01-01T00:00:00Z` pour respecter
-la même limite technique, indépendamment du fuseau du navigateur.
+la même limite technique, indépendamment du fuseau du navigateur. La borne est
+écrite deux fois, dans `lib/fitnessQuestionnaire.ts` et dans
+`raspberry-pi/src/roster.py` : `lib/fitnessQuestionnaire.test.ts` les compare
+quand le site ou Convex change, `raspberry-pi/tests/test_roster_fitness.py`
+quand le code du Pi change.
 
 Dans `getRiderReadiness`, `answers` et `notes` ne sortent que si l'appelant
 gère le passager et n'est pas lui. Le passager voit l'outcome calculé, la
