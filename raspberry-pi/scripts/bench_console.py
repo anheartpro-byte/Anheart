@@ -49,6 +49,16 @@ The second rewrite fixed two review findings in the operator actions:
   place (zero reference, the drive keeps ramping, ttO finishes the job) and the
   action is reported as a FAILURE, never as "ok".
 
+A later review found the third: the **fault reset** wrote CMD = 128 then 6
+whatever the drive was doing. 128 has bits 0 to 3 clear: out of
+OPERATION_ENABLED it is CiA402 "disable voltage", the output stage drops, and
+6 is transition 8. On a turning drive that was the one button that commanded a
+freewheel. It is now refused, nothing written, unless the status read at that
+moment is not OPERATION_ENABLED and RFRD reads 0 in that same read; an
+unreadable status refuses too. That is the main console's rule. The page greys
+the button unless its last live report shows a fault and a shaft at rest; the
+bus thread's refusal is the barrier.
+
 And one safety change in the loop: when the driver latches the link down, the
 console DISARMS. It then reconnects, but the keepalive does not resume until
 the operator arms again -- no automatic resumption of motion, anywhere.
@@ -464,7 +474,29 @@ class BusWorker(threading.Thread):
             + ("CMD=7 ok" if run_failed is None else f"CMD=7 ECHEC: {run_failed}")
         )
 
+    async def _reset_refusal(self) -> str | None:
+        """Why a fault reset may not be written now, or ``None``: one status read decides.
+
+        Not while the output stage is enabled, nor while RFRD reads anything but
+        0 in that read, nor without a status: CMD = 128 and 6 drop the output
+        stage, which on a turning shaft is a freewheel (see the module docstring).
+        """
+        read = await self._built.drive.read_status()
+        match read:
+            case Ok(status):
+                if status.state is DriveState.OPERATION_ENABLED:
+                    return "etage de puissance actif (OPERATION_ENABLED)"
+                if status.output_rpm != 0:
+                    return f"RFRD={status.output_rpm} tr/min"
+                return None
+            case Err(error):
+                return f"etat illisible: {describe_error(error)}"
+        raise assert_never(read)
+
     async def _do_fault_reset(self) -> str:
+        refused = await self._reset_refusal()
+        if refused is not None:
+            return f"ECHEC: reset refuse, arbre non lu a l'arret ({refused}); rien n'est ecrit"
         reset_failed = await self._command(ControlWord.FAULT_RESET)
         if reset_failed is not None:
             return f"ECHEC CMD=128: {reset_failed}"
@@ -839,7 +871,7 @@ PAGE = """
 <div>
  <button class=go id=en disabled>1. Activer (LFRD=0, 6&rarr;7&rarr;15)</button>
  <button class=stop id=stp>2. Arr&ecirc;t en rampe</button>
- <button class=go id=fr>Acquitter d&eacute;faut</button>
+ <button class=go id=fr disabled>Acquitter d&eacute;faut</button>
 </div>
 <div style="margin-top:16px"><button class=estop id=es>ARR&Ecirc;T D'URGENCE</button></div>
 <p style="color:#8b94a3" id=act>-</p>
@@ -881,6 +913,8 @@ async function tick(){
   set('tq',  s.derived.torque_pct===null?null:s.derived.torque_pct+'%');
   set('flt', s.fault);
   set('eta', s.status_word===null?null:'0x'+s.status_word.toString(16).padStart(4,'0'));
+  // Only a fault on a shaft read at rest: the console refuses any other reset itself.
+  $('fr').disabled=!(s.link_ok && s.fault!==null && s.fault!=='aucun' && s.output_rpm===0);
   set('sp',  s.setpoint_rpm+' tr/min');
   set('lq',  s.link.error_rate_pct+'% err');
   $('maxr').textContent='plafond '+s.max_rpm+' tr/min'; $('sl').max=s.max_rpm;
@@ -896,7 +930,7 @@ async function tick(){
       s.link.implausible+' valeurs impossibles rejetees.';
   } else b.style.display='none';
   $('act').textContent='derniere action: '+s.last_action+(s.last_error?(' | '+s.last_error):'');
- }catch(e){ set('st',null); $('linkbad').style.display='block';
+ }catch(e){ set('st',null); $('fr').disabled=true; $('linkbad').style.display='block';
    $('linkbad').innerHTML='<b>CONSOLE INJOIGNABLE.</b>'; }
 }
 setInterval(tick,500); tick();

@@ -2461,6 +2461,16 @@ Jamais en même temps que la console sur le même câble. Le second programme la
 refusé (`drive cable already owned`) et n'a aucune liaison avec le variateur : fermez
 la console d'abord (voir §3.4 et §14).
 
+**Le bouton `Acquitter défaut` de `scripts/bench_console.py`.**
+Il écrit CMD=128 puis CMD=6, et seulement si l'état lu à cet instant n'est pas
+`OPERATION_ENABLED` et que l'arbre y est lu à l'arrêt (RFRD=0) : c'est la règle de la
+console. Sinon rien n'est écrit et la dernière action le dit :
+`fault_reset: ECHEC: reset refuse, arbre non lu a l'arret (...)`, avec la raison (étage
+de puissance actif, vitesse lue, état illisible). Sur un variateur en marche, ces deux
+mots couperaient l'étage de puissance : l'arbre finirait en roue libre. La page grise le
+bouton tant que son dernier état reçu ne montre pas un défaut et un arbre à l'arrêt ;
+le refus de l'outil reste la barrière.
+
 **Comment `scripts/bench_console.py` s'arrête, et ce qu'il ne peut pas couvrir.**
 Sur Ctrl+C, sur `kill` ou l'arrêt d'un service (SIGTERM), quand le terminal ou la
 session SSH se ferme (SIGHUP), et sur une erreur de son fil de bus, cet outil de banc

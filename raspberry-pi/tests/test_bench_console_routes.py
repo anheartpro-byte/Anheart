@@ -33,6 +33,7 @@ from tests.test_atv320 import (
     ETA_FAULT,
     ETA_SWITCH_ON_DISABLED,
     LFT_OVERCURRENT,
+    Behave,
     FakeBus,
     io_exception,
     seed_bench_limits,
@@ -260,6 +261,50 @@ async def test_estop_disarms_zeroes_the_reference_and_keeps_the_dec_ramp(rig: Be
     await rig.polled()
     assert rig.since(after) == []
     rig.bus.registers[rig.regs.rfrd] = 0
+
+
+async def test_the_fault_reset_is_refused_on_a_turning_enabled_drive(rig: Bench) -> None:
+    """128 then 6 would drop the output stage: a freewheel. Nothing is written."""
+    await rig.armed_and_enabled()
+    rig.bus.registers[rig.regs.rfrd] = TURNING_RPM
+    mark = rig.mark()
+    answered = await rig.press("/api/fault-reset")
+    assert answered.status_code == HTTPStatus.OK
+    shown = await rig.result("fault_reset")
+    assert shown == (
+        "fault_reset: ECHEC: reset refuse, arbre non lu a l'arret "
+        "(etage de puissance actif (OPERATION_ENABLED)); rien n'est ecrit"
+    )
+    assert _commands(rig.since(mark), rig.regs.cmd) == []
+    assert rig.worker.snap.armed is True, "a refused reset changes nothing"
+    rig.bus.registers[rig.regs.rfrd] = 0
+
+
+async def test_the_fault_reset_is_refused_in_fault_while_the_shaft_still_turns(
+    rig: Bench,
+) -> None:
+    rig.bus.registers[rig.regs.eta] = ETA_FAULT
+    rig.bus.registers[rig.regs.lft] = LFT_OVERCURRENT
+    rig.bus.registers[rig.regs.rfrd] = 300
+    mark = rig.mark()
+    await rig.press("/api/fault-reset")
+    shown = await rig.result("fault_reset")
+    assert "reset refuse, arbre non lu a l'arret (RFRD=300 tr/min)" in shown, shown
+    assert _commands(rig.since(mark), rig.regs.cmd) == []
+    rig.bus.registers[rig.regs.rfrd] = 0
+
+
+async def test_the_fault_reset_is_refused_without_a_status(rig: Bench) -> None:
+    rig.bus.registers[rig.regs.eta] = ETA_FAULT
+    rig.bus.registers[rig.regs.lft] = LFT_OVERCURRENT
+    await rig.polled()
+    mark = rig.mark()
+    rig.bus.sticky_reads = io_exception()
+    await rig.press("/api/fault-reset")
+    shown = await rig.result("fault_reset")
+    rig.bus.sticky_reads = Behave.NORMALLY
+    assert "reset refuse, arbre non lu a l'arret (etat illisible: " in shown, shown
+    assert _commands(rig.since(mark), rig.regs.cmd) == []
 
 
 async def test_the_fault_reset_writes_128_then_6_on_a_drive_in_fault(rig: Bench) -> None:
