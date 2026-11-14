@@ -57,6 +57,11 @@ vi.mock("@/components/machines/MachineConsoleAccessCard", async () => ({
     "MachineConsoleAccessCard",
   ),
 }));
+vi.mock("@/components/machines/MachineConfigCard", async () => ({
+  MachineConfigCard: (await import("@/test-support/pages")).standIn(
+    "MachineConfigCard",
+  ),
+}));
 vi.mock("@/components/machines/MachineRegistryCard", async () => ({
   MachineRegistryCard: (await import("@/test-support/pages")).standIn(
     "MachineRegistryCard",
@@ -417,6 +422,27 @@ describe("machine page: what each role may do", () => {
       expect(wasMounted("MachineRegistryCard")).toBe(false);
     },
   );
+
+  it.each(["admin", "org_admin"] as const)(
+    "mounts the configuration with machine, role and account for %s (ANH-141)",
+    async (role) => {
+      await open(role);
+      expect(propsOf("MachineConfigCard")).toEqual({
+        machineId,
+        role,
+        userId: `user-${role}`,
+      });
+    },
+  );
+
+  it.each([
+    ["the gestionnaire", "gestionnaire", machine()],
+    ["the patient", "user", machine()],
+    ["a deleted machine", "admin", deleted()],
+  ] as const)("keeps the configuration out of %s's page", async (_name, role, shown) => {
+    await open(role, shown);
+    expect(wasMounted("MachineConfigCard")).toBe(false);
+  });
 
   it.each(["admin", "gestionnaire", "org_admin"] as const)(
     "shows health to the authorized %s",

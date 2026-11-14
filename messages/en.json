@@ -221,7 +221,11 @@
     "site": "Site address",
     "contacts": "Organisation contacts",
     "noContacts": "No active members in this machine's organisation.",
-    "contactRoles": { "admin": "Administrator", "gestionnaire": "Manager", "user": "Patient" },
+    "contactRoles": {
+      "admin": "Administrator",
+      "gestionnaire": "Manager",
+      "user": "Patient"
+    },
     "expectedSoftwareVersion": "Expected software version",
     "expectedHelp": "Enter an existing Pi release. A release with insufficient validation can still be selected, with a warning.",
     "armRadiusM": "Arm radius (m)",
@@ -230,7 +234,7 @@
     "measuredBy": "Measured by",
     "metres": "{value} m",
     "proposal": "Configuration proposal",
-    "proposalPending": "These measurements will be used by centralised configuration (ANH-141). They are not yet applied to the machine.",
+    "proposalPending": "These measurements are proposed by default for the machine's first configuration.",
     "fileHelp": "PDF or JSON, up to 10 MiB. Do not attach health data.",
     "currentSheet": "Current parameter sheet",
     "sheetHistory": "Parameter sheet history",
@@ -240,7 +244,12 @@
     "sheetVersion": "Drive parameter sheet version",
     "signedBy": "Signatory",
     "sheetAt": "Sheet date",
-    "levels": { "none": "No validation", "bench": "Bench", "auto": "Automatic", "occupied": "Person on board" },
+    "levels": {
+      "none": "No validation",
+      "bench": "Bench",
+      "auto": "Automatic",
+      "occupied": "Person on board"
+    },
     "reviewRule": "Only a review with an attached report can raise the machine to the next level. Lowering the level requires a reason.",
     "medicalKeyIsTest": "The Person on board level remains unavailable until medical parameters are signed with the medical key (ANH-98). The current key is a test key.",
     "reviews": "Validation reviews",
@@ -265,12 +274,17 @@
     "softwareAndLocks": "Software version and locks",
     "reportedVersion": "Reported software version",
     "versionStatus": "Version status",
-    "versions": { "unknown": "Unknown", "up_to_date": "Up to date", "outdated": "Outdated", "not_validated": "Not validated for this machine" },
+    "versions": {
+      "unknown": "Unknown",
+      "up_to_date": "Up to date",
+      "outdated": "Outdated",
+      "not_validated": "Not validated for this machine"
+    },
     "expectedNotValidated": "The expected version is not validated for this machine.",
     "allowed": "Allowed",
     "denied": "Denied",
     "lockReason": "Machine validated up to level: {level}.",
-    "locksPending": "Applying these locks awaits centralised configuration (ANH-141). These verdicts describe registry permissions.",
+    "locksPending": "The machine configuration applies these verdicts: a lock turns true only at the required level.",
     "otaPending": "OTA rejection of a release with insufficient validation awaits ANH-116.",
     "alerts": {
       "programs_enabled_without_auto": "Programs are enabled while the machine has not reached the Automatic level.",
@@ -280,7 +294,12 @@
     "badges": {
       "validation": "Validation: {level}",
       "version": "Version: {status}",
-      "configuration": { "unavailable": "Configuration: unavailable (ANH-141)", "pending": "Configuration: waiting for the machine", "applied": "Configuration: applied", "mismatch": "Configuration: applied ≠ approved" }
+      "configuration": {
+        "unavailable": "Configuration: none approved",
+        "pending": "Configuration: waiting for the machine",
+        "applied": "Configuration: applied",
+        "mismatch": "Configuration: applied ≠ approved"
+      }
     },
     "saving": "Saving...",
     "saveIdentity": "Save identity",
@@ -293,6 +312,78 @@
     "sheetSaved": "Drive parameter sheet uploaded.",
     "reviewSaved": "Review recorded.",
     "levelLowered": "Validation level lowered with its reason."
+  },
+  "machineConfig": {
+    "title": "Machine configuration",
+    "loading": "Loading the configuration",
+    "safety": "safety",
+    "safetyChange": "safety key changed",
+    "enabled": "enabled",
+    "choose": "Choose",
+    "form": "Propose a configuration",
+    "level": "Machine validated up to level {level}: both locks depend on it.",
+    "problems": "{count} error(s): the console would refuse this configuration.",
+    "problemList": "Configuration errors",
+    "diff": "Changes",
+    "diffNone": "No revision applied: every key is new to the machine, and a safety key changes.",
+    "diffApplied": "Changes from applied revision {revision}:",
+    "propose": "Propose",
+    "proposed": "Revision {revision} proposed.",
+    "unchanged": "This configuration is already the one sent to the machine.",
+    "approve": "Approve",
+    "approved": "Revision {revision} approved.",
+    "reject": "Reject",
+    "rejected": "Revision {revision} rejected.",
+    "reason": "Reason for rejecting (3 to 500 characters)",
+    "revisions": "Revisions",
+    "revision": "Revision {revision}",
+    "proposedBy": "proposed by {name} on {at}",
+    "approvedBy": "approved by {names} on {at}",
+    "appliedAt": "applied by the machine on {at}",
+    "changed": "Keys changed from the applied revision: {keys}",
+    "rejectReason": "Reason: {reason}",
+    "mismatch": "Applied configuration ≠ approved: the machine does not report running the revision in force.",
+    "statuses": {
+      "draft": "draft",
+      "approved": "approved, waiting for the machine",
+      "applied": "applied",
+      "rejected": "rejected"
+    },
+    "status": {
+      "unavailable": "No configuration approved",
+      "pending": "Waiting for the machine",
+      "applied": "Applied",
+      "mismatch": "Applied ≠ approved"
+    },
+    "blocked": {
+      "machine_config_wrong_status": "This revision is no longer a draft.",
+      "machine_config_keys_not_allowed": "An organisation admin approves only the name and the location.",
+      "machine_config_self_approval": "A safety key changes: an Anheart admin other than the author must approve.",
+      "machine_config_safety_needs_admins": "A safety key changes: the revision must be proposed by an Anheart admin."
+    },
+    "keys": {
+      "name": "Machine name",
+      "location": "Location",
+      "SENSORS": "Acquired channels",
+      "MOTOR_PORT": "Drive port",
+      "MOTOR_SLAVE_ID": "Modbus address",
+      "MODBUS_BAUDRATE": "Modbus baud rate",
+      "MODBUS_PARITY": "Modbus parity",
+      "MODBUS_TIMEOUT_S": "Modbus timeout (s)",
+      "MOTOR_REG_OFFSET": "Register offset",
+      "ECG_SOURCE": "ECG source",
+      "BITALINO_ADDRESS": "BITalino address",
+      "PRESENCE_SOURCE": "Camera",
+      "UI_PORT": "Console port",
+      "GEAR_RATIO": "Gear ratio",
+      "RECORD_LOCAL_RETENTION_DAYS": "Record retention (days)",
+      "MOTOR_BACKEND": "Drive",
+      "MOTOR_MAX_RPM": "Motor ceiling (rpm)",
+      "ARM_RADIUS_M": "Rider radius (m)",
+      "LEG_TIP_RADIUS_M": "Foot tip radius (m)",
+      "PROGRAMS_ENABLED": "Programmed sessions",
+      "OCCUPANCY_OCCUPIED_ENABLED": "Person on board"
+    }
   },
   "errors": {
     "invalid_registry_field": "Invalid machine registry value.",

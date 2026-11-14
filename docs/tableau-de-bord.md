@@ -337,8 +337,11 @@ Recherche ; l'admin peut afficher les machines supprimées.
 
 Les admins Anheart et d'organisation voient aussi trois badges à côté du nom :
 le niveau de validation, le statut de version (**À jour**, **Obsolète**,
-**Non validée pour cette machine**, **Inconnue**) et **Configuration : non
-disponible (ANH-141)**. `machineRegistry.listRegistryBadges` fournit ces badges
+**Non validée pour cette machine**, **Inconnue**) et l'état de la
+configuration (ANH-141) : **aucune approuvée**, **en attente de la machine**,
+**appliquée**, ou **appliquée ≠ approuvée** quand le heartbeat de la machine
+ne donne pas l'empreinte de la révision en vigueur.
+`machineRegistry.listRegistryBadges` fournit ces badges
 pour les machines non supprimées. Le gestionnaire ne les voit pas et le site
 ne lance pas cette query pour lui. Une réponse encore en chargement n'invente
 aucun badge.
@@ -382,6 +385,7 @@ Admin et gestionnaire de la machine.
 | Configuration | Statut (« En ligne », « Hors ligne », « En session ») et dernier signal, recalculés chaque seconde (§6), « Créée le » ; bouton Modifier. | admin, gestionnaire |
 | **Version médicale** | Version annoncée par le Pi, ou `-` s'il n'en a pas annoncé. Le statut calculé par rapport à la référence serveur est `unknown` (pas d'annonce ; pas de libellé dans la fiche), `unsigned` (fichier absent ou signature non vérifiée, mode banc), `no_reference` (pas de version de référence serveur), `current` (à jour), `obsolete` (ancienne, référence affichée) ou `ahead` (version inconnue du serveur). | lecture |
 | Gestionnaires | Liste, badge « Propriétaire » pour le premier. | lecture |
+| **Configuration de la machine** (ANH-141) | État de la configuration, l'avertissement « Configuration appliquée ≠ approuvée », le formulaire de proposition et les révisions (ci-dessous). | admin Anheart (toutes les clés) ; admin d'organisation (nom et lieu seulement) ; machine non supprimée ; aucune carte pour le gestionnaire |
 | **Registre de la machine** | Quatre sections : **Identité**, **Mesures**, **Variateur**, **Validation** ; version remontée et attendue, verdicts des verrous, signalements. | admin Anheart en écriture ; admin d'organisation en lecture seule ; aucun registre pour le gestionnaire |
 | **État en direct** | Mode, phase, fréquence cardiaque, vitesse du bras (et moteur, consigne), charge g, action de sécurité, état du variateur ; badge « En direct » / « Données périmées » et « Mis à jour il y a … », recalculés chaque seconde (§6). L'action de sécurité et l'état du variateur sont traduits ; une valeur que le site ne connaît pas s'affiche telle quelle. | lecture |
 | **Programmes** | Programmes synchronisés depuis le Pi (lecture seule) : zone, durée, vitesse max, FC limite. Mention « Manuel : depuis la console de la machine. Sans personne à bord, une séance de banc lestée peut aussi être proposée depuis le site. » pour un admin ou un gestionnaire, « Manuel : uniquement depuis la console de la machine » pour un patient (la séance de banc lestée est réservée au personnel). La carte explique aussi si les programmes auto sont désactivés, si la machine annonce un fichier médical non signé ou si aucune version de référence n'est enregistrée. Depuis ANH-138 (contrat 1.11), elle dit « Programmes de secours » quand la machine n'a jamais reçu de catalogue signé, et liste chaque programme du catalogue que la machine a refusé : « refusé par la machine : » suivi de sa raison ; un programme refusé n'est pas lançable ([programmes.md](programmes.md#publication-vers-les-machines-anh-138)). | lecture |
@@ -398,7 +402,7 @@ d'organisation ne reçoit aucun formulaire ni bouton d'édition du registre.
 | Section | Lecture et écriture |
 |---|---|
 | **Identité** | Numéros de série Pi, variateur, moteur et réducteur, adresse BITalino, mise en service, adresse du site, contacts, version logicielle attendue. `updateIdentity` enregistre les champs ; un champ vidé est envoyé avec `null`. `listContactCandidates({machineId})`, réservée à l'admin Anheart, propose uniquement les membres actifs de l'organisation de cette machine, avec leur rôle et sans e-mail. |
-| **Mesures** | Deux rayons en mètres, date et auteur : `recordRadii`. La proposition `ARM_RADIUS_M` / `LEG_TIP_RADIUS_M` reprend les mesures sans valeur par défaut. Leur application attend la configuration centralisée (ANH-141). |
+| **Mesures** | Deux rayons en mètres, date et auteur : `recordRadii`. La proposition `ARM_RADIUS_M` / `LEG_TIP_RADIUS_M` reprend les mesures sans valeur par défaut ; la carte **Configuration de la machine** les prend comme valeurs de départ d'une première configuration (ANH-141). |
 | **Variateur** | Fiche courante et historique téléchargeables, version, signataire et date. Dépôt PDF ou JSON de 10 Mio maximum : `generateUploadUrl`, POST du fichier vers Convex Storage avec son `Content-Type`, puis `attachDriveParameterSheet`. Aucune donnée de santé dans ces pièces. |
 | **Validation** | Niveau courant, revues avec auteur, date, versions logicielle et médicale, compte rendu joint ; historique des descentes avec motif. `addValidationReview` ne propose que le niveau suivant et exige un compte rendu (même dépôt Storage). Version médicale facultative pour les premiers niveaux, obligatoire pour « Personne à bord ». `lowerValidationLevel` propose uniquement un niveau inférieur et exige un motif de 3 à 500 caractères. |
 
@@ -420,11 +424,48 @@ Une version logicielle de niveau inférieur à celui de la machine est marquée
 validée reste enregistrable et provoque un avertissement. Les verdicts de
 `configurationLocks` affichent **Autorisé** ou **Refusé**, avec le niveau
 atteint en cas de refus, pour `PROGRAMS_ENABLED` (au moins `auto`) et
-`OCCUPANCY_OCCUPIED_ENABLED` (au moins `occupied`). Le site précise que
-l'application attend ANH-141 et que le refus OTA attend ANH-116. Il ne
-propose aucune commande d'application. Les deux signalements du serveur,
+`OCCUPANCY_OCCUPIED_ENABLED` (au moins `occupied`). La configuration de la
+machine applique ces verdicts (ci-dessous) ; le refus OTA attend ANH-116. Les deux signalements du serveur,
 `programs_enabled_without_auto` et `person_on_board_without_occupied`, sont
 des alertes visibles ; le second affiche son nombre et sa date la plus récente.
+
+**Configuration (ANH-141).** `MachineConfigCard` lit
+`machineConfigs.getMachineConfig` ; une réponse `null` ne rend rien. Le
+formulaire est généré depuis
+[`contracts/machine-config.json`](../contracts/machine-config.json) : un champ
+par clé, selon son type (texte, liste de choix, cases à cocher pour les voies
+et les deux verrous, nombre), marqué **sûreté** pour les six clés de sûreté. Il
+part de la révision en vigueur, ou, sans elle, des défauts du contrat, des
+rayons du registre et du nom et du lieu de la machine.
+
+- **Toutes les erreurs d'un coup.** À chaque saisie, le site juge les valeurs
+  avec la règle de la console (`machineConfigProblems`,
+  `convex/lib/machineConfig.ts`) au niveau de validation de la machine : la
+  liste des erreurs, dans les mots de la console, s'affiche en tête et sous
+  chaque champ, et **Proposer** reste grisé tant qu'il en reste une, ou tant
+  que les valeurs sont celles de la révision en vigueur. Un verrou à vrai au
+  dessous du niveau requis est une erreur comme une autre (« machine validée
+  jusqu'au niveau … »).
+- **Le diff.** Sous le formulaire, chaque clé qui diffère de la révision
+  appliquée, avec l'ancienne et la nouvelle valeur ; sans révision appliquée,
+  le site dit que toutes les clés sont nouvelles et qu'une clé de sûreté
+  change.
+- **L'admin d'organisation** ne peut modifier que le nom et le lieu ; les
+  autres champs sont grisés, et le serveur refuse le reste.
+- **Les révisions** : numéro, état (brouillon, approuvée et en attente de la
+  machine, appliquée, refusée), auteur et date, approbateurs, date
+  d'application, clés changées par rapport à la révision appliquée, motif d'un
+  refus (« refusée par la machine : » suivi de sa raison pour un refus de la
+  console). **Approuver** est grisé quand le serveur dit que l'appelant ne
+  peut pas approuver ce brouillon, avec la raison : l'auteur d'une révision qui
+  change une clé de sûreté, l'admin d'organisation hors du nom et du lieu.
+  **Refuser** exige un motif de 3 à 500 caractères ; l'admin d'organisation ne
+  refuse que ses propres brouillons.
+
+Le site ne fait que proposer : la machine revalide chaque révision, et une
+clé de sûreté ne passe qu'après la confirmation d'un opérateur connecté à la
+console ([raspberry-pi.md, 12](raspberry-pi.md#12-la-configuration-env)). Les
+scénarios sont exercés dans `components/machines/machine-config.test.tsx`.
 
 Les scénarios de rôle, saisie, dépôt, transition, version, verrou et badge sont
 exercés dans `components/machines/machine-registry.test.tsx` et les tests des

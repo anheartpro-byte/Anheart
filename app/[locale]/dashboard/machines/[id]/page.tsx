@@ -58,6 +58,7 @@ import { MachineHealthCard } from "@/components/machines/MachineHealthCard";
 import { MachineKeysCard } from "@/components/machines/MachineKeysCard";
 import { MachineConsoleAccessCard } from "@/components/machines/MachineConsoleAccessCard";
 import { MachineRegistryCard } from "@/components/machines/MachineRegistryCard";
+import { MachineConfigCard } from "@/components/machines/MachineConfigCard";
 import { MachineProgramsCard } from "@/components/training/ProfileList";
 import { LaunchRightsCard } from "@/components/training/LaunchRightsCard";
 
@@ -322,6 +323,15 @@ export default function MachineDetailPage({
           machineId={machineId}
           role={user?.role}
           readOnly={machine.isDeleted === true}
+        />
+      )}
+
+      {/* The machine's configuration (ANH-141): its admins' only. */}
+      {isOrganizationAdmin(user?.role) && !machine.isDeleted && (
+        <MachineConfigCard
+          machineId={machineId}
+          role={user?.role}
+          userId={user?._id}
         />
       )}
 

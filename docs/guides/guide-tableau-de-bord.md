@@ -541,7 +541,10 @@ du nom de chaque machine non supprimée :
 | **Version : Obsolète** | La version remontée est autorisée, mais diffère de l'attendue. |
 | **Version : Non validée pour cette machine** | Le niveau de la version remontée est inférieur à celui de la machine. Ce constat ne déclenche pas encore un refus OTA (ANH-116). |
 | **Version : Inconnue** | La machine n'a pas remonté de version, ou aucune version attendue n'est définie pour une version remontée autorisée. |
-| **Configuration : non disponible (ANH-141)** | La configuration centralisée n'est pas encore disponible. Il n'est pas encore possible de distinguer une configuration appliquée d'une configuration en attente. |
+| **Configuration : aucune approuvée** | Aucune révision de configuration n'est approuvée pour cette machine : la console tourne sur son propre fichier. |
+| **Configuration : en attente de la machine** | Une révision est approuvée ; la machine ne l'a pas encore appliquée (elle attend d'être au repos, ou la confirmation d'un opérateur pour une clé de sûreté). |
+| **Configuration : appliquée** | La machine a appliqué la révision en vigueur et en donne l'empreinte. |
+| **Configuration : appliquée ≠ approuvée** | La machine ne donne pas l'empreinte de la révision en vigueur : elle tourne sur une autre configuration. Ouvrir la machine pour voir les révisions. |
 
 Le gestionnaire ne voit pas ces badges. Ouvrir la machine permet aux admins
 de consulter le registre détaillé.
@@ -856,8 +859,9 @@ renseigné** ; aucun numéro, rayon ou document n'est créé automatiquement.
    (m)**, la date et l'auteur de la mesure, puis **Enregistrer les mesures**.
    Les deux rayons doivent être positifs et au plus égaux à 10 m, borne de
    plausibilité d'unité. La proposition `ARM_RADIUS_M` / `LEG_TIP_RADIUS_M`
-   reprend ces valeurs. Elle sera utilisée par la configuration centralisée
-   (ANH-141) ; l'enregistrement ne l'applique pas encore à la machine.
+   reprend ces valeurs : la carte **Configuration de la machine** les prend
+   comme valeurs de départ d'une première configuration. Enregistrer les
+   mesures ne change pas la machine.
 3. **Variateur** : choisissez la fiche PDF ou JSON (10 Mio maximum), sa
    version, son signataire et sa date, puis **Déposer une fiche variateur**.
    Le fichier est déposé dans Convex Storage avant son rattachement. La
@@ -885,11 +889,42 @@ Sous ces sections, **Version logicielle et verrous** compare la version
 remontée et l'attendue, et signale une version non validée pour cette machine.
 Les autorisations `PROGRAMS_ENABLED` et `OCCUPANCY_OCCUPIED_ENABLED` disent
 **Autorisé** ou **Refusé**, selon les niveaux Automatique et Personne à bord.
-Leur application attend la configuration centralisée (ANH-141) ; le refus
-d'installation par l'OTA attend ANH-116. Ces verdicts n'offrent pas de bouton
-d'application. Deux alertes peuvent signaler des programmes activés sous le
+La carte **Configuration de la machine** les applique : un verrou ne passe à
+vrai qu'au niveau requis. Le refus d'installation par l'OTA attend ANH-116. Deux alertes peuvent signaler des programmes activés sous le
 niveau Automatique ou des séances avec une personne à bord sous le niveau
 requis ; la seconde indique leur nombre et la date la plus récente.
+
+#### Configuration de la machine (ANH-141)
+
+Visible par l'admin Anheart et l'admin de l'organisation, sur une machine non
+supprimée. La configuration de la machine (ports, capteurs, rayons, plafond
+moteur, les deux verrous) se change ici, sans toucher au Pi. Ce que le site
+approuve est une proposition : la machine la vérifie de nouveau et peut la
+refuser.
+
+1. Le formulaire part de la configuration en vigueur (ou, la première fois,
+   des valeurs par défaut, des rayons du registre et du nom de la machine).
+   Les champs marqués **sûreté** décident de ce que la machine fait avec
+   quelqu'un dedans : variateur, plafond moteur, deux rayons, séances
+   programmées, personne à bord.
+2. Chaque erreur s'affiche aussitôt, toutes d'un coup, dans les mots de la
+   console, et **Proposer** reste grisé tant qu'il en reste une. Séances
+   programmées et Personne à bord ne passent à vrai qu'aux niveaux
+   Automatique et Personne à bord du registre.
+3. Sous le formulaire, la liste des changements par rapport à la configuration
+   que la machine applique.
+4. **Proposer** crée une révision en brouillon. Elle remplace un brouillon qui
+   attendait.
+5. **Approuver** : si une clé de sûreté change, un autre admin Anheart que
+   l'auteur doit approuver (le bouton est grisé pour l'auteur, avec la raison).
+   Sinon l'auteur peut approuver lui-même.
+6. La machine applique la révision approuvée quand elle est au repos. Une clé
+   de sûreté n'est appliquée qu'après qu'un opérateur connecté à la console l'a
+   confirmée sur place. Une révision refusée par la machine affiche « refusée
+   par la machine : » suivi de la raison.
+
+L'admin de l'organisation ne peut changer que le nom et le lieu de la machine.
+**Refuser** une révision demande un motif de 3 à 500 caractères.
 
 <a id="carte-zone-de-danger"></a>
 

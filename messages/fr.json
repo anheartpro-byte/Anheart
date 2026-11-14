@@ -221,7 +221,11 @@
     "site": "Adresse du site",
     "contacts": "Contacts de l'organisation",
     "noContacts": "Aucun membre actif dans l'organisation de cette machine.",
-    "contactRoles": { "admin": "Administrateur", "gestionnaire": "Gestionnaire", "user": "Patient" },
+    "contactRoles": {
+      "admin": "Administrateur",
+      "gestionnaire": "Gestionnaire",
+      "user": "Patient"
+    },
     "expectedSoftwareVersion": "Version logicielle attendue",
     "expectedHelp": "Saisissez une version Pi déjà enregistrée. Une version insuffisamment validée reste sélectionnable, avec un avertissement.",
     "armRadiusM": "Rayon du bras (m)",
@@ -230,7 +234,7 @@
     "measuredBy": "Auteur de la mesure",
     "metres": "{value} m",
     "proposal": "Proposition de configuration",
-    "proposalPending": "Ces mesures seront reprises par la configuration centralisée (ANH-141). Elles ne sont pas encore appliquées à la machine.",
+    "proposalPending": "Ces mesures sont proposées par défaut à la première configuration de la machine.",
     "fileHelp": "PDF ou JSON, 10 Mio maximum. Ne joignez aucune donnée de santé.",
     "currentSheet": "Fiche courante",
     "sheetHistory": "Historique des fiches",
@@ -240,7 +244,12 @@
     "sheetVersion": "Version de la fiche variateur",
     "signedBy": "Signataire",
     "sheetAt": "Date de la fiche",
-    "levels": { "none": "Aucune validation", "bench": "Au banc", "auto": "Automatique", "occupied": "Personne à bord" },
+    "levels": {
+      "none": "Aucune validation",
+      "bench": "Au banc",
+      "auto": "Automatique",
+      "occupied": "Personne à bord"
+    },
     "reviewRule": "Seule une revue avec compte rendu permet de passer au niveau suivant. Une descente exige un motif.",
     "medicalKeyIsTest": "Le niveau « Personne à bord » reste impossible tant que les paramètres médicaux ne sont pas signés par la clé médicale (ANH-98). La clé actuelle est une clé de test.",
     "reviews": "Revues de validation",
@@ -265,12 +274,17 @@
     "softwareAndLocks": "Version logicielle et verrous",
     "reportedVersion": "Version logicielle remontée",
     "versionStatus": "Statut de la version",
-    "versions": { "unknown": "Inconnue", "up_to_date": "À jour", "outdated": "Obsolète", "not_validated": "Non validée pour cette machine" },
+    "versions": {
+      "unknown": "Inconnue",
+      "up_to_date": "À jour",
+      "outdated": "Obsolète",
+      "not_validated": "Non validée pour cette machine"
+    },
     "expectedNotValidated": "La version attendue n'est pas validée pour cette machine.",
     "allowed": "Autorisé",
     "denied": "Refusé",
     "lockReason": "Machine validée jusqu'au niveau : {level}.",
-    "locksPending": "L'application des verrous attend la configuration centralisée (ANH-141). Ces verdicts indiquent les autorisations du registre.",
+    "locksPending": "La configuration de la machine applique ces verdicts : un verrou ne passe à vrai qu'au niveau requis.",
     "otaPending": "Le refus d'installation d'une version insuffisamment validée par l'OTA attend ANH-116.",
     "alerts": {
       "programs_enabled_without_auto": "Les programmes sont activés alors que la machine n'atteint pas le niveau Automatique.",
@@ -280,7 +294,12 @@
     "badges": {
       "validation": "Validation : {level}",
       "version": "Version : {status}",
-      "configuration": { "unavailable": "Configuration : non disponible (ANH-141)", "pending": "Configuration : en attente de la machine", "applied": "Configuration : appliquée", "mismatch": "Configuration : appliquée ≠ approuvée" }
+      "configuration": {
+        "unavailable": "Configuration : aucune approuvée",
+        "pending": "Configuration : en attente de la machine",
+        "applied": "Configuration : appliquée",
+        "mismatch": "Configuration : appliquée ≠ approuvée"
+      }
     },
     "saving": "Enregistrement...",
     "saveIdentity": "Enregistrer l'identité",
@@ -293,6 +312,78 @@
     "sheetSaved": "Fiche variateur déposée.",
     "reviewSaved": "Revue enregistrée.",
     "levelLowered": "Niveau abaissé avec son motif."
+  },
+  "machineConfig": {
+    "title": "Configuration de la machine",
+    "loading": "Chargement de la configuration",
+    "safety": "sûreté",
+    "safetyChange": "clé de sûreté changée",
+    "enabled": "activé",
+    "choose": "Choisir",
+    "form": "Proposer une configuration",
+    "level": "Machine validée jusqu'au niveau {level} : les deux verrous en dépendent.",
+    "problems": "{count} erreur(s) : la console refuserait cette configuration.",
+    "problemList": "Erreurs de la configuration",
+    "diff": "Changements",
+    "diffNone": "Aucune révision appliquée : toutes les clés sont nouvelles pour la machine, et une clé de sûreté change.",
+    "diffApplied": "Changements par rapport à la révision appliquée {revision} :",
+    "propose": "Proposer",
+    "proposed": "Révision {revision} proposée.",
+    "unchanged": "Cette configuration est déjà celle envoyée à la machine.",
+    "approve": "Approuver",
+    "approved": "Révision {revision} approuvée.",
+    "reject": "Refuser",
+    "rejected": "Révision {revision} refusée.",
+    "reason": "Motif du refus (3 à 500 caractères)",
+    "revisions": "Révisions",
+    "revision": "Révision {revision}",
+    "proposedBy": "proposée par {name} le {at}",
+    "approvedBy": "approuvée par {names} le {at}",
+    "appliedAt": "appliquée par la machine le {at}",
+    "changed": "Clés changées par rapport à la révision appliquée : {keys}",
+    "rejectReason": "Motif : {reason}",
+    "mismatch": "Configuration appliquée ≠ approuvée : la machine ne dit pas tourner sur la révision en vigueur.",
+    "statuses": {
+      "draft": "brouillon",
+      "approved": "approuvée, en attente de la machine",
+      "applied": "appliquée",
+      "rejected": "refusée"
+    },
+    "status": {
+      "unavailable": "Aucune configuration approuvée",
+      "pending": "En attente de la machine",
+      "applied": "Appliquée",
+      "mismatch": "Appliquée ≠ approuvée"
+    },
+    "blocked": {
+      "machine_config_wrong_status": "Cette révision n'est plus un brouillon.",
+      "machine_config_keys_not_allowed": "Un administrateur d'organisation n'approuve que le nom et le lieu.",
+      "machine_config_self_approval": "Une clé de sûreté change : un autre administrateur Anheart que l'auteur doit approuver.",
+      "machine_config_safety_needs_admins": "Une clé de sûreté change : la révision doit être proposée par un administrateur Anheart."
+    },
+    "keys": {
+      "name": "Nom de la machine",
+      "location": "Lieu",
+      "SENSORS": "Voies acquises",
+      "MOTOR_PORT": "Port du variateur",
+      "MOTOR_SLAVE_ID": "Adresse Modbus",
+      "MODBUS_BAUDRATE": "Débit Modbus",
+      "MODBUS_PARITY": "Parité Modbus",
+      "MODBUS_TIMEOUT_S": "Délai Modbus (s)",
+      "MOTOR_REG_OFFSET": "Décalage des registres",
+      "ECG_SOURCE": "Source de l'ECG",
+      "BITALINO_ADDRESS": "Adresse du BITalino",
+      "PRESENCE_SOURCE": "Caméra",
+      "UI_PORT": "Port de la console",
+      "GEAR_RATIO": "Rapport du réducteur",
+      "RECORD_LOCAL_RETENTION_DAYS": "Garde des enregistrements (jours)",
+      "MOTOR_BACKEND": "Variateur",
+      "MOTOR_MAX_RPM": "Plafond moteur (tr/min)",
+      "ARM_RADIUS_M": "Rayon de l'occupant (m)",
+      "LEG_TIP_RADIUS_M": "Rayon de la pointe du pied (m)",
+      "PROGRAMS_ENABLED": "Séances programmées",
+      "OCCUPANCY_OCCUPIED_ENABLED": "Personne à bord"
+    }
   },
   "errors": {
     "invalid_registry_field": "Valeur invalide dans le registre machine.",
