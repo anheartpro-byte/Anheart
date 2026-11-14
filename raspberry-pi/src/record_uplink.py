@@ -64,8 +64,9 @@ tells which one an HTTP exchange was:
 
 Never in the way
 ----------------
-:meth:`RecordUplink.step` runs in the dashboard task, never in the control
-tick. Every file is read and written on a record I/O thread
+:meth:`RecordUplink.step` runs in a task of its own
+(:meth:`~src.local_panel.LocalPanel.records_step`), never in the dashboard step
+nor in the control tick. Every file is read and written on a record I/O thread
 (:class:`~src.record.export.RecordIo`): one at a time, each bounded in size and
 in time, on a daemon thread. A disk that does not answer costs the sending,
 which waits; it holds neither a tick nor the exit of the console.
@@ -683,7 +684,8 @@ class RecordUplink:
         self._io: RecordIo = RecordIo(1) if source is None else source.io
         # One read or write at a time between the sending's own task and the dashboard
         # step: the register written before that step waits on the link (:meth:`keep`)
-        # waits for a read of the sending, bounded, rather than being refused for it.
+        # waits for a read of the sending rather than being refused for it, for that
+        # read's own bound (READ_TIMEOUT, SCAN_TIMEOUT for the list made at the start).
         # The operator's acknowledgement does not wait (:meth:`acknowledge`).
         self._disk_turn: asyncio.Lock = asyncio.Lock()
         self._start_refused: Callable[[str], None] = start_refused

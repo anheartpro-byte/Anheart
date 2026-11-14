@@ -204,7 +204,8 @@ async def test_on_the_console_a_sending_that_never_returns_holds_neither_the_lin
         assert dashboard.to(HEARTBEAT)
         assert len([at for at in looks if at > hung_at]) >= 10
         stop.set()
-        assert await asyncio.wait_for(runner, 2) == EXIT_OK
+        code = await asyncio.wait_for(runner, 2)
+        assert code == EXIT_OK
         assert cleaned.is_set(), "the sending was cancelled at exit"
     finally:
         stop.set()
@@ -238,7 +239,8 @@ async def test_a_sending_still_awaited_at_exit_holds_neither_the_exit_nor_the_st
     try:
         await asyncio.wait_for(entered.wait(), 2)
         stop.set()
-        assert await asyncio.wait_for(runner, 2) == EXIT_OK
+        code = await asyncio.wait_for(runner, 2)
+        assert code == EXIT_OK
         assert cleaned.is_set()
         assert rig_.simulator.commanded_setpoint == 0
     finally:
