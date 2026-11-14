@@ -182,15 +182,21 @@ from src.clock import RealClock
 from src.geometry import CONFIRMED_GEAR_RATIO, MachineGeometry
 from src.local_config import DriveLink
 from src.motor.drive import (
+    BadResponse,
+    CommTimeout,
     ControlWord,
     DriveError,
+    DriveFaulted,
     DriveState,
     DriveStatus,
+    EnableUnconfirmed,
+    StopUnconfirmed,
+    UnexpectedState,
     decode_speed,
     describe_fault,
 )
 from src.result import Err, Ok, Result
-from src.units import Metres, Monotonic, MotorRpm, elapsed
+from src.units import Metres, Monotonic, MotorRpm, OutOfRange, elapsed
 
 # --- Nameplate: SEW-USOCOME KA37 DRS71S4/AL/DH --------------------------
 # Read off the motor itself, not from a datasheet:
@@ -273,6 +279,9 @@ class Snapshot:
     implausible: int = 0
     reconnects: int = 0
     last_error: str | None = None
+    last_link_error: str | None = None
+    """Why the drive is not wholly there: the last open or HSP read that failed, kept
+    until an open and its HSP read both succeed. Never cleared by a poll."""
     last_action: str = "-"
     updated_at: float = field(default_factory=lambda: RealClock().monotonic())
 
@@ -327,6 +336,11 @@ class BusWorker(threading.Thread):
         self._built: BuiltDrive = build_drive(link, self._clock)
         self._commands: queue.Queue[Command] = queue.Queue()
         self._stop_requested = threading.Event()
+        # Whether the last open succeeded: until it has, the bus thread tries again at rest.
+        self._opened: bool = False
+        # Whether HSP got an answer that reading again would get again: not read again
+        # until the next open.
+        self._hsp_final: bool = False
         self.snap = Snapshot()
         self.exit_report: str = "-"
 
@@ -350,23 +364,50 @@ class BusWorker(threading.Thread):
 
     # --- link ------------------------------------------------------------
     async def _connect(self) -> None:
+        """Open the link, then read HSP: at the start, and at every reopen.
+
+        HSP is the drive's own ceiling, and the operator should see it before
+        sending a speed: it is read after every open that succeeds, and again at
+        rest while it is unknown (:meth:`_cycle`). Why either failed stays in
+        ``last_link_error`` until both succeed, whatever the polls read meanwhile.
+        """
         drive = self._built.drive
         match await drive.open():
             case Ok():
+                self._opened = True
                 self.snap.link_ok = True
                 self.snap.last_error = None
             case Err(error):
+                self._opened = False
                 self.snap.link_ok = False
-                self.snap.last_error = f"ouverture: {describe_error(error)}"
+                why = f"ouverture: {describe_error(error)}"
+                self.snap.last_error = why
+                self.snap.last_link_error = why
                 return
-        # HSP once per connection: it is the drive's own ceiling, and the
-        # operator should see it before sending a speed.
-        match await drive.read_limits():
+        await self._read_hsp()
+
+    async def _read_hsp(self) -> None:
+        """Read HSP, and clear the link's reason once it is read.
+
+        A drive that did not answer is read again at rest. One that answered
+        with what it should not (a Modbus exception, among them code 2, which
+        says the register does not exist; a garbled frame; a value out of range)
+        would answer the same again: not read again until the next open, and
+        the reason says so.
+        """
+        match await self._built.drive.read_limits():
             case Ok(limits):
                 self.snap.hsp_hz = limits.high_speed
+                self.snap.last_link_error = None
+                self._hsp_final = False
             case Err(error):
                 self.snap.hsp_hz = None
-                self.snap.last_error = f"lecture HSP: {describe_error(error)}"
+                self._hsp_final = _answered_for_good(error)
+                why = f"lecture HSP: {describe_error(error)}"
+                if self._hsp_final:
+                    why += " (definitif: HSP n'est relu qu'a la prochaine ouverture)"
+                self.snap.last_error = why
+                self.snap.last_link_error = why
 
     async def _recover_if_latched(self) -> None:
         """Reconnect a latched link -- after DISARMING, so nothing resumes by itself."""
@@ -674,6 +715,13 @@ class BusWorker(threading.Thread):
                 await self._execute(cmd)
             await self._recover_if_latched()
             if not self._built.drive.link_lost:
+                if not self.snap.armed:
+                    # At rest only: an open that failed is tried again, and HSP, read
+                    # only, while it is unknown; either clears the reason once done.
+                    if not self._opened:
+                        await self._connect()
+                    elif self.snap.hsp_hz is None and not self._hsp_final:
+                        await self._read_hsp()
                 await self._poll()
             self.snap.cycles += 1
             self.snap.updated_at = self._clock.monotonic()
@@ -705,6 +753,23 @@ class BusWorker(threading.Thread):
             self._built.release_port()
             raise
         self.exit_report = _stop_report(closed)
+
+
+def _answered_for_good(error: DriveError) -> bool:
+    """Whether the same read would get the same answer: the drive answered, wrongly."""
+    match error:
+        case CommTimeout():
+            return False
+        case (
+            BadResponse()
+            | OutOfRange()
+            | UnexpectedState()
+            | DriveFaulted()
+            | EnableUnconfirmed()
+            | StopUnconfirmed()
+        ):
+            return True
+    raise assert_never(error)
 
 
 def _stop_report(closed: Result[None, DriveError]) -> str:
@@ -801,6 +866,7 @@ async def api_state() -> JSONResponse:
                 "error_rate_pct": s.error_rate(),
             },
             "last_error": s.last_error,
+            "last_link_error": s.last_link_error,
             "last_action": s.last_action,
             "age_s": round(RealClock().monotonic() - s.updated_at, 2),
             "max_rpm": w.max_rpm,
@@ -969,11 +1035,15 @@ async function tick(){
   $('maxr').textContent='plafond '+s.max_rpm+' tr/min'; $('sl').max=s.max_rpm;
   const b=$('linkbad');
   if(!s.link_ok){ b.style.display='block';
-    b.innerHTML='<b>LIAISON MODBUS PERDUE.</b> '+(s.last_error||'')+
-      ' &mdash; '+s.link.read_failed+' lectures echouees, '+s.link.implausible+
+    // Text nodes only: the reasons are the transport's own words, never markup.
+    const head=document.createElement('b'); head.textContent='LIAISON MODBUS PERDUE.';
+    b.replaceChildren(head,' '+[s.last_link_error,s.last_error].filter(Boolean).join(' ; ')+
+      ' - '+s.link.read_failed+' lectures echouees, '+s.link.implausible+
       ' valeurs impossibles rejetees, '+s.link.reconnects+' reconnexions.'+
       ' Les champs ? ne sont PAS connus. Verifiez la masse (broche 8), le blindage,'+
-      ' et l eloignement du cable moteur.';
+      ' et l eloignement du cable moteur.');
+  } else if(s.last_link_error){ b.style.display='block';
+    b.textContent='Variateur pas entierement lu : '+s.last_link_error;
   } else if(s.link.error_rate_pct>5){ b.style.display='block';
     b.innerHTML='<b>Liaison degradee :</b> '+s.link.error_rate_pct+'% d echecs, '+
       s.link.implausible+' valeurs impossibles rejetees.';

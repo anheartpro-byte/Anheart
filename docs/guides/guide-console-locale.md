@@ -2487,6 +2487,17 @@ console : en défaut l'étage de puissance est coupé et RFRD est la fréquence 
 qui lit 0 même sur un arbre qui tourne encore sur son élan. « Arbre lu à l'arrêt » veut
 dire RFRD à 0 ; l'opérateur regarde l'arbre.
 
+**Quand le variateur n'est pas là.** Le bandeau en haut de la page de l'outil dit
+pourquoi : `LIAISON MODBUS PERDUE.` quand plus rien ne se lit, ou `Variateur pas
+entierement lu :` quand le variateur répond mais que l'ouverture du câble ou la lecture de
+HSP a échoué. La raison (`ouverture: ...`, `lecture HSP: ...`) reste affichée jusqu'à ce
+qu'une ouverture et sa lecture de HSP réussissent : tant qu'il n'est pas armé, l'outil
+retente l'ouverture, et relit HSP tant qu'il est inconnu (une lecture, rien d'écrit) ; il
+le relit aussi à chaque ouverture réussie. Un variateur qui répond mal à cette lecture
+(registre absent, code Modbus 2) répondrait de même : la raison le dit
+(`definitif: HSP n'est relu qu'a la prochaine ouverture`). Tant que HSP n'est pas lu, il
+s'affiche `?`.
+
 **Comment `scripts/bench_console.py` s'arrête, et ce qu'il ne peut pas couvrir.**
 Sur Ctrl+C, sur `kill` ou l'arrêt d'un service (SIGTERM), quand le terminal ou la
 session SSH se ferme (SIGHUP), et sur une erreur de son fil de bus, cet outil de banc
