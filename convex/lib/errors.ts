@@ -301,7 +301,7 @@ export const DASHBOARD_ERRORS = {
     "The incident does not exist, or concerns a machine the caller does not reach.",
   incident_closed: "The incident is closed: it is no longer analysed.",
   invalid_logbook_entry:
-    "A logbook entry's line is under 3 or over 200 characters, its details over 2000, its date in the future, or it names an incident without being an intervention.",
+    "A logbook entry's line is under 3 or over 200 characters, its details under 3 or over 2000, its date in the future or before the machine existed, or it names an incident without being an intervention.",
   invalid_logbook_file:
     "The attachment is not a PDF, JPEG or PNG of at most 10 MiB uploaded within the hour, or it is already attached to an entry.",
   logbook_kind_not_allowed:

@@ -28,6 +28,7 @@ import {
   MANUAL_KINDS,
   ORGANIZATION_KINDS,
   driveInterventionsDue,
+  refreshInterventionDue,
   writeLogbook,
   type LogbookKind,
 } from "./lib/logbook";
@@ -225,9 +226,10 @@ export const addEntry = mutation({
     if (args.incidentId !== undefined && args.kind !== "intervention")
       throw refusal("invalid_logbook_entry");
     const now = Date.now();
+    // Not in the future, nor before the machine existed.
     if (
       args.at !== undefined &&
-      (!Number.isFinite(args.at) || args.at > now || args.at < 0)
+      (!Number.isFinite(args.at) || args.at > now || args.at < machine._creationTime)
     )
       throw refusal("invalid_logbook_entry");
     const details =
@@ -251,6 +253,8 @@ export const addEntry = mutation({
             : await attachment(ctx, args.storageId),
       },
     });
+    if (args.incidentId !== undefined)
+      await refreshInterventionDue(ctx, args.incidentId);
     await audit(ctx, {
       actor: userActor(caller),
       source: "site",

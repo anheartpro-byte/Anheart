@@ -1021,6 +1021,10 @@ async function armingRefusal(
   }
   if ((await openHighIncidents(ctx, machine._id)) > 0)
     return refusalFor("incident_open");
+  // ANH-149: a drive fault the console cannot reset, not resolved. Said
+  // `incident_open` until contract 1.16 gives it a code of its own.
+  if ((await driveInterventionsDue(ctx, machine._id)).length > 0)
+    return refusalFor("incident_open");
   const rider = await riderStillAllowed(ctx, session, machine);
   if (rider === null) return refusalFor("right_revoked_before_start");
   const fitnessRefusal = await riderLaunchRefusal(

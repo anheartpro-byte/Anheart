@@ -162,16 +162,17 @@ describe("EX-3 who reads and writes the logbook", () => {
     expect(
       await codeOf(as(w.t, "admin").mutation(api.machineLogbook.addEntry, { ...note, incidentId })),
     ).toBe("invalid_logbook_entry");
+    vi.setSystemTime(NOW + 120_000);
     await as(w.t, "admin").mutation(api.machineLogbook.addEntry, {
       ...note,
       kind: "calibration",
       details: "capteur de vitesse recale sur le tachymetre",
-      at: NOW - 60_000,
+      at: NOW + 60_000,
     });
     const audits = await w.t.run((ctx) => ctx.db.query("audit_log").collect());
     expect(audits.filter((row) => row.action === "logbook.entry_added")).toHaveLength(1);
     const entry = (await read(w))?.entries.find((row) => row.kind === "calibration");
-    expect(entry).toMatchObject({ at: NOW - 60_000, by: w.admin, byName: expect.any(String) });
+    expect(entry).toMatchObject({ at: NOW + 60_000, by: w.admin, byName: expect.any(String) });
   });
 
   it("attaches one fresh PDF or image, once", async () => {
@@ -269,6 +270,10 @@ describe("EX-2 what the server writes", () => {
     await beat("pi-0.2.0");
     await beat(undefined);
     await beat("pi-0.2.0");
+    // Flapping back and forth: one more entry, then nothing.
+    await beat("pi-0.1.0");
+    await beat("pi-0.2.0");
+    await beat("pi-0.1.0");
     expect((await kinds(w))?.reverse()).toEqual([
       ["incident", "incident drive_fault OHF ouvert (high)"],
       ["incident", "incident drive_fault OHF clos"],
@@ -276,6 +281,7 @@ describe("EX-2 what the server writes", () => {
       ["validation_review", "niveau de validation abaissé de bench à none"],
       ["drive_parameter_change", "fiche variateur v3 jointe"],
       ["software_update", "logiciel pi-0.1.0 -> pi-0.2.0"],
+      ["software_update", "logiciel pi-0.2.0 -> pi-0.1.0"],
     ]);
     const book = await read(w);
     const opened = book?.entries.find((entry) => entry.summary.includes("ouvert"));
@@ -316,6 +322,28 @@ describe("EX-2 what the server writes", () => {
   });
 });
 
+describe("EX-2 a precise incident opened again", () => {
+  it("names a precise incident opened again by its own rule", async () => {
+    const w = await seedLaunchWorld(modules);
+    const sessionId = await session(w, "bench");
+    const send = (detail: string) =>
+      w.t.mutation(internal.training.storeEvents, {
+        machineId: w.machine,
+        sessionId,
+        events: [{ seq: ++seq, t: NOW, kind: "verdict", detail, actor: "system" }],
+      });
+    await send("hr_critical (QUICK_STOP): 190");
+    const incident = await w.t.run((ctx) => ctx.db.query("incidents").first());
+    if (incident === null) throw new Error("no incident");
+    await close(w, incident._id);
+    await send("hr_critical (GO_SILENT): 190");
+    expect((await kinds(w))?.[0]).toEqual([
+      "incident",
+      "incident safety_verdict hr_critical rouvert (high)",
+    ]);
+  });
+});
+
 describe("EX-4 a drive fault the console cannot reset closes programmed sessions", () => {
   it("reads the console's table: each code reset at the console or not, an unknown one not", () => {
     expect(manualResetOnly("OCF")).toBe(true);
@@ -331,6 +359,7 @@ describe("EX-4 a drive fault the console cannot reset closes programmed sessions
     const incidentId = await driveFault(w, "OCF (LFT 23): overcurrent", "bench");
     expect((await read(w))?.interventionsDue).toEqual([incidentId]);
     expect(await codeOf(launch(w))).toBe("drive_intervention_required");
+    vi.setSystemTime(NOW + 1000);
     await close(w, incidentId);
     expect(await codeOf(launch(w))).toBe("drive_intervention_required");
     await intervention(w);
@@ -343,10 +372,87 @@ describe("EX-4 a drive fault the console cannot reset closes programmed sessions
   it("asks for an intervention before the closure too, and for a fault whose code is unreadable", async () => {
     const w = await seedLaunchWorld(modules);
     const unreadable = await driveFault(w, "an unreadable fault", "bench");
+    vi.setSystemTime(NOW + 1000);
     await intervention(w, unreadable);
     expect(await codeOf(launch(w))).toBe("drive_intervention_required");
     await close(w, unreadable);
     expect(await codeOf(launch(w))).toBeNull();
+  });
+
+  it("fails a launch already pending: not offered, not armed, failed by the sweep", async () => {
+    const w = await seedLaunchWorld(modules);
+    const sessionId = await launch(w);
+    const offered = () =>
+      w.t.query(internal.training.getPendingTrainingSession, {
+        machineId: w.machine,
+        contract: CONTRACT_VERSION,
+      });
+    expect((await offered())?.sessionId).toBe(sessionId);
+    const incidentId = await driveFault(w, "OCF (LFT 23): overcurrent", "bench");
+    expect(await offered()).toBeNull();
+    vi.setSystemTime(NOW + 1000);
+    await close(w, incidentId);
+    expect(await offered()).toBeNull();
+    expect(
+      await w.t.mutation(internal.training.markTrainingStarted, {
+        machineId: w.machine,
+        sessionId,
+      }),
+    ).toMatchObject({ armed: false, code: "incident_open" });
+    const other = await w.t.run((ctx) =>
+      ctx.db.insert("sessions", {
+        organizationId: w.orgA,
+        machineId: w.machine,
+        userId: w.patient,
+        startedById: w.manager,
+        status: "pending",
+        startedAt: NOW,
+        channels: ["ECG"],
+        kind: "auto",
+        origin: "remote",
+        profileId: w.profileId,
+      }),
+    );
+    await w.t.mutation(internal.training.sweepPendingSessions, {});
+    const swept = await w.t.run((ctx) => ctx.db.get(other));
+    expect(swept?.status).toBe("failed");
+  });
+
+  it("counts only an intervention written since the incident last opened, whatever date it was given", async () => {
+    const w = await seedLaunchWorld(modules);
+    const incidentId = await driveFault(w, "OCF (LFT 23): overcurrent", "bench");
+    vi.setSystemTime(NOW + 1000);
+    await intervention(w, incidentId);
+    await close(w, incidentId);
+    expect((await read(w))?.interventionsDue).toEqual([]);
+    // Opened again later (as `join` does): the intervention before it no longer counts.
+    vi.setSystemTime(NOW + 3000);
+    await w.t.run((ctx) =>
+      ctx.db.patch(incidentId, { status: "open", reopenedAt: NOW + 3000, closedAt: undefined }),
+    );
+    vi.setSystemTime(NOW + 4000);
+    await close(w, incidentId);
+    expect((await read(w))?.interventionsDue).toEqual([incidentId]);
+    expect(
+      await codeOf(
+        as(w.t, "admin").mutation(api.machineLogbook.addEntry, {
+          machineId: w.machine,
+          kind: "intervention",
+          summary: "ancienne intervention",
+          incidentId,
+          at: 1,
+        }),
+      ),
+    ).toBe("invalid_logbook_entry");
+    vi.setSystemTime(NOW + 5000);
+    await as(w.t, "admin").mutation(api.machineLogbook.addEntry, {
+      machineId: w.machine,
+      kind: "intervention",
+      summary: "intervention datee du jour de la panne",
+      incidentId,
+      at: NOW + 500,
+    });
+    expect((await read(w))?.interventionsDue).toEqual([]);
   });
 
   it("leaves a fault the console resets, and another machine's intervention, out of it", async () => {

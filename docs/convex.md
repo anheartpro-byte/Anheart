@@ -953,10 +953,11 @@ Une ligne du temps par machine : `machineId`, `organizationId` (celle de la
 machine quand l'entrée est écrite), `at` (quand c'est arrivé : l'horloge du
 serveur, ou la date qu'un admin donne à une entrée écrite à la main, jamais
 dans le futur), `kind`, `summary` (une ligne, 3 à 200 caractères), `details?`
-(2000 caractères au plus), `by?` (l'utilisateur qui l'a écrite ; absent :
+(3 à 2000 caractères), `by?` (l'utilisateur qui l'a écrite ; absent :
 écrite par le serveur) et `refs` (`incidentId?`, `configRevision?`,
 `softwareVersion?`, `storageId?` d'une pièce jointe). Une entrée n'est jamais
 modifiée ni supprimée. Index `by_machine_and_at` (la ligne du temps),
+`by_machine_and_kind_and_at` (les dernières mises à jour logicielles),
 `by_incident_and_kind` (les interventions d'un incident, pour la règle du
 défaut variateur), `by_storage` (une pièce jointe ne sert qu'une fois) et
 `by_organization`.
@@ -970,7 +971,7 @@ défaut variateur), `by_storage` (une pièce jointe ne sert qu'une fois) et
 | `incident` | le serveur : un incident ouvert (`openIncident`), rouvert (`join`, un incident clos qui devient `high`) ou clos (`incidents.close`), son id dans `refs.incidentId` |
 | `validation_review` | le serveur : une revue ajoutée (`addValidationReview`, le compte rendu dans `refs.storageId`, la version dans `refs.softwareVersion`) ou un niveau abaissé (`lowerValidationLevel`) |
 | `drive_parameter_change` | le serveur : une fiche variateur jointe (`attachDriveParameterSheet`, la fiche dans `refs.storageId`) |
-| `software_update` | le serveur : un heartbeat qui annonce une autre version que la précédente (`recordHeartbeat`, la nouvelle dans `refs.softwareVersion` ; une version absente ne compte pas) |
+| `software_update` | le serveur : un heartbeat qui annonce une autre version que la précédente (`recordHeartbeat`, `writeSoftwareUpdate`, la nouvelle dans `refs.softwareVersion`). Une version absente ne compte pas ; une entrée qui dit déjà cette version n'est pas réécrite, et une console qui passe et repasse entre deux versions n'en écrit qu'une par sens, puis plus rien : elle ne pousse pas les vraies entrées hors des 500 que la liste montre |
 | `config_change` | le serveur : une configuration appliquée (ANH-141, `refs.configRevision`), une fois ANH-141 sur `develop` |
 
 Les lignes du serveur nomment des règles, des codes, des niveaux et des
@@ -983,12 +984,28 @@ le code LFT est `manual_reset_only` dans
 de la console, `FaultSpec.resettable`, que ses tests épinglent sur ce
 fichier), ou qu'il ne connaît pas (un défaut illisible, `rule` =
 `drive_fault`), les séances programmées de la machine restent fermées tant que
-l'incident n'est pas clos **et** qu'aucune entrée `intervention` ne le nomme
-(`driveInterventionsDue`, convex/lib/logbook.ts). `launchAutoSession` refuse
-alors `drive_intervention_required`. Une séance de banc reste possible :
-c'est ainsi que la machine est essayée après l'intervention. Un défaut que la
-console réarme (`console_reset`) ne demande rien de plus que ce que demande
-déjà son incident.
+l'incident n'est pas clos **et** qu'aucune entrée `intervention` ne le nomme,
+écrite depuis sa dernière ouverture : son ouverture, ou sa dernière
+réouverture (`reopenedAt`). L'heure d'écriture est celle du serveur
+(`_creationTime`), jamais la date que l'admin donne à l'entrée : une
+intervention datée d'avant la panne ne lève rien. L'incident porte
+`interventionDue` tant que c'est le cas (`refreshInterventionDue`, appelé à
+son ouverture, à chaque jonction, à sa clôture et à chaque intervention qui le
+nomme), et `driveInterventionsDue` ne lit que ceux-là (index
+`by_machine_and_intervention_due`) : les défauts résolus d'une machine ne sont
+jamais relus. Un défaut que la console réarme (`console_reset`) ne demande
+rien de plus que ce que demande déjà son incident. Une séance de banc reste
+possible : c'est ainsi que la machine est essayée après l'intervention.
+
+Ce que la règle ferme aujourd'hui, et ce qu'elle ne ferme pas encore :
+
+| Chemin | Fermé | Comment |
+|---|---|---|
+| Lancement automatique depuis le site | oui | `launchAutoSession` refuse `drive_intervention_required` |
+| Offre du poll d'un lancement déjà en attente | oui | `armingRefusal` : le poll ne l'offre plus |
+| Départ confirmé par la machine (`training/start`) | oui | `armingRefusal` : 409 `incident_open`, le code existant, jusqu'à ce que le contrat 1.16 lui en donne un à lui |
+| Tâche qui échoue les lancements en attente | oui | `armingRefusal` : le lancement est échoué |
+| Programme lancé à la console | **non** | la console n'en sait rien aujourd'hui. Le contrat 1.16 (après ANH-141) porte le champ du poll qui le lui dit, et la couche Pi d'ANH-149 refuse alors un programme local, en gardant hors ligne la dernière valeur reçue, comme pour les incidents |
 
 ### `incidents` : registre des incidents (ANH-145)
 
@@ -2016,8 +2033,8 @@ ANH-145 ajoute quatre codes, du lancement et du registre des incidents :
 | `programme_changed` | Code de fin seulement (contrat 1.12) : la machine ne tenait plus, au départ, la liste de programmes d'où le lancement a été fait, ou ne pouvait pas la lui comparer. Il faut relancer. |
 | `incident_not_found` | L'incident n'existe pas, ou sa machine n'est pas atteinte par l'appelant : même réponse. |
 | `incident_closed` | L'incident est clos : il n'est plus ni analysé ni clos de nouveau. |
-| `drive_intervention_required` | Un défaut variateur `manual_reset_only` (ou illisible) de la machine n'est pas clos, ou aucune entrée `intervention` du carnet ne le nomme : pas de séance programmée (`launchAutoSession`). Une séance de banc reste possible (ANH-149). |
-| `invalid_logbook_entry` | Une entrée du carnet hors de ses bornes : ligne de 3 à 200 caractères, détails de 2000 au plus, date passée, incident nommé par une intervention seulement. |
+| `drive_intervention_required` | Un défaut variateur `manual_reset_only` (ou illisible) de la machine n'est pas clos, ou aucune entrée `intervention` écrite depuis sa dernière ouverture ne le nomme : pas de séance programmée (`launchAutoSession`). Une séance de banc reste possible (ANH-149). |
+| `invalid_logbook_entry` | Une entrée du carnet hors de ses bornes : ligne de 3 à 200 caractères, détails de 3 à 2000, date ni future ni d'avant la création de la machine, incident nommé par une intervention seulement. |
 | `invalid_logbook_file` | La pièce jointe n'est pas un PDF, JPEG ou PNG de 10 Mio au plus envoyé depuis moins d'une heure, ou elle est déjà jointe. |
 | `logbook_kind_not_allowed` | L'appelant ne peut pas écrire ce type d'entrée (un admin d'organisation écrit des notes seulement ; les types du serveur ne s'écrivent pas à la main). |
 | `logbook_incident_mismatch` | L'incident nommé par l'intervention n'existe pas ou n'est pas de cette machine. |
@@ -2618,9 +2635,22 @@ ces fonctions lisent le carnet et y écrivent à la main.
 | `addEntry({machineId, kind, summary, details?, at?, incidentId?, storageId?})` | mutation | admin Anheart (`intervention`, `calibration`, `part_replaced`, `note`) ; admin d'organisation de la machine (`note`) | Écrit l'entrée, `by` l'appelant. Refus : `logbook_kind_not_allowed` (un autre type, dont ceux du serveur), `invalid_logbook_entry` (bornes, date future, incident nommé par autre chose qu'une intervention), `logbook_incident_mismatch` (incident d'une autre machine), `invalid_logbook_file` (pièce jointe), `machine_not_found` (machine supprimée ou hors périmètre). Audit `logbook.entry_added` (cible la machine, détail `fields` = le type, jamais le texte). |
 | `generateUploadUrl()` | mutation | admin Anheart, admin d'organisation | Une URL d'envoi vers Convex Storage. La pièce jointe est un PDF, un JPEG ou un PNG de 10 Mio au plus, envoyé depuis moins d'une heure, jointe à une seule entrée. |
 
-L'export du carnet (CSV, et une vue à imprimer en PDF par le navigateur,
-comme le rapport de séance) est fait par le site à partir de `list`, avec
-les identifiants seulement.
+`list` donne à chaque lecteur le nom de qui a écrit une entrée (`byName`) :
+une entrée écrite à la main engage son auteur, et le carnet le dit à qui le
+lit. L'export du carnet (EX-5 : un CSV, et une vue à imprimer en PDF par le
+navigateur, comme le rapport de séance) vient avec la couche site d'ANH-149 ;
+il est fait à partir de `list` et n'en garde que les identifiants : `by`,
+jamais `byName`.
+
+Limites connues :
+
+- une pièce jointe n'est pas liée à qui l'a envoyée : `addEntry` accepte
+  l'identifiant de stockage de n'importe quel envoi frais et non joint. Ces
+  identifiants ne se devinent pas, et ceux que le serveur tient déjà (un
+  compte rendu, une fiche variateur) comptent comme joints ;
+- un envoi jamais joint à une entrée reste dans Convex Storage : rien ne le
+  nettoie, pas plus que les envois du registre (`machineRegistry.generateUploadUrl`)
+  restés sans fiche ni revue.
 
 ### `incidents.ts` (registre des incidents, ANH-145)
 

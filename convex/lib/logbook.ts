@@ -96,33 +96,90 @@ export function incidentSummary(
 }
 
 /**
- * The `drive_fault` incidents of the machine whose code is not reset at the
- * console and that still close its programmed sessions: not closed yet, or
- * closed with no `intervention` entry that names them.
+ * Whether an `intervention` entry names the incident and was written (the
+ * server's creation time, never the date the admin gave it) after the
+ * incident last opened: its opening, or its last reopening.
+ */
+async function intervened(
+  ctx: QueryCtx,
+  incident: Doc<"incidents">,
+): Promise<boolean> {
+  const since = incident.reopenedAt ?? incident.openedAt;
+  const last = await ctx.db
+    .query("machine_logbook")
+    .withIndex("by_incident_and_kind", (q) =>
+      q.eq("refs.incidentId", incident._id).eq("kind", "intervention"),
+    )
+    .order("desc")
+    .first();
+  return last !== null && last._creationTime > since;
+}
+
+/**
+ * Keep the incident's `interventionDue` true while it is a drive fault the
+ * console cannot reset and is not resolved: not closed, or closed with no
+ * intervention written since it last opened. Called wherever one of these
+ * changes: its opening and every join, its closing, an intervention naming it.
+ */
+export async function refreshInterventionDue(
+  ctx: MutationCtx,
+  incidentId: Id<"incidents">,
+): Promise<void> {
+  const incident = await ctx.db.get(incidentId);
+  if (incident === null) return;
+  const due =
+    incident.kind === "drive_fault" &&
+    manualResetOnly(incident.rule) &&
+    !(incident.status === "closed" && (await intervened(ctx, incident)));
+  if ((incident.interventionDue ?? false) !== due)
+    await ctx.db.patch(incident._id, { interventionDue: due ? true : undefined });
+}
+
+/**
+ * The drive fault incidents of the machine that still close its programmed
+ * sessions (`interventionDue`). Read by an index on those alone: a machine's
+ * resolved faults, however many, are never read.
  */
 export async function driveInterventionsDue(
   ctx: QueryCtx,
   machineId: Id<"machines">,
 ): Promise<Id<"incidents">[]> {
-  const faults = await ctx.db
+  const due = await ctx.db
     .query("incidents")
-    .withIndex("by_machine_and_kind", (q) =>
-      q.eq("machineId", machineId).eq("kind", "drive_fault"),
+    .withIndex("by_machine_and_intervention_due", (q) =>
+      q.eq("machineId", machineId).eq("interventionDue", true),
     )
     .collect();
-  const due: Id<"incidents">[] = [];
-  for (const incident of faults) {
-    if (!manualResetOnly(incident.rule)) continue;
-    const intervention =
-      incident.status === "closed"
-        ? await ctx.db
-            .query("machine_logbook")
-            .withIndex("by_incident_and_kind", (q) =>
-              q.eq("refs.incidentId", incident._id).eq("kind", "intervention"),
-            )
-            .first()
-        : null;
-    if (intervention === null) due.push(incident._id);
-  }
-  return due;
+  return due.map((incident) => incident._id);
+}
+
+/**
+ * A software version the heartbeat says changed, written once: not when the
+ * last entry already says it, nor when the console only went back to the
+ * version it left (a console flapping between two versions writes one entry,
+ * and pushes no real one out of the list).
+ */
+export async function writeSoftwareUpdate(
+  ctx: MutationCtx,
+  machine: Doc<"machines">,
+  previous: string,
+  next: string,
+  at: number,
+): Promise<void> {
+  const [last, before] = await ctx.db
+    .query("machine_logbook")
+    .withIndex("by_machine_and_kind_and_at", (q) =>
+      q.eq("machineId", machine._id).eq("kind", "software_update"),
+    )
+    .order("desc")
+    .take(2);
+  const said = last?.refs.softwareVersion;
+  const flapping = said === previous && before?.refs.softwareVersion === next;
+  if (said === next || flapping) return;
+  await writeLogbook(ctx, machine, {
+    kind: "software_update",
+    summary: `logiciel ${previous} -> ${next}`,
+    at,
+    refs: { softwareVersion: next },
+  });
 }
