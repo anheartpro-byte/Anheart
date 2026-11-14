@@ -65,11 +65,13 @@ ends:
 * the terminal or the SSH session going away (SIGHUP);
 * an exception in the bus thread, or the web server failing to start.
 
-SIGTERM and SIGHUP used to end the process with NO stop: the web server takes
-the signal, shuts itself down, then hands the signal back to whatever handled
-it before, and by default that is the end of the process on the spot, before
-any ``finally``. SIGHUP it does not take at all. All three now have one
-handler, this script's, and leave through ``main``'s ``finally``. Nothing in that path can do anything but stop: it sets
+SIGTERM and SIGHUP used to end the process with NO stop: the web server took
+the signal, shut itself down, then handed the signal back to whatever handled
+it before, and by default that was the end of the process on the spot, before
+any ``finally``. SIGHUP it did not take at all. It now takes all three, waits
+at most ``GRACEFUL_SHUTDOWN_S`` (2 s) for a request still open, then hands the
+signal to one handler, this script's: all three leave through ``main``'s
+``finally``. Nothing in that path can do anything but stop: it sets
 one flag, and the bus thread answers it with the driver's stop and nothing
 else.
 
@@ -94,7 +96,8 @@ done. The last line printed, ``sortie: ...``, says how the machine was left:
 
 The exit status: 0 after a Ctrl+C taken while the page was served (the
 interruption itself during the start-up wait), 143 after SIGTERM, 129 after
-SIGHUP, and 1 when the stop had not finished when the wait ended.
+SIGHUP, and 4 (``EXIT_STOP_UNFINISHED``) when the stop had not finished when
+the wait ended. A 1 is an ordinary error, and says nothing of the stop.
 
 None of this depends on the last line being written. With the terminal gone
 or the pipe broken there is nobody to read it: the line is dropped, the
@@ -202,6 +205,12 @@ STOP_POLL_S = 0.25
 
 #: How long the process waits, at exit, for the worker's own stop sequence.
 SHUTDOWN_JOIN_S = STOP_WAIT_S + 10.0
+
+#: How long the web server waits, on an exit signal, for a request still open
+#: (a tablet asleep halfway through a POST) before it cancels it. Unbounded, it
+#: waited for good, deaf to SIGTERM and SIGHUP, and the driver's stop, which
+#: runs after it, never began.
+GRACEFUL_SHUTDOWN_S = 2
 
 
 @dataclass
@@ -1061,7 +1070,13 @@ def main() -> int:
         taken = uvicorn.server.HANDLED_SIGNALS
         untaken = tuple(wanted for wanted in _exit_signals() if wanted not in taken)
         setattr(uvicorn.server, "HANDLED_SIGNALS", (*taken, *untaken))  # noqa: B010
-        uvicorn.run(app, host=host, port=http_port, log_level="warning")
+        uvicorn.run(
+            app,
+            host=host,
+            port=http_port,
+            log_level="warning",
+            timeout_graceful_shutdown=GRACEFUL_SHUTDOWN_S,
+        )
     finally:
         # An exit that no signal asked for (the web server returning, an
         # exception) gets here with the handlers still armed. A signal that

@@ -39,6 +39,7 @@ import errno
 import io
 import os
 import signal
+import socket
 import subprocess
 import sys
 import time
@@ -515,7 +516,12 @@ class _Console:
 
 
 def _console(
-    tmp_path: Path, *, stop: str = "0", wait: float | None = None, output: Output = "a file"
+    tmp_path: Path,
+    *,
+    stop: str = "0",
+    wait: float | None = None,
+    output: Output = "a file",
+    http_port: int | None = None,
 ) -> _Console:
     """Start the real ``main()`` over the stand-in drive. The caller ends it with a signal.
 
@@ -524,12 +530,15 @@ def _console(
     for the stop. ``output`` is where the console writes: a file the test
     reads afterwards, or something ``lose_output`` can take away, a pipe
     (whose reader then is gone) or a terminal (which then is closed).
+    ``http_port`` is where its page listens, for a test that has to reach it.
     """
     report = tmp_path / "report.txt"
     log = tmp_path / "console.log"
     command = [sys.executable, str(WORKER), str(report), stop]
-    if wait is not None:
-        command.append(str(wait))
+    if wait is not None or http_port is not None:
+        command.append("-" if wait is None else str(wait))
+    if http_port is not None:
+        command.append(str(http_port))
     home = WORKER.parent.parent
     match output:
         case "a file":
@@ -563,6 +572,35 @@ def _console(
                 )
             return _Console(process, report, log)
     raise assert_never(output)
+
+
+def _free_port() -> int:
+    """A port of this machine that nothing listens on, for the console's page."""
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        return cast(int, probe.getsockname()[1])
+
+
+def _held_request(port: int) -> socket.socket:
+    """A client that sends a request's headers and one byte of its body, then waits.
+
+    What a tablet that sleeps, or drops its Wi-Fi, halfway through a POST does.
+    The page listens once the web server's start-up is over: until then the
+    connection is refused, and tried again.
+    """
+    deadline = time.monotonic() + PATIENCE
+    client: socket.socket | None = None
+    while client is None:
+        try:
+            client = socket.create_connection(("127.0.0.1", port), timeout=PATIENCE)
+        except ConnectionRefusedError:
+            assert time.monotonic() < deadline, f"the page never listened on {port}"
+            time.sleep(0.02)
+    client.sendall(
+        b"POST /api/speed HTTP/1.1\r\nHost: bench\r\nContent-Type: application/json\r\n"
+        b"Content-Length: 100\r\n\r\n{"
+    )
+    return client
 
 
 def _kill_if_left(console: _Console) -> None:
@@ -608,6 +646,45 @@ def test_a_signal_to_the_serving_console_ends_in_the_driver_s_stop_once(
     )
     assert code == status, said
     assert CONFIRMED_LINE in said
+
+
+@signals_reach_a_process
+@pytest.mark.parametrize(
+    ("sent", "status"),
+    [
+        pytest.param(signal.SIGTERM, BY_SIGTERM, id="SIGTERM"),
+        pytest.param(HANG_UP, BY_HANG_UP, id="SIGHUP"),
+    ],
+)
+def test_a_request_left_open_does_not_keep_the_console_from_its_stop(
+    tmp_path: Path, sent: signal.Signals, status: int
+) -> None:
+    """A client is halfway through a request when the signal arrives. One stop, then the end.
+
+    The web server waits for the requests it serves before it lets go. Without
+    a bound it waited for good: the process stayed, deaf to SIGTERM and SIGHUP,
+    its page closed, the driver's stop never begun and the bus still commanding
+    the setpoint. It now cancels the request after ``GRACEFUL_SHUTDOWN_S``.
+    """
+    port = _free_port()
+    console = _console(tmp_path, http_port=port)
+    client: socket.socket | None = None
+    try:
+        console.wait_for("serving")
+        client = _held_request(port)
+        # The server has the headers, and a request under way, before the signal.
+        time.sleep(0.3)
+        console.process.send_signal(sent)
+        code = console.ended()
+    finally:
+        if client is not None:
+            client.close()
+        _kill_if_left(console)
+    words = console.words()
+
+    assert words.count("stopping") == 1, f"the driver's stop ran {words.count('stopping')} times"
+    assert words[-4:] == ["served", *ENDED_WELL], f"not one whole stop: {words}"
+    assert code == status, console.said()
 
 
 @signals_reach_a_process

@@ -2,13 +2,13 @@
 
 Started by ``tests/test_bench_console_exit.py``, which sends it real signals:
 
-    python tests/bench_console_exit_worker.py <report file> <stop> [<wait>]
+    python tests/bench_console_exit_worker.py <report file> <stop> [<wait> [<http port>]]
 
 ``<stop>`` is how long the driver's stop takes, in seconds, or ``stuck`` for a
 stop that never returns: an exchange blocked in a thread of an executor, as a
 driver transaction on a dead link would be, which is a thread the interpreter
 waits for on its way out. ``<wait>``, when given, replaces the time the script
-waits for the stop before it gives up (35 s on the bench).
+waits for the stop before it gives up (35 s on the bench); ``-`` keeps it.
 
 Only the drive is a stand-in. The argument parsing, the signal handlers, the
 bus thread, the web server and the exit are the script's own, in a process of
@@ -23,8 +23,9 @@ driver's stop begins and ``stopped`` when it has finished. Once ``main`` is
 over it writes ``signals-back`` if each exit signal does again what it did
 before ``main``, ``signals-kept`` if not. The report file is the only thing
 written that way: the standard output and error of this process are the
-script's own, and a test may have closed them. The web server listens on a
-port the system picks: nothing here needs to reach it.
+script's own, and a test may have closed them. The web server listens on
+``<http port>``, or on a port the system picks: only a test that holds a
+request open needs to reach it.
 """
 
 from __future__ import annotations
@@ -122,11 +123,12 @@ def main() -> int:
         report.note("served")
 
     patch.setattr(bench, "build_drive", build)
-    if len(sys.argv) > 3:
+    if len(sys.argv) > 3 and sys.argv[3] != "-":
         patch.setattr(bench, "SHUTDOWN_JOIN_S", float(sys.argv[3]))
+    http_port = sys.argv[4] if len(sys.argv) > 4 else "0"
     bench.app.router.on_startup.append(serving)
     bench.app.router.on_shutdown.append(served)
-    sys.argv = ["bench_console.py", "--port", "COM-NONE", "--http-port", "0"]
+    sys.argv = ["bench_console.py", "--port", "COM-NONE", "--http-port", http_port]
     watched = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
     before = [signal.getsignal(exit_signal) for exit_signal in watched]
     try:
