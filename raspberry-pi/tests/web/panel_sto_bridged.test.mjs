@@ -473,6 +473,26 @@ test("under the bridge a bench start stays possible and a programme shows the na
   assert.equal(page.node("ack-sto-note").textContent, "");
 });
 
+test("an old report closes the bench start: no frame and a status past its age, as an old reading would", async () => {
+  const page = await answered(status(BENCH_MODE));
+  page.frame(snapshot());
+  assert.equal(page.node("manual-start").disabled, false);
+  // The frames stop: the status, still young, says the declaration.
+  page.context.state.connected = false;
+  page.clock.now += 3000;
+  page.context.refreshLiveness();
+  assert.equal(page.node("manual-start").disabled, false);
+  // The status is older than two refreshes: nothing live says it any more.
+  page.clock.now += 13000;
+  page.context.refreshLiveness();
+  assert.equal(page.node("manual-start").disabled, true);
+  assert.ok(page.announced(BANNER), "the banner still names the bridge");
+  // A frame again: open again.
+  page.context.state.connected = true;
+  page.frame(snapshot());
+  assert.equal(page.node("manual-start").disabled, false);
+});
+
 test("on a read-only console the bench start stays closed under the bridge too", async () => {
   const page = await answered(status(BENCH_MODE));
   page.context.state.motionEnabled = false;

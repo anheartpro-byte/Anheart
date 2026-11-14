@@ -901,6 +901,13 @@ class WatchdogRow:
 
     last_error: str | None
 
+    late_tick_s: float | None
+    """The longest time between two completed ticks past ``bound_s`` since this process
+    started (ANH-162): it will not leave as a clean stop. ``None`` while none was."""
+
+    bound_s: float | None
+    """That bound; ``None`` with no watchdog at all."""
+
     @classmethod
     def of(cls, status: WatchdogStatus) -> WatchdogRow:
         """Render a :class:`~src.service_watchdog.WatchdogStatus`."""
@@ -909,6 +916,8 @@ class WatchdogRow:
             sent=status.sent,
             failed=status.failed,
             last_error=status.last_error,
+            late_tick_s=None if status.late_tick is None else float(status.late_tick),
+            bound_s=None if status.bound is None else float(status.bound),
         )
 
 

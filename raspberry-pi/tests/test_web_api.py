@@ -1417,6 +1417,13 @@ async def test_a_go_silent_verdict_cannot_be_acknowledged_away(
         },
     )
     assert start.status_code == HTTPStatus.CONFLICT
+    # Its 409 does not send the operator to an acknowledgement that cannot be given.
+    assert detail(start) == (
+        "a latched safety verdict stands (drive_comm): link gone - GO_SILENT is one-way: "
+        "this process will not command motion again, and recovery is an operator action "
+        "on a machine that has demonstrably stopped"
+    )
+    assert "acknowledged by name" not in detail(start)
 
 
 # =========================================================================

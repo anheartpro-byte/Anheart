@@ -1096,8 +1096,16 @@ var STO_ACTIONS = {
   bridged. The console says "bridged" and the reason a person on board is
   refused; only a manual bench session may start, and the console judges it.
   Its banner follows the source the console last named, so that a page whose
-  link dropped or whose answers are late keeps saying it.
+  link dropped or whose answers are late keeps saying it. The bench start,
+  though, follows only a live report (ANH-92): no frame for STALE_FRAME_MS and
+  a status older than STATUS_STALE_MS close it, as an old reading closes it
+  under any other source.
 */
+/* Whether the report the STO card reads still says the present: the status or the frames. */
+function reportLive(report) {
+  return report === state.status ? performance.now() - state.statusAt < STATUS_STALE_MS : framesLive();
+}
+
 function renderSto() {
   var report = statusLeads() ? state.status : state.snapshot;
   var row = report && report.sto;
@@ -1112,8 +1120,10 @@ function renderSto() {
     kind = "unknown";
   }
   var ready = kind === "ready";
-  // The declaration only from the source that declares it, as the console judges it.
-  var bridged = kind === "bridged" && bridgedSource;
+  // The declaration only from the source that declares it, as the console judges it,
+  // and only from a report still live: a declaration has no reading whose age
+  // would close the bench start, so an old frame or an old status must.
+  var bridged = kind === "bridged" && bridgedSource && reportLive(report);
   var reason = kind === "unknown" && row && row.state !== "unknown"
     ? row.unknown_refusal
     : row && row.refusal ? row.refusal : ready ? "" : "etat STO inconnu : lecture en attente";
@@ -1704,7 +1714,8 @@ function renderWallClock(clock) {
 
   The line under the chips says what the last start found: an unclean stop, the
   session record it left open, a state the disk did not take, notifications the
-  service manager did not get. Nothing is written when there is nothing to say.
+  service manager did not get; and a tick that came back later than the bound,
+  which this process keeps for good. Nothing is written when there is nothing to say.
 */
 function renderService(service, watchdog) {
   var out = service.out_of_service;
@@ -1733,6 +1744,13 @@ function renderService(service, watchdog) {
   }
   if (watchdog.enabled && watchdog.failed > 0) {
     said.push("chien de garde : " + watchdog.failed + " notification(s) non envoyee(s)");
+  }
+  // A late tick is held for good: this process will not leave as a clean stop (ANH-162).
+  if (watchdog.late_tick_s !== null && watchdog.late_tick_s !== undefined) {
+    said.push(
+      "boucle de controle : " + num(watchdog.late_tick_s, 2) + " s entre deux tics (borne " +
+        num(watchdog.bound_s, 2) + " s), cette console ne s'arretera pas proprement"
+    );
   }
   text(el("service-detail"), said.join(" · "));
 }

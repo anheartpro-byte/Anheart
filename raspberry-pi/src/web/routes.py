@@ -81,7 +81,7 @@ from src.control_surface import (
 )
 from src.geometry import MachineGeometry
 from src.motor.drive import DriveState, FaultReport
-from src.motor.sto import StoState, UnconfiguredStoSource, sto_bridged
+from src.motor.sto import BridgedDeclaredStoSource, StoState, UnconfiguredStoSource, sto_bridged
 from src.passenger_feedback import FeedbackView, PassengerFeedback, parse_feedback
 from src.record.export import BUSY, TIMEOUT, UNKNOWN_RECORD, discard
 from src.record.schema import RecordError
@@ -115,7 +115,6 @@ from src.training.preflight import (
     describe_sto_refusal,
 )
 from src.training.safety import (
-    BENCH_BRIDGED_ATTESTATION,
     AcknowledgeRefusal,
     AttestationRefusal,
     EmergencyStopStillLatched,
@@ -124,7 +123,12 @@ from src.training.safety import (
     NothingLatched,
     Unattributed,
 )
-from src.training.types import DRIVE_STATUS_STALE_AFTER, Occupancy, TelemetrySnapshot
+from src.training.types import (
+    DRIVE_STATUS_STALE_AFTER,
+    Occupancy,
+    SafetyAction,
+    TelemetrySnapshot,
+)
 from src.units import Bpm, Monotonic, OutputRpm, Seconds, elapsed
 from src.web.deps import (
     SESSION_COOKIE,
@@ -262,6 +266,12 @@ VERDICT_LATCHED: Final[str] = "verdict_latched"
 ESTOP_UNATTESTED: Final[str] = "estop_unattested"
 STO_NOT_READY: Final[str] = "sto_not_ready"
 STO_BRIDGED_BENCH_ONLY: Final[str] = "sto_bridged_bench_only"
+
+GO_SILENT_RECOVERY: Final[str] = (
+    "this process will not command motion again, and recovery is an operator action "
+    "on a machine that has demonstrably stopped"
+)
+"""What follows GO_SILENT, said by every refusal it causes: never an acknowledgement."""
 PROFILES_CHANGED: Final[str] = "profiles_changed"
 """The programmes are no longer those the page showed: chosen and previewed again first."""
 
@@ -1369,12 +1379,18 @@ def _start_failure(refusal: StartRefusal, services: Services) -> Refusal:
         case SurfaceBusy():
             return _busy_start(refusal)
         case SafetyHolding():
+            # GO_SILENT is never acknowledged (ANH-92): its 409 says what is done instead.
+            then = (
+                f"GO_SILENT is one-way: {GO_SILENT_RECOVERY}"
+                if refusal.verdict.action is SafetyAction.GO_SILENT
+                else "it must be acknowledged by name first"
+            )
             return Refusal(
                 HTTPStatus.CONFLICT,
                 code=VERDICT_LATCHED,
                 detail=(
                     f"a latched safety verdict stands ({refusal.verdict.rule}): "
-                    f"{refusal.verdict.detail} - it must be acknowledged by name first"
+                    f"{refusal.verdict.detail} - {then}"
                 ),
             )
         case EstopUnattested():
@@ -1488,11 +1504,7 @@ def _acknowledge_failure(refusal: AcknowledgeRefusal) -> HTTPException:
         case GoSilentIsTerminal():
             return HTTPException(
                 status_code=HTTPStatus.CONFLICT,
-                detail=(
-                    f"{refusal.rule} demanded GO_SILENT, which is one-way: this process "
-                    "will not command motion again, and recovery is an operator action "
-                    "on a machine that has demonstrably stopped"
-                ),
+                detail=f"{refusal.rule} demanded GO_SILENT, which is one-way: {GO_SILENT_RECOVERY}",
             )
         case EmergencyStopStillLatched():
             return HTTPException(
@@ -1665,8 +1677,13 @@ def _sto_bridged(services: Services) -> bool:
 
 
 def _bench_declared(services: Services) -> bool:
-    """Whether this console attests the declared bench bridge: its supervisor's mode decides."""
-    return services.supervisor.attestation_statement == BENCH_BRIDGED_ATTESTATION
+    """Whether this console attests the declared bench bridge: its STO source says its mode.
+
+    The source's own type, as :func:`~src.local_panel.build_sto` makes it from
+    ``STO_SOURCE``, the value the supervisor's statement comes from too: never
+    that statement's text (ANH-92).
+    """
+    return isinstance(services.sto, BridgedDeclaredStoSource)
 
 
 def _require_occupancy(value: str) -> Occupancy:

@@ -218,6 +218,9 @@ def test_ex2_a_tick_that_comes_back_late_is_remembered_whatever_completes_afterw
         assert listener.heard() == [ALIVE], "and each of them is notified, as before"
     assert watchdog.stalled(Monotonic(20.29 + 0.2 * 3_000))
     assert watchdog.status().failed == 0
+    # And /api/panel says it, as long as the process lives (ANH-162).
+    assert watchdog.status().late_tick == pytest.approx(10.09)
+    assert watchdog.status().bound == OVERDUE
     # Said once per freeze that is longer than any before it, not at every tick.
     assert caplog.text.count("between two completed ticks") == 1
     with caplog.at_level(logging.ERROR):
@@ -226,6 +229,7 @@ def test_ex2_a_tick_that_comes_back_late_is_remembered_whatever_completes_afterw
         watchdog.tick_completed(Monotonic(1_004.0))  # 4 s: late, and shorter than both
     assert caplog.text.count("between two completed ticks") == 3
     assert watchdog.stalled(Monotonic(1_004.2))
+    assert watchdog.status().late_tick == pytest.approx(300.0), "the longest is kept"
 
 
 def test_ex2_ticks_that_come_back_on_time_are_never_remembered_as_late() -> None:
@@ -233,3 +237,4 @@ def test_ex2_ticks_that_come_back_on_time_are_never_remembered_as_late() -> None
     for tick in range(5_000):
         watchdog.tick_completed(Monotonic(10.0 + 2.9 * tick))  # slow, and inside the bound
     assert not watchdog.stalled(Monotonic(10.0 + 2.9 * 4_999 + 2.9))
+    assert watchdog.status().late_tick is None
