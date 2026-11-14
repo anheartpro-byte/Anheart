@@ -46,6 +46,7 @@ from src.record_uplink import (
 )
 from src.result import Err, Ok, Result
 from src.sim.bitalino import SimulatedBitalinoClient
+from src.training.plan import JsonValue
 from src.training.preflight import (
     BATTERY_WAIT,
     CONTROLS,
@@ -54,8 +55,9 @@ from src.training.preflight import (
     PreflightRefused,
     judge,
 )
+from src.training.runtime import RuntimeState, Subject
 from src.training.types import Occupancy
-from src.units import Monotonic, Percent, Seconds, UnixMillis
+from src.units import Monotonic, MotorRpm, Percent, Seconds, UnixMillis
 from src.web.app import create_app
 from src.web.preflight_routes import PreflightRow
 from tests.access_support import OPERATOR_ID, signed_http
@@ -65,6 +67,7 @@ from tests.test_cloud_sync import (
     POLL_PATH,
     START,
     Dashboard,
+    Reply,
     config_of,
     launch_answer,
     linked,
@@ -75,6 +78,10 @@ from tests.test_contract import shared
 from tests.test_local_panel import BASE_ENV, SERIAL_ENV, FakeEcgClient, config_from, ecg_link
 from tests.test_preflight import _green  # pyright: ignore[reportPrivateUsage]  # one fixture
 from tests.test_remote_bench_launch import BENCH
+from tests.test_runtime import (
+    _profile,  # pyright: ignore[reportPrivateUsage]  # the shared rig builders
+    _program,  # pyright: ignore[reportPrivateUsage]
+)
 from tests.wall_clock_support import ScriptedClock
 
 TICK: Final[Seconds] = Seconds(0.2)
@@ -508,6 +515,107 @@ async def test_a_serious_incident_read_on_the_poll_refuses_a_person_on_board_and
     manual = rig_.panel.runtime.manual
     assert manual is not None
     assert manual.occupancy is Occupancy.BENCH
+    await rig_.panel.close()
+
+
+DRIVE_INTERVENTION_REFUSAL: Final[str] = (
+    "pre-vol : 1 defaut(s) variateur non rearmable(s) en attente d'intervention : aucune "
+    "personne a bord avant l'intervention au carnet de bord et la cloture de l'incident"
+)
+
+
+def _interventions(session: Mapping[str, object] | None, due: object) -> Reply:
+    """A poll answer of this contract: no serious incident, ``due`` drive interventions."""
+    return ok(
+        {
+            "session": cast("JsonValue", session),
+            SERVER_VERSION_FIELD: CONTRACT_VERSION,
+            "incidents_open_high": 0,
+            "drive_interventions_due": cast("JsonValue", due),
+        }
+    )
+
+
+def _interventions_state(monitor: PreflightMonitor, occupancy: Occupancy) -> ControlState:
+    report = judge(CONTROLS, monitor.inputs(), occupancy)
+    return next(r.state for r in report.results if r.id == "drive_interventions")
+
+
+async def test_a_drive_intervention_due_refuses_every_start_with_a_person_on_board(
+    tmp_path: Path,
+) -> None:
+    """ANH-149 EX-4: a programme and an occupied manual session alike, stricter than the
+    dashboard, which closes programmed sessions only; the bench is warned and arms."""
+    rig_ = linked(tmp_path, preflight=True)
+    rig_.dashboard.answer(POLL_PATH, _interventions(None, 1))
+    await rig_.run(13.0)
+    monitor = rig_.panel.preflight
+    assert monitor is not None
+    on_board = monitor.refusal(Occupancy.OCCUPIED)
+    assert on_board is not None
+    assert on_board.control == "drive_interventions"
+    assert on_board.detail == DRIVE_INTERVENTION_REFUSAL
+    runtime = rig_.panel.runtime
+    programme = await runtime.start(
+        _program(_profile()), Subject(subject_id="rider-1", operator=OPERATOR)
+    )
+    assert isinstance(programme, Err)
+    assert programme.error == on_board
+    occupied = await runtime.start_manual(Occupancy.OCCUPIED, OPERATOR, MotorRpm(300))
+    assert isinstance(occupied, Err)
+    assert occupied.error == on_board
+    assert _interventions_state(monitor, Occupancy.BENCH) is ControlState.WARN
+    assert monitor.refusal(Occupancy.BENCH) is None
+    submitted = rig_.panel.surface.submit_start_manual(occupancy=Occupancy.BENCH, operator=OPERATOR)
+    assert isinstance(submitted, Ok)
+    await rig_.run(0.4)
+    manual = runtime.manual
+    assert manual is not None
+    assert manual.occupancy is Occupancy.BENCH
+    await rig_.panel.close()
+
+
+@pytest.mark.parametrize(
+    ("due", "state"),
+    [
+        pytest.param(0, ControlState.OK, id="none-due"),
+        pytest.param(None, ControlState.WARN, id="not-announced"),
+    ],
+)
+async def test_no_drive_intervention_due_or_none_announced_refuses_nobody(
+    tmp_path: Path, due: object, state: ControlState
+) -> None:
+    """ANH-149: a count of 0 lets a person on board; one not announced (a 1.15 dashboard, an
+    unreadable value) is orange, as the incidents' count is."""
+    rig_ = linked(tmp_path, preflight=True)
+    rig_.dashboard.answer(POLL_PATH, _interventions(None, due))
+    await rig_.run(13.0)
+    monitor = rig_.panel.preflight
+    assert monitor is not None
+    for occupancy in Occupancy:
+        assert _interventions_state(monitor, occupancy) is state
+    refused = monitor.refusal(Occupancy.OCCUPIED)
+    assert refused is None or refused.control != "drive_interventions"
+    await rig_.panel.close()
+
+
+async def test_a_launch_from_the_site_is_refused_before_its_start_while_an_intervention_is_due(
+    tmp_path: Path,
+) -> None:
+    """ANH-149: the console refuses it itself, before confirming it to the dashboard."""
+    rig_ = linked(tmp_path, preflight=True)
+    rig_.dashboard.answer(POLL_PATH, _interventions(dict(LAUNCH), 1))
+    await rig_.run(13.0)
+    cloud = rig_.panel.cloud
+    assert cloud is not None
+    assert isinstance(cloud.confirm_remote_launch("remote-1", OPERATOR), Ok)
+    await rig_.run(2.0)
+    assert rig_.panel.runtime.state is RuntimeState.IDLE
+    assert rig_.dashboard.to(START) == []
+    (end,) = rig_.dashboard.to(END)
+    assert end["sessionId"] == "remote-1"
+    assert end["failed"] is True
+    assert end["reason"] == f"refusee par la machine : {DRIVE_INTERVENTION_REFUSAL}"
     await rig_.panel.close()
 
 

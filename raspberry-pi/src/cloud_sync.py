@@ -985,6 +985,7 @@ class CloudSync:
         "_confirmed_launch_id",
         "_counted_at",
         "_deposit",
+        "_drive_interventions_due",
         "_health",
         "_health_context",
         "_incidents_open_high",
@@ -1067,6 +1068,7 @@ class CloudSync:
         self._health_context: Callable[[], HealthContext] = health_context
         self._last_rtt: Seconds | None = None
         self._incidents_open_high: int | None = None
+        self._drive_interventions_due: int | None = None
         # When the poll whose count is held was asked (ANH-145): a count asked before the
         # dashboard acknowledged a stop's end may not hold its incident.
         self._counted_at: Monotonic | None = None
@@ -1188,6 +1190,13 @@ class CloudSync:
         """The serious incidents of this machine open or analysed, as the last compatible
         poll announced them (contract 1.10); ``None``: not announced."""
         return self._incidents_open_high
+
+    @property
+    def drive_interventions_due(self) -> int | None:
+        """The drive faults of this machine waiting for their intervention in the
+        dashboard's logbook, as the last compatible poll announced them (contract 1.16,
+        ANH-149); ``None``: not announced."""
+        return self._drive_interventions_due
 
     @property
     def server_contract(self) -> ContractVersion | None:
@@ -1667,13 +1676,12 @@ class CloudSync:
             self._refuse_server(refusal, launch)
             return
         self._incompatible = None
-        incidents = polled.value.get("incidents_open_high")
-        if isinstance(incidents, int) and not isinstance(incidents, bool) and incidents >= 0:
-            self._incidents_open_high = incidents
+        incidents = _count_of(polled.value.get("incidents_open_high"))
+        self._incidents_open_high = incidents
+        if incidents is not None:
             # Only a count read is one asked after a stop's end: an unreadable one is none.
             self._counted_at = now
-        else:
-            self._incidents_open_high = None
+        self._drive_interventions_due = _count_of(polled.value.get("drive_interventions_due"))
         if launch is None:
             # Left unanswered, its start may be held active by the dashboard: kept for a
             # repeated confirmation, until its hold is over (`_process_confirmation`).
@@ -2207,6 +2215,13 @@ def _safe_launch_refusal(detail: str, launch: Launch | None) -> str:
     if launch.subject_age is not None:
         safe = safe.replace(f"passager de {launch.subject_age} ans", "[retire]")
     return safe
+
+
+def _count_of(value: object) -> int | None:
+    """A count the poll announces: an integer, 0 or more; ``None`` for anything else."""
+    if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+        return value
+    return None
 
 
 def _due(last: Monotonic | None, now: Monotonic, period: Seconds) -> bool:

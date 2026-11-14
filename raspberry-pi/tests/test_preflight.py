@@ -110,6 +110,7 @@ def _green(**changes: object) -> PreflightInputs:
         medical_version="med-1",
         software_version="pi-1.0.0",
         incidents_open_high=0,
+        drive_interventions_due=0,
         cpu_temp_c=Celsius(48.0),
         records_pending=0,
         battery=BatteryReading(Percent(80.0), Monotonic(NOW - 60.0)),
@@ -147,6 +148,7 @@ def test_the_list_is_in_its_order_and_says_every_control_once() -> None:
         "contract",
         "medical",
         "incidents",
+        "drive_interventions",
         "bitalino",
         "ecg",
         "temperature",
@@ -164,6 +166,8 @@ def test_the_list_is_in_its_order_and_says_every_control_once() -> None:
     assert severities["medical"] == (Severity.BLOCK, None)
     # ANH-145 EX-4: a serious incident refuses a person on board, warns at the bench.
     assert severities["incidents"] == (Severity.BLOCK, Severity.WARN)
+    # ANH-149 EX-4: so does a drive fault waiting for its intervention.
+    assert severities["drive_interventions"] == (Severity.BLOCK, Severity.WARN)
     for blocking in ("drive_link", "drive_state", "estop", "verdict", "disk", "contract"):
         assert severities[blocking] == (Severity.BLOCK, Severity.BLOCK)
     for warning in ("temperature", "cloud", "records", "software"):
@@ -261,6 +265,11 @@ CASES: Final[tuple[Case, ...]] = (
     ),
     Case("medical", _green(medical_refusal="parametres non signes"), "parametres non signes"),
     Case("incidents", _green(incidents_open_high=2), "2 incident(s) grave(s)"),
+    Case(
+        "drive_interventions",
+        _green(drive_interventions_due=1),
+        "1 defaut(s) variateur non rearmable(s) en attente d'intervention",
+    ),
     Case("bitalino", _green(bitalino_connected=False), "BITalino injoignable"),
     Case("bitalino", _green(battery=None), "batterie BITalino pas encore lue"),
     Case("bitalino", _green(battery=BatteryReading(None, NOW)), "batterie BITalino illisible"),
@@ -330,9 +339,30 @@ def test_a_stop_the_dashboard_has_not_counted_refuses_on_board_and_warns_at_the_
     assert counted.detail.startswith("2 incident(s) grave(s)")
 
 
+def test_a_drive_intervention_due_refuses_on_board_and_warns_at_the_bench() -> None:
+    """ANH-149 EX-4: stricter than the dashboard, which closes programmed sessions only."""
+    due = _green(drive_interventions_due=2)
+    refused = refusal_of(judge(CONTROLS, due, Occupancy.OCCUPIED))
+    assert refused == PreflightRefused(
+        "drive_interventions",
+        "2 defaut(s) variateur non rearmable(s) en attente d'intervention : aucune personne a "
+        "bord avant l'intervention au carnet de bord et la cloture de l'incident",
+    )
+    bench = judge(CONTROLS, due, Occupancy.BENCH)
+    assert {r.id: r.state for r in bench.results}["drive_interventions"] is ControlState.WARN
+    assert refusal_of(bench) is None
+    assert _result(_green(), "drive_interventions").detail == (
+        "aucun defaut variateur en attente d'intervention"
+    )
+    unannounced = _result(_green(drive_interventions_due=None), "drive_interventions")
+    assert unannounced.state is ControlState.WARN
+    assert unannounced.detail == "interventions variateur : non annoncees par le tableau de bord"
+
+
 def test_what_the_server_cannot_judge_is_orange_never_red() -> None:
     unannounced = _green(
         incidents_open_high=None,
+        drive_interventions_due=None,
         cpu_temp_c=None,
         records_pending=None,
         link=LinkStatus(LinkState.WAITING, "", None),
@@ -340,7 +370,14 @@ def test_what_the_server_cannot_judge_is_orange_never_red() -> None:
     for occupancy in Occupancy:
         report = judge(CONTROLS, unannounced, occupancy)
         states = {r.id: r.state for r in report.results}
-        for control in ("incidents", "temperature", "records", "contract", "software"):
+        for control in (
+            "incidents",
+            "drive_interventions",
+            "temperature",
+            "records",
+            "contract",
+            "software",
+        ):
             assert states[control] is ControlState.WARN, control
         assert report.first_block is None
 

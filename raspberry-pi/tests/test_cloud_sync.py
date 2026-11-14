@@ -2373,6 +2373,53 @@ async def test_an_unreadable_count_after_a_stop_holds_until_a_readable_one(
     assert noted == [], "nothing decided, nothing for the logbook"
 
 
+def interventions_due(sync: CloudSync) -> int | None:
+    """Read afresh: a checker keeps a property's narrowing across an ``await``."""
+    return sync.drive_interventions_due
+
+
+def due_answer(due: JsonValue, version: str = CONTRACT_VERSION) -> Reply:
+    """A poll answer of ``version`` with nothing waiting, ``due`` drive interventions."""
+    return ok({SERVER_VERSION_FIELD: version, "session": None, "drive_interventions_due": due})
+
+
+@pytest.mark.parametrize("unreadable", ["1", -1, True, 1.5, None])
+async def test_the_drive_interventions_due_are_read_on_the_poll_and_kept_while_it_fails(
+    tmp_path: Path, unreadable: JsonValue
+) -> None:
+    """ANH-149, contract 1.16: the last count read stands while no poll is answered, as
+    the incidents' count does; an answer that does not carry a readable one says none."""
+    entry = cast("Mapping[str, object]", shared()["drive_interventions"])
+    assert entry["field"] == "drive_interventions_due"
+    r = rig(tmp_path)
+    assert interventions_due(r.sync) is None
+    r.dashboard.answer(POLL_PATH, due_answer(2))
+    await r.step()
+    assert interventions_due(r.sync) == 2
+    for reply, why in (
+        (DOWN, "no answer"),
+        (launch_answer(None, version="2.0"), "an answer of another major says nothing"),
+    ):
+        asked = len(r.dashboard.to(POLL_PATH))
+        r.dashboard.answer(POLL_PATH, reply)
+        await r.step(float(POLL_PERIOD))
+        assert len(r.dashboard.to(POLL_PATH)) > asked, "asked again"
+        assert interventions_due(r.sync) == 2, why
+    r.dashboard.answer(POLL_PATH, due_answer(0))
+    await r.step(float(POLL_PERIOD))
+    assert interventions_due(r.sync) == 0
+    r.dashboard.answer(POLL_PATH, due_answer(unreadable))
+    await r.step(float(POLL_PERIOD))
+    assert interventions_due(r.sync) is None
+    r.dashboard.answer(POLL_PATH, due_answer(1))
+    await r.step(float(POLL_PERIOD))
+    assert interventions_due(r.sync) == 1
+    # A 1.15 dashboard does not send it.
+    r.dashboard.answer(POLL_PATH, ok({SERVER_VERSION_FIELD: "1.15", "session": None}))
+    await r.step(float(POLL_PERIOD))
+    assert interventions_due(r.sync) is None
+
+
 async def test_an_auto_session_registers_its_programme(tmp_path: Path) -> None:
     r = rig(tmp_path)
     profile = r.panel.services.store.list_profiles()[0]

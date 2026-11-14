@@ -17,8 +17,9 @@ plus une seconde avec une vitesse mesurée positive aux deux extrémités.
 La batterie BITalino, l'état thermique du variateur et le dernier préflight
 restent inconnus tant que leurs producteurs ne les fournissent pas.
 `incidents_open_high` reprend le dernier poll compatible qui fournit un entier
-positif ou nul; sans ce champ il reste inconnu. Le nombre d'enregistrements en
-attente ne baisse qu'après confirmation de dépôt, pas après l'envoi de télémétrie.
+positif ou nul; sans ce champ il reste inconnu. Le pré-vol lit de même
+`drive_interventions_due` (contrat 1.16), qui ne part pas dans le heartbeat.
+Le nombre d'enregistrements en attente ne baisse qu'après confirmation de dépôt, pas après l'envoi de télémétrie.
 La carte distante affiche ces inconnues et l'ancienneté du rapport explicitement.
 
 La console locale est la page web servie par le Pi lui-même (`python -m src.local_panel`).
@@ -2980,6 +2981,11 @@ batterie basse, un BITalino absent ou une horloge non fiable ne retiennent pas
 un départ de banc : ce sont des avertissements au banc (décision du pilote du
 29 octobre 2026). Un incident grave ouvert non plus (ANH-145) : il retient
 tout départ avec une personne à bord, et n'est qu'un avertissement au banc.
+Un défaut variateur en attente d'intervention de même (ANH-149) : il retient
+`Demarrer la seance` et un `Demarrer MANUEL` avec une personne à bord, plus
+strictement que le tableau de bord, qui ne ferme que les séances programmées :
+un variateur qui demande un réarmement manuel est inspecté avant que quelqu'un
+monte, et la séance de banc sert à l'essayer après l'intervention.
 
 Le bouton de confirmation de la carte « Depart distant » suit la même règle :
 pour une séance de banc lestée lancée du site, la colonne Banc ; pour un programme,
@@ -3105,6 +3111,16 @@ interruption après la reprise de l'acquisition. Une batterie lue il y a plus de
   bord ne recevra jamais le retient, même après un redémarrage, jusqu'à
   l'acquittement de l'opérateur
   (ci-dessus).
+- Les défauts variateur en attente d'intervention (ANH-149) : orange « non
+  annoncees » tant que le serveur n'en annonce pas le compte (serveur
+  antérieur au contrat 1.16, aucun poll reçu, console non reliée) ; dès
+  qu'il en annonce un, rouge avec une personne à bord, programme comme
+  séance manuelle occupée, et orange au banc, avec la raison : `1 defaut(s)
+  variateur non rearmable(s) en attente d'intervention : aucune personne a
+  bord avant l'intervention au carnet de bord et la cloture de l'incident`.
+  Il redevient vert au poll qui suit l'intervention et la clôture. Hors
+  ligne, le dernier compte lu reste ; un redémarrage sans lien l'oublie
+  (orange).
 - La batterie : la conversion de la lecture brute en pourcentage est une
   hypothèse à vérifier au banc sur le vrai BITalino
   ([raspberry-pi.md, 4.2](raspberry-pi.md#le-pré-vol-anh-142)).

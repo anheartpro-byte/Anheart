@@ -2268,7 +2268,9 @@ désactivés pendant l'export CSV.
   `BITALINO_MIN_BATTERY_PCT` (30 %) ; une qualité ECG good sans interruption
   depuis 30 s ; une horloge synchronisée dont l'erreur garantie reste sous 5 s
   (une horloge temps réel seule ne suffit pas) ; des paramètres médicaux
-  signés ; aucun incident grave ouvert annoncé par le serveur ; aucun refus
+  signés ; aucun incident grave ouvert annoncé par le serveur ; aucun défaut
+  variateur en attente d'intervention annoncé par le serveur (ANH-149, plus
+  strict que le serveur, qui ne ferme que les séances programmées) ; aucun refus
   de contrat par le tableau de bord (un tableau de bord muet laisse ce contrôle
   orange, il ne bloque pas) ; aucune lecture de la batterie attendue ou en
   cours (elle suspend l'ECG).
@@ -2289,7 +2291,8 @@ bloquent pas. La qualité ECG et les paramètres médicaux sont sans objet au
 banc. Un incident grave ouvert est lui aussi un avertissement au banc
 ([section 16](#16-le-registre-des-incidents-anh-145)) : la règle d'ANH-145,
 plus récente, remplace pour ce contrôle la décision du 29 octobre, qui le
-bloquait au banc. Tous les autres contrôles bloquants bloquent aussi le banc. L'occupation
+bloquait au banc. Un défaut variateur en attente d'intervention (ANH-149)
+n'est de même qu'un avertissement au banc. Tous les autres contrôles bloquants bloquent aussi le banc. L'occupation
 jugée est celle du départ : une séance de banc lestée lancée depuis le site
 (ANH-250) est jugée avec les règles du banc, au pré-vol du lancement comme à
 l'armement ; un programme lancé du site, avec celles d'une personne à bord.
@@ -2300,7 +2303,7 @@ l'armement ; un programme lancé du site, avec celles d'une personne à bord.
 |---|---|
 | La conversion de la batterie du BITalino en pourcentage est supposée (3,3 V de référence, moitié de la tension de l'élément, 3,4 V vide, 4,2 V plein), jamais mesurée | Le seuil de 30 % n'a de sens qu'après une mesure au banc sur le vrai BITalino ([section 6](#6-avant-la-première-personne-à-bord), point 9) |
 | Les paramètres du variateur (tFr, HSP, LSP, ACC, dEC) ne sont pas relus par la liste | Ils restent relus et jugés à chaque armement ; la liste ne juge que la liaison et l'état du variateur |
-| Le serveur n'annonce ni une version logicielle de référence, ni la version attendue des paramètres médicaux ; un serveur antérieur au contrat 1.10 n'annonce pas non plus le compte d'incidents graves ([section 16](#16-le-registre-des-incidents-anh-145)) | Ces contrôles restent orange, « non annonces » ou « non jugee » ; la signature des paramètres médicaux est exigée |
+| Le serveur n'annonce ni une version logicielle de référence, ni la version attendue des paramètres médicaux ; un serveur antérieur au contrat 1.10 n'annonce pas non plus le compte d'incidents graves ([section 16](#16-le-registre-des-incidents-anh-145)), ni un serveur antérieur à 1.16 celui des défauts variateur en attente d'intervention | Ces contrôles restent orange, « non annonces » ou « non jugee » ; la signature des paramètres médicaux est exigée |
 | La qualité ECG est jugée sur l'image de chaque tic (5 Hz) | Deux mesures arrivées entre deux tics ne sont vues que par la dernière ; la porte du runtime exige de plus une fréquence cardiaque fraîche et sûre pour une personne à bord |
 | Une batterie est lue une fois par passe, et vaut 30 min | Au-delà, le contrôle demande de relancer le pré-vol ; aucune relecture automatique pendant une longue attente au repos |
 | Le Mac du banc ne peut pas interroger son horloge, ni lire la batterie par RFCOMM | L'erreur de l'horloge y est inconnue et la batterie illisible : rouge avec une personne à bord, orange au banc. Avec le variateur simulé (`MOTOR_BACKEND=sim`), l'horloge inconnue est orange même avec une personne à bord : aucun moteur réel ne tourne |
@@ -2332,6 +2335,25 @@ c'est elle qui permet de chercher la cause. Seul un admin Anheart clôt un incid
 et seulement avec sa cause et l'action menée : c'est cette clôture qui rouvre
 la machine aux séances programmées. Une analyse seule ne la rouvre pas.
 
+**Un défaut variateur non réarmable ferme les séances programmées jusqu'à son
+intervention (ANH-149).** Après un défaut que la console ne réarme pas
+(`manual_reset_only`, ou un code inconnu), le serveur refuse de lancer et
+d'armer une séance programmée (`drive_intervention_required`, contrat 1.16)
+jusqu'à la clôture de l'incident et une entrée `intervention` du carnet de
+bord qui le nomme, écrite depuis sa dernière ouverture
+([convex.md](convex.md#machine_logbook--carnet-de-bord-des-machines-anh-149)).
+Le poll en annonce le compte (`drive_interventions_due`), et le pré-vol de la
+console ferme tout départ avec une personne à bord tant qu'il n'est pas nul.
+La console est ici plus stricte que le serveur : le serveur ne ferme que les
+séances programmées (le ticket parle de séances programmées), la console ferme
+tout départ avec une personne à bord, séance manuelle occupée comprise. Un
+défaut que la console ne réarme pas (`manual_reset_only`, ou un code inconnu
+de [`contracts/drive-faults.json`](../contracts/drive-faults.json)) demande
+d'inspecter le variateur avant que quelqu'un monte ; une fois le variateur
+remis sous tension il ne montre plus de défaut, et le compte du serveur est
+tout ce que la console en sait. La séance de banc reste possible : c'est elle
+qui essaie la machine après l'intervention.
+
 Gravité haute : avec une personne à bord, tout niveau `RAMP_DOWN` ou plus
 (défaut du variateur, arrêt d'urgence, verdict qui arrête) ; partout, un
 niveau `GO_SILENT` ou une action inconnue du serveur, et une exception du
@@ -2348,7 +2370,7 @@ sont coupées en production).
 | Limite | Conséquence |
 |---|---|
 | Une séance démarrée à la console, sans lancement du site, n'est connue du serveur qu'une fois armée | Le serveur ne peut pas la refuser ; seul le pré-vol de la console la refuse, et seulement s'il a reçu le compte d'un poll |
-| Une console qui n'a jamais reçu de poll (tableau de bord injoignable) ne connaît pas le compte | Le contrôle reste orange, « non annonce » : il ne bloque pas. Un incident grave ouvert ne la retient donc pas hors ligne |
+| Une console qui n'a jamais reçu de poll (tableau de bord injoignable) ne connaît pas le compte | Le contrôle reste orange, « non annonce » : il ne bloque pas. Un incident grave ouvert ne la retient donc pas hors ligne, ni un défaut variateur en attente d'intervention : le dernier compte lu n'est gardé qu'en mémoire, et un redémarrage sans lien l'oublie |
 | Un défaut du variateur annoncé par le seul heartbeat, hors de tout événement de séance, n'ouvre pas d'incident | L'alerte `drive_fault` reste ; le pré-vol refuse de toute façon un départ sur un variateur en défaut |
 | Un refus de pré-vol d'un départ décidé à la console n'est pas envoyé au serveur | Seuls les refus de lancements venus du site comptent pour les trois refus de suite ; toute autre séance de la machine remet le compte à zéro |
 | Une séance mal terminée pendant que le lien était coupé n'est connue du serveur qu'à l'arrivée de ses événements et de sa fin | Jusque-là le compte annoncé reste celui d'avant, et le serveur accepterait un nouveau lancement. Le pré-vol de la console le retient : avec une personne à bord, il refuse tout départ tant qu'une séance de cette exécution terminée sur `emergency_stop`, `safety_verdict` ou `tick_exception`, ou un enregistrement d'une exécution précédente (fin inconnue), n'a pas sa fin acquittée, puis jusqu'au premier poll qui rend un compte lisible demandé après cet acquittement ; au banc, un avertissement. Une séance que l'envoi abandonne (déclaration ou fin refusée pour de bon) est écrite à côté des enregistrements et retient une personne à bord, redémarrage compris, jusqu'à l'acquittement nommé de l'opérateur, page Pré-vol, noté au journal de bord à sa demande puis à sa levée, et redit par le démarrage suivant d'après le registre ; la page nomme toutes les séances que l'acquittement lève ; un enregistrement illisible, toujours dû sur le disque, retient de même, et un acquittement ne vaut que jusqu'au démarrage suivant, qui le liste de nouveau ; le curseur qui clôt une séance perdue n'est écrit qu'après elle ; d'une séance sans enregistrement, seules la perte de sa déclaration refusée pendant qu'elle tourne et sa fin qui a pu être un arrêt ne sont qu'en mémoire jusqu'au pas d'envoi suivant (une seconde environ), et un redémarrage à cet instant les oublie ; la fin d'une séance sans enregistrement n'est jamais abandonnée pour la suivante, elle attend derrière en mémoire et retient jusqu'à son envoi, et si elle a pu finir sur un arrêt elle est écrite au registre à ce pas, avant que sa fin parte : une console qui s'arrête après ce pas et avant de l'avoir envoyée la retient au démarrage suivant comme une séance perdue (`fin perdue au redemarrage`), jusqu'à l'acquittement ; pas jusqu'à une annonce du serveur, qui ne connaîtra jamais cet incident. Une fin que le lien n'a pas vue compte comme une fin inconnue, due jusqu'à son envoi. L'acquittement ne lève que ces séances perdues : jamais une retenue qui se lèvera d'elle-même quand le lien aura livré la séance, jamais pendant une séance. Restent : un enregistrement mis de côté sans curseur à la première liste (antérieur à la synchronisation, jamais envoyé) ne retient rien, et un départ de banc n'est jamais retenu |

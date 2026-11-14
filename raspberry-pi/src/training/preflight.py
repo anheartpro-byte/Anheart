@@ -128,6 +128,10 @@ class PreflightInputs:
     incidents_open_high: int | None = None
     """As the dashboard last announced it; ``None``: not announced."""
 
+    drive_interventions_due: int | None = None
+    """The drive faults waiting for their intervention in the dashboard's logbook, as it
+    last announced them (contract 1.16, ANH-149); ``None``: not announced."""
+
     unreported_stop: str | None = None
     """Why the dashboard may not count yet a session that ended on a stop (its end and
     events not acknowledged, :attr:`~src.record_uplink.RecordUplink.unreported_stop`);
@@ -316,6 +320,21 @@ def _incidents(inputs: PreflightInputs) -> Result[str, Finding]:
     return Ok("aucun incident grave ouvert")
 
 
+def _drive_interventions(inputs: PreflightInputs) -> Result[str, Finding]:
+    count = inputs.drive_interventions_due
+    if count is None:
+        return Err(Unjudged("interventions variateur : non annoncees par le tableau de bord"))
+    if count > 0:
+        return Err(
+            Failed(
+                f"{count} defaut(s) variateur non rearmable(s) en attente d'intervention : "
+                "aucune personne a bord avant l'intervention au carnet de bord et la cloture "
+                "de l'incident"
+            )
+        )
+    return Ok("aucun defaut variateur en attente d'intervention")
+
+
 def _bitalino(inputs: PreflightInputs) -> Result[str, Finding]:
     if not inputs.bitalino_connected:
         return Err(Failed("BITalino injoignable : l'allumer, le rapprocher, verifier l'appairage"))
@@ -479,6 +498,17 @@ CONTROLS: Final[tuple[Control, ...]] = (
         bench=WARN,
         max_duration=Seconds(30.0),
         check=_incidents,
+    ),
+    Control(
+        id="drive_interventions",
+        label="Aucun defaut variateur en attente d'intervention",
+        # ANH-149 EX-4: the dashboard closes programmed sessions only; a drive that needs
+        # a manual reset is inspected before anyone rides, so every start with a person on
+        # board is refused here. The bench is how the machine is tried after it.
+        on_board=BLOCK,
+        bench=WARN,
+        max_duration=Seconds(30.0),
+        check=_drive_interventions,
     ),
     Control(
         id="bitalino",

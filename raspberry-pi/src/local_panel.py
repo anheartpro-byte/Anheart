@@ -2746,6 +2746,7 @@ def build_panel(  # noqa: PLR0915  # one statement per wired part
             software_version=version,
             # Read from the link itself: the poll every few seconds, not the heartbeat.
             incidents_open_high=None if cloud is None else cloud.incidents_open_high,
+            drive_interventions_due=None if cloud is None else cloud.drive_interventions_due,
             unreported_stop=None if cloud is None else cloud.unreported_stop,
             records_pending=None if sampled is None else sampled.records_pending,
             min_battery=config.bitalino_min_battery,

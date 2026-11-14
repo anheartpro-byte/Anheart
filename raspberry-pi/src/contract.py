@@ -114,8 +114,11 @@ is written in the dashboard's logbook (ANH-149): the dashboard refuses an
 automatic launch's start 409 ``drive_intervention_required``, and the poll
 answer carries ``drive_interventions_due`` (``drive_interventions`` of the
 shared file), how many of the machine's drive faults wait for their
-intervention. A bench launch is never refused for it. A console before 1.16
-reads the refusal as an unknown one: it never arms and sends no end.
+intervention, which the pre-flight reads (:mod:`src.training.preflight`): it
+refuses every start with a person on board while the count is above 0, a
+stricter rule than the dashboard's. A bench launch is never refused for it. A
+console before 1.16 reads the refusal as an unknown one: it never arms and
+sends no end.
 
 One exchange is outside this rule on purpose: **a stop**. It means the same
 under every contract, so the dashboard answers the status request whatever
