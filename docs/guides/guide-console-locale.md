@@ -2495,9 +2495,9 @@ Sa dernière ligne, `sortie: ...`, dit comment la machine a été laissée :
 
 Son code de sortie : 0 après un Ctrl+C reçu quand la page était servie (130 s'il est
 reçu pendant le démarrage), 143 après SIGTERM, 129 après SIGHUP, 4 quand l'arrêt
-n'avait pas fini au bout de l'attente, et 3 quand la page n'a pas pu démarrer. Un 1 est une erreur ordinaire, que la dernière
-ligne décrit ; il ne dit rien de l'arrêt. Lancé sans sortie d'erreur (`2>&-`),
-l'outil sort avec les mêmes codes.
+n'avait pas fini au bout de l'attente, et 3 quand la page n'a pas pu démarrer. Un 1
+est une erreur ordinaire, que la dernière ligne décrit ; il ne dit rien de l'arrêt.
+Lancé sans sortie d'erreur (`2>&-`), l'outil sort avec les mêmes codes.
 
 Rien de tout cela ne dépend de l'écriture de la dernière ligne. Si le terminal est
 fermé ou si la sortie allait dans un tube dont le lecteur a disparu (`| tee`, arrêté

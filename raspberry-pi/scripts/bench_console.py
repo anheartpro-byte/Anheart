@@ -307,8 +307,9 @@ class BusWorker(threading.Thread):
     def submit(self, cmd: Command) -> None:
         """Queue ``cmd`` for the bus thread; dropped once the stop is asked for (ANH-218).
 
-        The flag is set before any request handler resumes, so nothing queued
-        after it can be taken by a bus thread that checked it a moment before.
+        A command put after the flag, even one that passed this check just
+        before the flag was set, is dropped by the bus thread's re-check once it
+        has taken it from the queue (:meth:`_cycle`).
         """
         if self._stop_requested.is_set():
             return
@@ -586,6 +587,10 @@ class BusWorker(threading.Thread):
                 try:
                     cmd = self._commands.get_nowait()
                 except queue.Empty:
+                    break
+                # Again once taken: a command put after the flag, whatever the interleaving
+                # with the check above or with submit's own, never runs.
+                if self._stop_requested.is_set():
                     break
                 await self._execute(cmd)
             await self._recover_if_latched()

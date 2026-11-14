@@ -329,6 +329,9 @@ def test_a_command_submitted_once_the_stop_is_asked_for_is_dropped(
 def test_the_server_s_exit_goes_ahead_when_the_disarm_raises(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """R2 of ANH-218: the exit signal's own handling goes on whatever the disarm does. It
+    raises here, and uvicorn is still told to exit."""
+
     def broken() -> None:
         raise RuntimeError("the disarm went wrong")
 
@@ -337,6 +340,81 @@ def test_the_server_s_exit_goes_ahead_when_the_disarm_raises(
     with pytest.raises(RuntimeError, match="the disarm went wrong"):
         server.handle_exit(signal.SIGTERM, None)
     assert server.should_exit, "uvicorn's own exit was skipped"
+
+
+class _HeldFlag:
+    """The stop flag, whose drain check on the bus thread is answered, then held.
+
+    The ``held_at``-th check made on the bus thread gives its answer, then waits
+    for :attr:`released` before returning it: the bus thread pre-empted between
+    that check and its next step, as R2 forced it. Every other check, and the
+    flag itself, is a plain event's.
+    """
+
+    def __init__(self, thread: threading.Thread, held_at: int) -> None:
+        self._flag: threading.Event = threading.Event()
+        self._thread: threading.Thread = thread
+        self._held_at: int = held_at
+        self._checks: int = 0
+        self.paused: threading.Event = threading.Event()
+        self.released: threading.Event = threading.Event()
+
+    def is_set(self) -> bool:
+        answer = self._flag.is_set()
+        if threading.current_thread() is self._thread:
+            self._checks += 1
+            if self._checks == self._held_at:
+                self.paused.set()
+                assert self.released.wait(5), "the test never let the bus thread go"
+        return answer
+
+    def set(self) -> None:
+        self._flag.set()
+
+
+class _SignalInsidePut(queue.Queue[bench.Command]):
+    """A queue whose put lets the exit signal land first: inside submit, after its check."""
+
+    def __init__(self, worker: bench.BusWorker) -> None:
+        super().__init__()
+        self._worker: bench.BusWorker = worker
+
+    @override
+    def put(self, item: bench.Command, block: bool = True, timeout: float | None = None) -> None:
+        self._worker.shutdown()
+        super().put(item, block, timeout)
+
+
+def test_a_command_put_after_the_stop_by_a_submit_already_past_its_check_never_runs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """R2's interleaving (ANH-218), forced. The bus thread checks for the stop (no stop yet)
+    and is pre-empted; a request's submit passes its own check, the exit signal sets the
+    flag, then the submit puts its speed. Taken from the queue, the speed is dropped by the
+    bus thread's re-check; the driver's stop follows."""
+    rig = _rig(monkeypatch)
+    worker = rig.worker
+    flag = _HeldFlag(worker, held_at=2)  # 1: the cycle's check, 2: the drain's
+    monkeypatch.setattr(worker, "_stop_requested", flag)
+    monkeypatch.setattr(worker, "_commands", _SignalInsidePut(worker))
+    actions: list[str] = []
+
+    async def record(_worker: bench.BusWorker, command: bench.Command) -> str:
+        actions.append(command.action)
+        return "ok"
+
+    monkeypatch.setattr(bench.BusWorker, "_dispatch", record)
+    worker.start()
+    try:
+        assert flag.paused.wait(5), "the bus thread never reached its drain check"
+        worker.submit(bench.Command("speed", 200))
+        assert flag.is_set(), "the signal landed inside submit"
+    finally:
+        flag.released.set()
+        worker.join(10)
+    assert not worker.is_alive()
+    assert actions == [], "the speed put after the stop reached the drive"
+    assert rig.drive.stops == 1
 
 
 async def _raising(_self: bench.BusWorker, _command: bench.Command) -> str:
