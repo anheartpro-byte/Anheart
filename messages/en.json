@@ -1847,6 +1847,7 @@
     "add": "Add to the logbook",
     "added": "Logbook entry added.",
     "byServer": "written by the server",
+    "entriesLabel": "Logbook entries",
     "byUnknown": "deleted account",
     "attachment": "Attachment",
     "back": "Back to the machine",

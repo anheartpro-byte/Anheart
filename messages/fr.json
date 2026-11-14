@@ -1847,6 +1847,7 @@
     "add": "Ajouter au carnet",
     "added": "Entrée ajoutée au carnet de bord.",
     "byServer": "écrit par le serveur",
+    "entriesLabel": "Entrées du carnet de bord",
     "byUnknown": "compte supprimé",
     "attachment": "Pièce jointe",
     "back": "Retour à la machine",

@@ -53,7 +53,10 @@ function useLogbookUpload() {
     const refused = async () => {
       throw new ConvexError({ code: "invalid_logbook_file" });
     };
-    if (!ATTACHMENT_TYPES.includes(file.type) || file.size > ATTACHMENT_MAX_BYTES) {
+    if (
+      !ATTACHMENT_TYPES.includes(file.type) ||
+      file.size > ATTACHMENT_MAX_BYTES
+    ) {
       await runWithFeedback("[logbook upload]", refused, undefined, t);
       return null;
     }
@@ -192,7 +195,10 @@ export function MachineLogbookCard({
               <ul className="list-disc pl-5">
                 {book.interventionsDue.map((id) => (
                   <li key={id}>
-                    <Link href={`/dashboard/incidents/${id}`} className="underline">
+                    <Link
+                      href={`/dashboard/incidents/${id}`}
+                      className="underline"
+                    >
                       {t("incident", { id })}
                     </Link>
                   </li>
@@ -212,7 +218,10 @@ export function MachineLogbookCard({
           >
             <div className="space-y-1">
               <Label htmlFor="logbook-kind">{t("kindLabel")}</Label>
-              <Select value={chosen} onValueChange={(value) => setKind(value as Kind)}>
+              <Select
+                value={chosen}
+                onValueChange={(value) => setKind(value as Kind)}
+              >
                 <SelectTrigger id="logbook-kind">
                   <SelectValue />
                 </SelectTrigger>
@@ -270,7 +279,10 @@ export function MachineLogbookCard({
               />
             </div>
             <div className="flex items-end justify-end">
-              <Button type="submit" disabled={busy || summary.trim().length < 3}>
+              <Button
+                type="submit"
+                disabled={busy || summary.trim().length < 3}
+              >
                 {t("add")}
               </Button>
             </div>
@@ -280,39 +292,58 @@ export function MachineLogbookCard({
         {book.entries.length === 0 ? (
           <p className="text-sm text-muted-foreground">{t("empty")}</p>
         ) : (
-          <ol className="max-h-[32rem] space-y-3 overflow-y-auto">
-            {book.entries.map((entry) => (
-              <li key={entry._id} className="border-l-2 pl-3">
-                <div className="flex flex-wrap items-center gap-2 text-sm">
-                  <span className="text-muted-foreground">{when(entry.at)}</span>
-                  <Badge variant="outline">{t(`kinds.${entry.kind}`)}</Badge>
-                  <span className="text-muted-foreground">
-                    {entry.by === undefined ? t("byServer") : (entry.byName ?? t("byUnknown"))}
-                  </span>
-                </div>
-                <p className="font-medium">{entry.summary}</p>
-                {entry.details !== undefined && (
-                  <p className="whitespace-pre-line text-sm">{entry.details}</p>
-                )}
-                <div className="flex flex-wrap gap-3 text-sm">
-                  {entry.refs.incidentId !== undefined && (
-                    <Link
-                      href={`/dashboard/incidents/${entry.refs.incidentId}`}
-                      className="underline"
-                    >
-                      {t("incident", { id: entry.refs.incidentId })}
-                    </Link>
+          // Scrolls: reachable by the keyboard, and named for a screen reader.
+          <div
+            role="region"
+            aria-label={t("entriesLabel")}
+            tabIndex={0}
+            className="max-h-[32rem] overflow-y-auto"
+          >
+            <ol className="space-y-3">
+              {book.entries.map((entry) => (
+                <li key={entry._id} className="border-l-2 pl-3">
+                  <div className="flex flex-wrap items-center gap-2 text-sm">
+                    <span className="text-muted-foreground">
+                      {when(entry.at)}
+                    </span>
+                    <Badge variant="outline">{t(`kinds.${entry.kind}`)}</Badge>
+                    <span className="text-muted-foreground">
+                      {entry.by === undefined
+                        ? t("byServer")
+                        : entry.byName === null || entry.byName === ""
+                          ? t("byUnknown")
+                          : entry.byName}
+                    </span>
+                  </div>
+                  <p className="font-medium">{entry.summary}</p>
+                  {entry.details !== undefined && (
+                    <p className="whitespace-pre-line text-sm">
+                      {entry.details}
+                    </p>
                   )}
-                  {entry.attachmentUrl !== null && (
-                    <a href={entry.attachmentUrl} className="inline-flex items-center underline">
-                      <Paperclip className="mr-1 h-3 w-3" />
-                      {t("attachment")}
-                    </a>
-                  )}
-                </div>
-              </li>
-            ))}
-          </ol>
+                  <div className="flex flex-wrap gap-3 text-sm">
+                    {entry.refs.incidentId !== undefined && (
+                      <Link
+                        href={`/dashboard/incidents/${entry.refs.incidentId}`}
+                        className="underline"
+                      >
+                        {t("incident", { id: entry.refs.incidentId })}
+                      </Link>
+                    )}
+                    {entry.attachmentUrl !== null && (
+                      <a
+                        href={entry.attachmentUrl}
+                        className="inline-flex items-center underline"
+                      >
+                        <Paperclip className="mr-1 h-3 w-3" />
+                        {t("attachment")}
+                      </a>
+                    )}
+                  </div>
+                </li>
+              ))}
+            </ol>
+          </div>
         )}
       </CardContent>
     </Card>
