@@ -3034,7 +3034,9 @@ suit ne change pas.
   dossier et les mesures : le temps écoulé sur l'horloge monotone. Pour le
   `training/start` pré-armement, il vaut intentionnellement 0 et `startedAt`
   est l'heure murale lue à l'instant de la demande. Le tableau de bord date
-  ainsi le départ à la confirmation. Chaque point et événement est d'abord daté
+  ainsi le départ à la confirmation. Convex n'applique cet âge qu'avec une date
+  de début (`startedAt`) : sans elle, il garde la date du lancement
+  (`startFromAge`, `convex/training.ts`). Chaque point et événement est d'abord daté
   depuis ce début par le temps monotone écoulé, puis Convex les décale tous du
   même écart sur son axe serveur ([convex.md, Deux horloges](convex.md#deux-horloges)).
   Une console datée de 1970 ne fait apparaître aucune séance en 1970.
