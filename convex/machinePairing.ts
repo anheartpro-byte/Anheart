@@ -311,8 +311,7 @@ const REFUSED = { status: "refused" } as const;
  * machine, every other key revoked at once (ANH-165, no overlap), the code
  * closed with the key it gave. Two verdicts on the same code are applied one
  * after the other, each on what the previous one left. `pairingId` null (no
- * code open for the serial number) changes nothing: the request still costs
- * a transaction, as one for a known number does.
+ * code open for the serial number) changes nothing and reads nothing.
  */
 export const claimPairing = internalMutation({
   args: {

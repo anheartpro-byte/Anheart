@@ -3913,11 +3913,14 @@ contrat ([entrée `machine_pairing`](../contracts/machine-api.json)).
   chacun sur ce que le précédent a laissé : deux codes faux simultanés ne
   passent pas la limite, et une réclamation qui croise une révocation est
   refusée si la révocation est passée la première.
-- **Le même refus, le même travail.** Numéro inconnu ou sans code ouvert, code
+- **Le même refus, le même scrypt.** Numéro inconnu ou sans code ouvert, code
   faux, expiré, déjà utilisé, remplacé, révoqué ou brûlé : 401
   `pairing_refused`, le même corps. Un numéro sans code ouvert coûte la même
-  lecture, le même scrypt (sur un sel qui ne correspond à rien) et la même
-  mutation : ni la réponse ni sa durée ne disent quels numéros ont un code.
+  lecture et le même scrypt (sur un sel qui ne correspond à rien) : la réponse
+  ne dit pas quels numéros ont un code. La durée peut encore le dire, de peu :
+  pour un numéro connu, la mutation lit et écrit le code (un échec compté),
+  pour un numéro inconnu elle rend la main aussitôt, quelques millisecondes
+  contre les dizaines du scrypt.
 - **La réclamation.** Machine encore utilisable, de la même organisation, et
   dont le registre nomme toujours ce Pi, sinon refusée. Une nouvelle clé par
   la rotation d'ANH-165 sans chevauchement : toutes les autres clés valides de

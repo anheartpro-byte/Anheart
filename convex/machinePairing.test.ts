@@ -315,7 +315,7 @@ describe("ANH-115 EX-2 POST /api/machine/pair", () => {
     ).toEqual(REFUSAL);
   });
 
-  it("refuses in the same words, after the same work, whatever the reason", async () => {
+  it("refuses in the same words, after the same scrypt work, whatever the reason", async () => {
     const { w } = await pairable();
     const scrypt = vi.mocked(crypto.scrypt);
     const { code } = await issuedCode(w);

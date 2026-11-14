@@ -75,17 +75,20 @@ export const issuePairingCode = action({
   },
 });
 
-// A serial number with no open code costs the same work as a known one: a
-// hash on this salt, compared with a hash no code has.
+// A serial number with no open code costs the same hash as a known one: on
+// this salt, compared with a hash no code has.
 const NO_SALT = randomBytes(PAIRING_SCRYPT.saltBytes);
 const NO_HASH = randomBytes(PAIRING_SCRYPT.hashBytes);
 
 /**
  * The verdict on a code sent with a serial number, applied by the claim
  * (`machinePairing.claimPairing`), which reads the code again in its
- * transaction. The same reads, the same hash and the same transaction for
- * every request, whether the number has an open code or not: neither the
- * answer nor its time says which. `code` and `serialPi` come as the route
+ * transaction. Every request reads the open codes of its serial number,
+ * hashes once and calls the claim, whether the number has an open code or
+ * not: the answer and the scrypt work are the same. The claim of a known
+ * number reads and writes the code (a failure counted), that of an unknown
+ * one returns at once: the duration can still differ by that transaction,
+ * a few milliseconds against the hash's tens. `code` and `serialPi` come as the route
  * read them (`normalizedCode`, `normalizedSerial`): anything else matches
  * nothing.
  */

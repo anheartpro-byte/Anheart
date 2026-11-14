@@ -1024,7 +1024,7 @@ http.route({
  * machine route without a key (`machine_key_exempt_routes`): the global
  * bucket first, before anything of the request is read (429), then the
  * contract header (426), the size (413) and the form (400 `invalid_request`).
- * Every other refusal is the same 401 after the same work
+ * Every other refusal is the same 401 after the same scrypt work
  * (`pairingCodes.verifyPairing`). `convexUrl` is this deployment's address.
  */
 http.route({
