@@ -931,6 +931,25 @@ L'admin de l'organisation ne peut changer que le nom et le lieu de la machine.
 
 <a id="carte-zone-de-danger"></a>
 
+#### Carnet de bord
+
+La carte **Carnet de bord** montre ce qui a été fait sur la machine : incidents
+ouverts et clos, revues de validation, fiche variateur jointe, mises à jour
+logicielles, et ce que l'équipe y écrit à la main.
+
+- Pour **ajouter une entrée** : choisir le type, écrire un résumé (3 caractères
+  au moins), des détails si besoin, joindre un PDF, une photo JPEG ou PNG
+  (10 Mio au plus), puis **Ajouter au carnet**. Un admin d'organisation écrit
+  des notes ; l'admin Anheart écrit aussi interventions, calibrations et
+  pièces remplacées.
+- **Après un défaut variateur non réarmable**, un bandeau rouge dit que les
+  séances programmées sont fermées. Pour les rouvrir : clore l'incident (page
+  Incidents), puis écrire une entrée **Intervention** en choisissant
+  l'incident traité. Une séance de banc reste possible pour essayer la machine.
+- **Exporter (CSV)** et **Imprimer (PDF)** (admin Anheart) donnent le carnet
+  pour le dossier technique, avec les identifiants seulement. Pour un PDF,
+  choisir « Enregistrer au format PDF » dans la fenêtre d'impression.
+
 #### Carte « Zone de danger »
 
 « Ces actions peuvent impacter le fonctionnement de la machine ».

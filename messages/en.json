@@ -1828,5 +1828,50 @@
       "analyzed": "Analysed",
       "closed": "Closed"
     }
+  },
+  "machineLogbook": {
+    "title": "Logbook",
+    "description": "What was done on the machine, most recent first: written by the server (incidents, reviews, drive sheet, updates) or by hand.",
+    "empty": "No entry yet.",
+    "exportCsv": "Export (CSV)",
+    "print": "Print (PDF)",
+    "dueTitle": "Programmed sessions closed",
+    "dueText": "A drive fault the console cannot reset waits for its intervention: close the incident and write an \"Intervention\" entry that names it. A bench session is still possible.",
+    "incident": "Incident {id}",
+    "kindLabel": "Entry type",
+    "incidentLabel": "Incident handled",
+    "incidentNone": "None",
+    "summaryLabel": "Summary (3 to 200 characters)",
+    "detailsLabel": "Details (optional)",
+    "fileLabel": "Attachment (PDF, JPEG or PNG, at most 10 MiB)",
+    "add": "Add to the logbook",
+    "added": "Logbook entry added.",
+    "byServer": "written by the server",
+    "byUnknown": "deleted account",
+    "attachment": "Attachment",
+    "back": "Back to the machine",
+    "printTitle": "Machine logbook",
+    "printMachine": "Machine {id}, identifiers only",
+    "printButton": "Print or save as PDF",
+    "printHint": "Choose \"Save as PDF\" in the browser's print window.",
+    "printNotAllowed": "Exporting the logbook is for Anheart admins.",
+    "columns": {
+      "at": "Date",
+      "kind": "Type",
+      "summary": "Entry",
+      "by": "Written by",
+      "refs": "References"
+    },
+    "kinds": {
+      "intervention": "Intervention",
+      "calibration": "Calibration",
+      "part_replaced": "Part replaced",
+      "drive_parameter_change": "Drive sheet",
+      "software_update": "Software update",
+      "config_change": "Configuration applied",
+      "incident": "Incident",
+      "validation_review": "Validation review",
+      "note": "Note"
+    }
   }
 }

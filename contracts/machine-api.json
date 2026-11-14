@@ -247,7 +247,7 @@
     },
     "incident_open": {
       "statuses": [409],
-      "meaning": "Depuis 1.10, refus à l'armement d'un lancement automatique (voir `incidents`) : un incident de gravité haute de la machine est ouvert ou analysé, jusqu'à sa clôture par un admin Anheart."
+      "meaning": "Depuis 1.10, refus à l'armement d'un lancement automatique (voir `incidents`) : un incident de la machine ferme ses séances programmées. Soit un incident de gravité haute est ouvert ou analysé, jusqu'à sa clôture par un admin Anheart ; soit, depuis ANH-149, un défaut variateur que la console ne réarme pas (`contracts/drive-faults.json`) attend son intervention dans le carnet de bord, jusqu'à ce que l'incident soit clos et qu'une intervention écrite depuis sa dernière ouverture le nomme. Le second cas aura son propre code avec le contrat 1.16."
     },
     "feedback_not_eligible": {
       "statuses": [400],

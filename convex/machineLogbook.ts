@@ -280,9 +280,10 @@ export const BACKFILL_BATCH = 200;
 /**
  * Judge the drive fault incidents written before ANH-149 (`interventionDue`
  * absent), a batch at a time, the next batch scheduled until the table is
- * read. Idempotent: a row already judged is judged the same again. Optional,
+ * read. Idempotent: a row already judged is judged the same again. Run right
  * after the Convex deploy (docs/deploiement.md): `driveInterventionsDue` judges
- * an unjudged row itself; the backfill only saves it the work. To run again
+ * an unjudged row itself, but rereads every old one on each launch, poll, start
+ * and sweep until this has run. To run again
  * after any change to contracts/drive-faults.json, whose codes the rows were
  * judged by: `npx convex run machineLogbook:backfillInterventionDue '{}'`.
  */
