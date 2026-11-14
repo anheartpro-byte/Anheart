@@ -1,6 +1,6 @@
 {
   "description": "Contrat HTTP entre une machine (console du Raspberry Pi) et Convex. Source unique : convex/lib/contract.ts lit ce fichier, raspberry-pi/src/contract.py y est épinglé par ses tests. Voir docs/convex.md, section Versions et compatibilité.",
-  "contract_version": "1.13",
+  "contract_version": "1.14",
   "header": "X-Anheart-Contract",
   "server_version_field": "server_contract_version",
   "heartbeat_response_fields": ["success", "serverTime", "server_contract_version"],
@@ -41,6 +41,14 @@
     "max_name_chars": 100,
     "code": { "algorithm": "scrypt", "n": 32768, "r": 8, "p": 1, "salt_bytes": 16, "hash_bytes": 32, "min_digits": 6, "max_digits": 12 },
     "device_actor_prefix": "device:"
+  },
+  "health_state": {
+    "since": "1.14",
+    "route": "POST /api/machine/heartbeat",
+    "description": "Depuis 1.14 (ANH-92, ANH-148), l'objet `health` du heartbeat peut porter quatre champs de plus, chacun facultatif et nullable : `sto_state`, l'état de la chaîne STO tel que le dernier tic de la console l'a lu (`ready`, `open`, `unknown`, `not_configured` ou `bridged`, ce dernier sous la déclaration de banc) ; `sto_source`, la source de cette lecture (`none`, `sim_ready`, `sim_open`, `drive_input` ou `bridged_declared`) ; `clock_trusted`, vrai quand un service de temps tient l'horloge murale de la machine, faux sinon, `null` sans sonde ; `clock_max_error_s`, l'erreur en secondes que ce service garantit de ne pas dépasser, `null` quand aucun ne la tient (`clock_offset_s` reste l'erreur estimée). Convex les garde avec la santé de la machine et le site les affiche ; rien ne décide sur eux. Un serveur antérieur refuse un objet `health` qui porte un champ qu'il ne connaît pas : la console ne les envoie qu'à un serveur dont le dernier heartbeat a annoncé 1.14 ou une mineure plus récente de la même majeure, et jamais avant la première réponse ; un 400 à un heartbeat qui les portait (un serveur revenu à une mineure antérieure) lui fait oublier la version annoncée, et le heartbeat suivant part sans eux. Ordre de déploiement : Convex avant l'image du Pi.",
+    "fields": ["sto_state", "sto_source", "clock_trusted", "clock_max_error_s"],
+    "sto_states": ["ready", "open", "unknown", "not_configured", "bridged"],
+    "sto_sources": ["none", "sim_ready", "sim_open", "drive_input", "bridged_declared"]
   },
   "contract_exempt_routes": {
     "GET /api/machine/training/status": "Porte la demande d'arrêt, qui doit atteindre une séance en cours quelle que soit la version du contrat. La clé de la machine reste exigée et la réponse annonce `server_contract_version`. Une console d'une autre majeure n'en retient que ce qui arrête : `stopRequested: true` ou `active: false`."

@@ -228,6 +228,22 @@ export function HealthReadouts({ data }: { data: HealthData }) {
       number(health.uptime_s === null ? null : health.uptime_s / 3600, " h"),
     ],
     ["clock_offset_s", number(health.clock_offset_s, " s")],
+    // Contract 1.14 (ANH-92, ANH-148): absent from an earlier console, said unavailable.
+    ["clock_trusted", state(health.clock_trusted ?? null)],
+    ["clock_max_error_s", number(health.clock_max_error_s ?? null, " s")],
+    [
+      "sto_state",
+      health.sto_state === undefined || health.sto_state === null
+        ? t("unknown")
+        : t(`stoStates.${health.sto_state}`),
+    ],
+    // Next to the state: a simulated chain reads "ready" like a real one.
+    [
+      "sto_source",
+      health.sto_source === undefined || health.sto_source === null
+        ? t("unknown")
+        : t(`stoSources.${health.sto_source}`),
+    ],
     ["link_rtt_ms", number(health.link_rtt_ms, " ms")],
     ["bitalino_battery_pct", number(health.bitalino_battery_pct, " %")],
     ["bitalino_link", link(health.bitalino_link)],

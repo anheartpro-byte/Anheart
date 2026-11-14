@@ -98,4 +98,45 @@ describe("machine health", () => {
     expect(html).toContain("CPU temperature above 70");
     expect(html).not.toContain("machineHealth.");
   });
+  it("says the chain's and the clock's state of contract 1.14, and unavailable from an earlier console", () => {
+    const earlier = paint(
+      { health, updatedAt: now, serverNow: now, history: [] },
+      "en",
+    );
+    expect(earlier).toContain("STO safety chain");
+    expect(earlier).toContain("Clock kept by a time service");
+    expect(earlier).not.toContain("Bridged");
+    const html = paint(
+      {
+        health: {
+          ...health,
+          sto_state: "bridged",
+          sto_source: "bridged_declared",
+          clock_trusted: false,
+          clock_max_error_s: 0.5,
+        },
+        updatedAt: now,
+        serverNow: now,
+        history: [],
+      },
+      "en",
+    );
+    expect(html).toContain("Bridged (declared, bench only)");
+    expect(html).toContain("STO reading source");
+    expect(html).toContain("Declared bridge");
+    expect(html).toContain("0.5 s");
+    expect(html).not.toContain("machineHealth.");
+    // A simulated chain is said simulated, next to its "ready".
+    const simulated = paint(
+      {
+        health: { ...health, sto_state: "ready", sto_source: "sim_ready" },
+        updatedAt: now,
+        serverNow: now,
+        history: [],
+      },
+      "fr",
+    );
+    expect(simulated).toContain("Prête");
+    expect(simulated).toContain("Simulée (prête)");
+  });
 });

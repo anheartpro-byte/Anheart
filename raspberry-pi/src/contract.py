@@ -141,7 +141,7 @@ ErrorCode = NewType("ErrorCode", str)
 SoftwareVersion = NewType("SoftwareVersion", str)
 """What this build calls itself: a git tag such as ``pi-0.4.2``."""
 
-CONTRACT_VERSION: Final[ContractVersion] = ContractVersion("1.13")
+CONTRACT_VERSION: Final[ContractVersion] = ContractVersion("1.14")
 """The contract this console speaks. Pinned to ``contracts/machine-api.json``."""
 
 CONTRACT_HEADER: Final[str] = "X-Anheart-Contract"
@@ -213,6 +213,19 @@ FEEDBACK_SINCE: Final[ContractVersion] = ContractVersion("1.7")
 """The first minor of this major whose dashboard takes the rider's feedback
 (``feedback_events`` of the shared file): an earlier one would keep it as an
 ordinary event of the session, with the session's other events."""
+
+HEALTH_STATE_SINCE: Final[ContractVersion] = ContractVersion("1.14")
+"""The first minor of this major whose dashboard takes the safety chain's and the
+wall clock's state in the heartbeat's ``health`` (``health_state`` of the shared file):
+an earlier one refuses a health object with a field it does not know."""
+
+HEALTH_STATE_FIELDS: Final[tuple[str, ...]] = (
+    "sto_state",
+    "sto_source",
+    "clock_trusted",
+    "clock_max_error_s",
+)
+"""Those fields, left out of the heartbeat to a dashboard of an earlier minor."""
 
 UNKNOWN_SOFTWARE_VERSION: Final[SoftwareVersion] = SoftwareVersion("pi-unknown")
 """Reported when ``VERSION`` is missing or unreadable: never a guess."""
@@ -312,10 +325,24 @@ def takes_feedback(announced: ContractVersion | None) -> bool:
     minor. A version not known (no heartbeat answered yet, or an unreadable
     one) is not one: the feedback waits rather than land among the events.
     """
+    return serves(announced, FEEDBACK_SINCE)
+
+
+def takes_health_state(announced: ContractVersion | None) -> bool:
+    """Whether a dashboard that announced ``announced`` takes :data:`HEALTH_STATE_FIELDS`.
+
+    As :func:`takes_feedback`, from :data:`HEALTH_STATE_SINCE`: before the first
+    answer, and to an earlier minor, the heartbeat goes without them.
+    """
+    return serves(announced, HEALTH_STATE_SINCE)
+
+
+def serves(announced: ContractVersion | None, since: ContractVersion) -> bool:
+    """Whether ``announced`` is of this console's major and of ``since`` or a later minor."""
     return (
         announced is not None
         and major_of(announced) == major_of(CONTRACT_VERSION)
-        and minor_of(announced) >= minor_of(FEEDBACK_SINCE)
+        and minor_of(announced) >= minor_of(since)
     )
 
 

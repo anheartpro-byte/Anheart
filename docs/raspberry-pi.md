@@ -3892,9 +3892,16 @@ Ce que l'opérateur lit, mot pour mot :
 * **Une horloge temps réel ne suffit pas** : sans réseau, la console dit
   « NON FIABLE » même si le Pi en a une
   ([pi-image.md](pi-image.md#lheure)).
-* **Le tableau de bord n'en apprend que l'erreur estimée** (`clock_offset_s`
-  du battement de cœur, ANH-148) et le verdict du dernier pré-vol
-  (`preflight_last`). Le pré-vol (ANH-142, [4.2](#le-pré-vol-anh-142)) juge
+* **Le tableau de bord en apprend l'erreur estimée** (`clock_offset_s`
+  du battement de cœur, ANH-148), depuis le contrat 1.14 si un service de
+  temps tient l'horloge (`clock_trusted`) et l'erreur qu'il garantit
+  (`clock_max_error_s`), et le verdict du dernier pré-vol (`preflight_last`).
+  Le même battement porte depuis 1.14 l'état de la chaîne STO lu au dernier
+  tic (`sto_state`, `sto_source`, ANH-92). Ces quatre champs ne partent que
+  vers un serveur qui a annoncé 1.14 ou plus : un serveur antérieur refuse un
+  champ de santé qu'il ne connaît pas (`HEALTH_STATE_FIELDS`, `health_for`) ;
+  un 400 à un heartbeat qui les portait fait oublier la version annoncée, et
+  le suivant part sans eux. Le pré-vol (ANH-142, [4.2](#le-pré-vol-anh-142)) juge
   l'horloge avec les autres contrôles : avec une personne à bord, l'erreur
   garantie doit rester sous 5 s.
 

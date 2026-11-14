@@ -30,6 +30,7 @@ from src.wall_clock import (
     WallClockProbe,
     WallClockState,
     WallClockWatch,
+    clock_max_error_s,
     clock_offset_s,
     detail_of,
     is_trusted,
@@ -60,6 +61,8 @@ def test_ex1_a_clock_a_time_service_keeps_is_trusted_with_its_two_errors() -> No
     assert is_trusted(state)
     offset = clock_offset_s(state)
     assert offset == Seconds(0.000412)
+    # What the heartbeat says of it since contract 1.14 (ANH-148).
+    assert clock_max_error_s(state) == Seconds(0.045)
 
 
 @pytest.mark.parametrize(
@@ -74,6 +77,7 @@ def test_ex1_a_clock_nobody_keeps_is_not_trusted(max_error_us: int) -> None:
     assert not is_trusted(state)
     offset = clock_offset_s(state)
     assert offset is None
+    assert clock_max_error_s(state) is None
 
 
 def test_ex1_the_rule_turns_exactly_at_sixteen_seconds() -> None:

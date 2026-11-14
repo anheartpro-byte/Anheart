@@ -387,6 +387,7 @@ from src.wall_clock import (
     WallClockProbe,
     WallClockState,
     WallClockWatch,
+    clock_max_error_s,
     clock_offset_s,
     detail_of,
     is_trusted,
@@ -2822,6 +2823,8 @@ def build_panel(  # noqa: PLR0915  # one statement per wired part
             return HealthContext(
                 bitalino_connected=ecg.status().connected,
                 clock_offset_s=None if watch is None else clock_offset_s(watch.current()),
+                clock_trusted=None if watch is None else is_trusted(watch.current()),
+                clock_max_error_s=None if watch is None else clock_max_error_s(watch.current()),
                 record_degraded=None if recorder is None else recorder.is_degraded(),
                 restart_loop=None if service is None else service.status().out_of_service,
                 preflight_last=(

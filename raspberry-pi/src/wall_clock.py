@@ -121,6 +121,11 @@ def clock_offset_s(state: WallClockState) -> Seconds | None:
     return state.estimated_error if isinstance(state, Synchronised) else None
 
 
+def clock_max_error_s(state: WallClockState) -> Seconds | None:
+    """The error the time service guarantees not to exceed, when one keeps the clock."""
+    return state.max_error if isinstance(state, Synchronised) else None
+
+
 def state_name(state: WallClockState) -> str:
     """The wire name of ``state``, for the page."""
     match state:
