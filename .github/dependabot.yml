@@ -46,6 +46,9 @@ updates:
       pi-minor-and-patch:
         update-types: [minor, patch]
 
+  # A lock compiled by uv with its hashes, under the constraint of
+  # raspberry-pi/requirements-base.txt: a pull request here is finished by
+  # hand, with the command written at the top of requirements-lock.txt.
   - package-ecosystem: pip
     directory: /deploy/simulation-vercel
     target-branch: develop
