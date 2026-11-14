@@ -38,13 +38,14 @@ from __future__ import annotations
 import errno
 import io
 import os
+import queue
 import signal
 import socket
 import subprocess
 import sys
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from functools import partial
 from http import HTTPStatus
@@ -54,6 +55,7 @@ from typing import Final, Literal, assert_never, cast, override
 
 import httpx
 import pytest
+import uvicorn
 
 import scripts.bench_console as bench
 from scripts.drive_link import BuiltDrive
@@ -209,7 +211,8 @@ async def test_once_the_exit_has_begun_every_motion_route_is_refused_and_the_sto
     monkeypatch.setattr(bench.BusWorker, "submit", submit)
     page = httpx.AsyncClient(transport=httpx.ASGITransport(app=bench.app), base_url="http://bench")
     async with page:
-        assert (await page.post("/api/speed", json={"rpm": 30})).status_code == HTTPStatus.OK
+        before = await page.post("/api/speed", json={"rpm": 30})
+        assert before.status_code == HTTPStatus.OK
         rig.worker.snap.armed = True
         bench.disarm_and_stop()  # what the exit signal calls
         refused = [
@@ -237,6 +240,103 @@ def test_a_command_still_queued_when_the_stop_is_asked_for_is_never_run(
     rig.worker.run()
     assert rig.drive.stops == 1
     assert rig.worker.snap.setpoint_rpm == 0
+
+
+async def test_an_unarmed_console_refuses_the_motion_routes_before_any_exit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The arming's own refusal, the second reason ``_motion_refusal`` gives: nothing queued."""
+    rig = _rig(monkeypatch)
+    rig.worker.snap.armed = False
+    monkeypatch.setattr(bench, "worker", rig.worker)
+    monkeypatch.setattr(bench, "LEAVING", threading.Event())
+    queued: list[str] = []
+
+    def submit(_worker: bench.BusWorker, command: bench.Command) -> None:
+        queued.append(command.action)
+
+    monkeypatch.setattr(bench.BusWorker, "submit", submit)
+    page = httpx.AsyncClient(transport=httpx.ASGITransport(app=bench.app), base_url="http://bench")
+    async with page:
+        refused = [
+            await page.post("/api/enable"),
+            await page.post("/api/speed", json={"rpm": 60}),
+        ]
+    assert [answer.status_code for answer in refused] == [HTTPStatus.CONFLICT] * 2
+    assert all("console non armee" in answer.text for answer in refused)
+    assert queued == []
+
+
+type _Dispatch = Callable[[bench.BusWorker, bench.Command], Awaitable[str]]
+
+
+def _dispatching(
+    actions: list[str], then: Callable[[bench.BusWorker], None] | None = None
+) -> _Dispatch:
+    """The bus thread's actions, recorded in ``actions`` in place of the drive's. The first
+    asks for the stop, then runs ``then`` on the bus thread, as a request handler would
+    submit in that instant."""
+
+    async def dispatch(worker: bench.BusWorker, command: bench.Command) -> str:
+        actions.append(command.action)
+        if len(actions) == 1:
+            worker.shutdown()
+            if then is not None:
+                then(worker)
+        return command.action
+
+    return dispatch
+
+
+def test_a_command_queued_behind_the_one_that_asks_for_the_stop_is_never_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The drain itself stops at the stop (ANH-218): the bus thread is taking its queue when
+    the stop is asked for, and the command behind is left there."""
+    rig = _rig(monkeypatch)
+    actions: list[str] = []
+    monkeypatch.setattr(bench.BusWorker, "_dispatch", _dispatching(actions))
+    rig.worker.submit(bench.Command("speed", 30))
+    rig.worker.submit(bench.Command("enable"))
+    rig.worker.run()
+    assert actions == ["speed"], "the command behind was run after the stop"
+    assert rig.drive.stops == 1
+
+
+def test_a_command_submitted_once_the_stop_is_asked_for_is_dropped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """R2's race (ANH-218): the bus thread checks for the stop, is pre-empted, and a request
+    queues a command in that instant. Dropped at the queue, whatever check the bus thread
+    passed, there is nothing for it to take."""
+    rig = _rig(monkeypatch)
+    commands: queue.Queue[bench.Command] = queue.Queue()
+    monkeypatch.setattr(rig.worker, "_commands", commands)
+
+    def submit_late(worker: bench.BusWorker) -> None:
+        worker.submit(bench.Command("enable"))
+        worker.submit(bench.Command("speed", 60))
+
+    actions: list[str] = []
+    monkeypatch.setattr(bench.BusWorker, "_dispatch", _dispatching(actions, submit_late))
+    rig.worker.submit(bench.Command("speed", 30))
+    rig.worker.run()
+    assert commands.empty(), "a command was queued after the stop was asked for"
+    assert actions == ["speed"]
+    assert rig.drive.stops == 1
+
+
+def test_the_server_s_exit_goes_ahead_when_the_disarm_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def broken() -> None:
+        raise RuntimeError("the disarm went wrong")
+
+    monkeypatch.setattr(bench, "disarm_and_stop", broken)
+    server = bench.StoppingServer(uvicorn.Config(bench.app))
+    with pytest.raises(RuntimeError, match="the disarm went wrong"):
+        server.handle_exit(signal.SIGTERM, None)
+    assert server.should_exit, "uvicorn's own exit was skipped"
 
 
 async def _raising(_self: bench.BusWorker, _command: bench.Command) -> str:

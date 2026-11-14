@@ -104,8 +104,9 @@ done. The last line printed, ``sortie: ...``, says how the machine was left:
 
 The exit status: 0 after a Ctrl+C taken while the page was served (the
 interruption itself during the start-up wait), 143 after SIGTERM, 129 after
-SIGHUP, and 4 (``EXIT_STOP_UNFINISHED``) when the stop had not finished when
-the wait ended. A 1 is an ordinary error, and says nothing of the stop.
+SIGHUP, 4 (``EXIT_STOP_UNFINISHED``) when the stop had not finished when
+the wait ended, and 3 (``WEB_SERVER_FAILED``) when the page could not start.
+A 1 is an ordinary error, and says nothing of the stop.
 
 None of this depends on the last line being written. With the terminal gone
 or the pipe broken there is nobody to read it: the line is dropped, the
@@ -304,6 +305,13 @@ class BusWorker(threading.Thread):
         self.exit_report: str = "-"
 
     def submit(self, cmd: Command) -> None:
+        """Queue ``cmd`` for the bus thread; dropped once the stop is asked for (ANH-218).
+
+        The flag is set before any request handler resumes, so nothing queued
+        after it can be taken by a bus thread that checked it a moment before.
+        """
+        if self._stop_requested.is_set():
+            return
         self._commands.put(cmd)
 
     def shutdown(self) -> None:
@@ -639,7 +647,7 @@ LEAVING_REFUSAL: Final[str] = "console en cours d'arret: aucune commande de mouv
 def disarm_and_stop() -> None:
     """The exit begins: disarm, refuse every motion route, and start the driver's stop now.
 
-    Called by the exit signal itself (:class:`_StoppingServer`), on the web
+    Called by the exit signal itself (:class:`StoppingServer`), on the web
     server's thread, before the web server waits for the requests still open:
     the stop no longer waits for them, and none of them can reach the drive.
     """
@@ -906,7 +914,7 @@ WEB_SERVER_FAILED: Final[int] = 3
 """The exit status when the web server could not start, as ``uvicorn.run`` gives it."""
 
 
-class _StoppingServer(uvicorn.Server):
+class StoppingServer(uvicorn.Server):
     """The web server, whose exit signal disarms the console and starts the stop at once.
 
     The signal is taken as the server always took it (``HANDLED_SIGNALS``,
@@ -917,8 +925,11 @@ class _StoppingServer(uvicorn.Server):
 
     @override
     def handle_exit(self, sig: int, frame: FrameType | None) -> None:
-        disarm_and_stop()
-        super().handle_exit(sig, frame)
+        try:
+            disarm_and_stop()
+        finally:
+            # Whatever happened above, the server's own exit goes ahead.
+            super().handle_exit(sig, frame)
 
 
 EXIT_STOP_UNFINISHED: Final[int] = 4
@@ -1135,7 +1146,7 @@ def main() -> int:
         taken = uvicorn.server.HANDLED_SIGNALS
         untaken = tuple(wanted for wanted in _exit_signals() if wanted not in taken)
         setattr(uvicorn.server, "HANDLED_SIGNALS", (*taken, *untaken))  # noqa: B010
-        server = _StoppingServer(
+        server = StoppingServer(
             uvicorn.Config(
                 app,
                 host=host,
