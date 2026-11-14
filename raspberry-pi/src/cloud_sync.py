@@ -18,7 +18,9 @@ Up, from this machine to the dashboard:
   twice;
 * its telemetry at 1 Hz, its events and its end, read back from the session's
   record on disk by :mod:`src.record_uplink`: what the dashboard has not
-  acknowledged is on disk, never in a queue here.
+  acknowledged is on disk, never in a queue here. They are sent by
+  :meth:`CloudSync.send_records`, from a task of its own: a slow disk or a
+  slow upload delays neither the heartbeat nor the question for a launch.
 
 Down, from the dashboard to this machine, exactly three things:
 
@@ -1415,10 +1417,12 @@ class CloudSync:
         """One pass: detect an end, then whatever network work is due.
 
         Everything but the stop asked for from the dashboard, which
-        :meth:`watch_stop` looks for from a task of its own: this pass may wait
-        on a slow disk or a slow upload, and a stop must never wait behind it.
-        Nor the riders' list, which :meth:`refresh_roster` asks for from
-        another: a list slow to come must not hold the heartbeat or the poll.
+        :meth:`watch_stop` looks for from a task of its own: a stop must never
+        wait behind the heartbeat or the poll. Nor the riders' list, which
+        :meth:`refresh_roster` asks for from another: a list slow to come must
+        not hold the heartbeat or the poll. Nor the sending of the sessions,
+        which :meth:`send_records` steps from a third, for the same reason: it
+        may wait on a slow disk or a slow upload.
         """
         now = self._clock.monotonic()
         snapshot = self._runtime.snapshot()
@@ -1435,13 +1439,21 @@ class CloudSync:
             await self._poll(now)
             await self._process_confirmation(now)
         self._check_launch_timeout(now)
-        # The sending last, so a refusal found above goes out in this same step.
-        await self._uplink.step()
         if self._deposit is not None:
             if self._runtime.state in (RuntimeState.RUNNING, RuntimeState.ENDING) or self._awaiting:
                 self._deposit.pause()
             else:
                 self._deposit.schedule()
+
+    async def send_records(self) -> None:
+        """One step of the sending: the running session first, then one of catching up.
+
+        Stepped from a task of its own, never from :meth:`step`: a record read
+        that takes its whole bound, or an upload that takes the transport's,
+        holds only the next step of the sending. An end found by :meth:`step`,
+        or a refusal owed there, is sent at this task's next step.
+        """
+        await self._uplink.step()
 
     async def close(self) -> None:
         if self._deposit is not None:

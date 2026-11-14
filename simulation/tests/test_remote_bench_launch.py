@@ -112,7 +112,7 @@ async def console_inline(treatment: Treatment, batch: SampleBatch) -> EcgFrame |
 
 async def ticks(panel: LocalPanel, journal: Journal, clock: ManualClock, seconds: float) -> None:
     """The console's tasks, at their own rates: the control loop, the stop watch at each
-    tick, the riders' list and the dashboard step once a second."""
+    tick, the riders' list, the dashboard step and the sending once a second."""
     for index in range(round(seconds / TICK)):
         clock.advance(TICK)
         panel.surface.note_presence(OPERATOR)
@@ -122,6 +122,7 @@ async def ticks(panel: LocalPanel, journal: Journal, clock: ManualClock, seconds
         if index % 5 == 0:
             await panel.roster_step()
             await panel.cloud_step()
+            await panel.records_step()
         journal.drain()
 
 

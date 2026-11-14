@@ -127,12 +127,14 @@ def console(
 
 
 async def one_second(rig: Rig, journal: Journal) -> None:
-    """One second of the console's life: five control ticks, the disk catching up, one link step."""
+    """One second of the console's life: five control ticks, the disk catching up, one link
+    step and one step of the sending."""
     for _ in range(5):
         await rig.tick(float(TICK))
         journal.drain()
         await rig.panel.cloud_stop_step()
     await rig.panel.cloud_step()
+    await rig.panel.records_step()
 
 
 async def scenario(tmp_path: Path) -> Outcome:

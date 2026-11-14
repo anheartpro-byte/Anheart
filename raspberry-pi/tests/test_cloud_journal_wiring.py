@@ -326,7 +326,7 @@ async def test_a_step_waiting_on_the_disk_returns_at_once_when_it_is_cancelled(
     assert time.perf_counter() - began < 1.0
 
 
-async def test_the_control_tick_keeps_its_pace_while_the_dashboard_step_waits_on_the_disk(
+async def test_the_control_tick_keeps_its_pace_while_the_sending_waits_on_the_disk(
     tmp_path: Path, stuck: threading.Event
 ) -> None:
     rig, dashboard, journal = recording_linked(tmp_path)
@@ -337,9 +337,11 @@ async def test_the_control_tick_keeps_its_pace_while_the_dashboard_step_waits_on
     await rig.panel.control_step()
     journal.drain()
 
-    waiting = asyncio.create_task(rig.panel.cloud_step())
+    waiting = asyncio.create_task(rig.panel.records_step())
     await asyncio.sleep(0.02)
     assert not waiting.done()
+    # The dashboard step goes on meanwhile: the sending is a task of its own (ANH-239).
+    await asyncio.wait_for(rig.panel.cloud_step(), timeout=1.0)
     longest = 0.0
     for _ in range(25):
         rig.clock.advance(TICK)
@@ -349,7 +351,7 @@ async def test_the_control_tick_keeps_its_pace_while_the_dashboard_step_waits_on
         journal.drain()
         await asyncio.sleep(0)
 
-    assert not waiting.done(), "the dashboard step is still waiting for the disk"
+    assert not waiting.done(), "the sending is still waiting for the disk"
     assert state_of(rig) is RuntimeState.RUNNING
     # The supervisor acts on a loop stalled for 600 ms, and the disk is waited for
     # two seconds: a tick here takes milliseconds, even on a loaded machine.
@@ -536,10 +538,10 @@ async def watched(
 ) -> Watched:
     """``session_s`` seconds of a link, a session being armed ``armed_after_s`` into them.
 
-    The link's work is run as the console runs it: the sending once a second
-    and the stop watch twenty times a second, each a task of its own. With
-    ``one_task`` the watch is instead called from the sending task, before
-    and after the step, as it was before it had its own. ``launched``: the
+    The link's work is run as the console runs it: the dashboard step and the
+    sending once a second and the stop watch twenty times a second, each a
+    task of its own. With ``one_task`` the watch is instead called from the
+    sending task, before and after its step, as it was before it had its own. ``launched``: the
     session comes from the dashboard; else it is started at the machine.
     ``batches``: what every batch of telemetry is answered and after how
     long, while the other routes answer as ``request_s`` says.
@@ -588,7 +590,7 @@ async def watched(
         began = float(clock.monotonic())
         if one_task:
             await sync.watch_stop()
-        await sync.step()
+        await sync.send_records()
         if one_task:
             await sync.watch_stop()
         steps.append(float(clock.monotonic()) - began)
@@ -600,7 +602,10 @@ async def watched(
             await step()
             await waits.sleep(max(0.0, period - (float(clock.monotonic()) - began)))
 
-    tasks = [asyncio.create_task(every(float(CLOUD_PERIOD), sending))]
+    tasks = [
+        asyncio.create_task(every(float(CLOUD_PERIOD), sync.step)),
+        asyncio.create_task(every(float(CLOUD_PERIOD), sending)),
+    ]
     if not one_task:
         tasks.append(asyncio.create_task(every(float(STOP_WATCH_PERIOD), sync.watch_stop)))
     try:

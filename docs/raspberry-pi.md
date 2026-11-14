@@ -828,7 +828,8 @@ une autre séance la tient (`machine_busy`).
 | `ecg_step` | 0,2 s (`ECG_PERIOD`) | garde le BITalino connecté (nouvel essai toutes les 5 s au plus, délai de connexion 30 s) et pompe les échantillons vers le traitement ECG (sur un fil de travail) |
 | `sensor_step` | 1 s | retraite la fenêtre de chaque capteur |
 | `presence_step` | 0,05 s (20 Hz) | lit la caméra et applique son verdict |
-| `cloud_step` | 1 s | une étape d'envoi du lien Convex. Ce qu'elle envoie d'une séance est relu sur le disque par un fil `record-io` réservé : la tâche attend ce fil, la boucle non |
+| `cloud_step` | 1 s | une étape du lien Convex : battement de cœur, programmes, interrogation des lancements. Elle n'attend ni le disque ni l'envoi des séances |
+| `records_step` | 1 s | une étape d'envoi des séances, puis des retours des passagers (ANH-239). Ce qu'elle envoie d'une séance est relu sur le disque par un fil `record-io` réservé : la tâche attend ce fil, la boucle non |
 | `cloud_stop_step` | 50 ms | dit la séance en cours au tableau de bord (déclaration ou confirmation du départ), puis pose la question de l'arrêt demandé (toutes les 3 s en séance). Une tâche à elle : elle n'attend ni l'envoi, ni une retenue de l'envoi, ni le disque, et ne lit aucun fichier |
 | `clock_step` | 10 s (`WALL_CLOCK_PERIOD`) | demande au noyau si un service de temps tient l'horloge murale ([12.4](#124-lhorloge-murale-et-le-journal-de-la-console)). Un appel système qui recopie quelques variables du noyau : ni fichier, ni réseau, ni attente. Les portes de départ, l'enregistrement et la page ne lisent que sa dernière réponse, en mémoire |
 | `preflight_step` | 1 s (`PREFLIGHT_PERIOD`) | fait avancer le pré-vol ([4.2](#le-pré-vol-anh-142)) : lit la batterie du BITalino au repos quand une passe la demande (l'acquisition est suspendue le temps de la lecture), puis clôt la passe quand plus aucun contrôle n'est attendu. Les contrôles eux-mêmes sont jugés à la demande, en mémoire |
@@ -842,9 +843,9 @@ l'arrêt ou plus tôt), 2 (configuration refusée). Sur un Pi installé, systemd
 relance la console après un code 1
 ([3.6](#36-sous-systemd--signe-de-vie-redémarrage-hors-service)).
 
-`cloud_step` et `preflight_step` sont les seules tâches qui avalent leurs
-exceptions : le tableau de bord est un observateur, un bogue de report ne doit
-pas arrêter une séance ; le pré-vol en est un aussi, et la porte d'armement
+`cloud_step`, `records_step` et `preflight_step` sont les seules tâches qui
+avalent leurs exceptions : le tableau de bord est un observateur, un bogue de
+report ne doit pas arrêter une séance ; le pré-vol en est un aussi, et la porte d'armement
 rejuge sa liste à chaque départ, dans la tâche de contrôle.
 `clock_step` n'en lève pas : une lecture de l'horloge qui échoue est rendue
 comme un état (« non vérifiée »), jamais comme une exception.
@@ -3054,9 +3055,10 @@ Après un redémarrage **du système**, plus rien ne relie les deux horloges :
 
 ### 8.6 Ce que la synchronisation ne peut pas coûter
 
-- **Jamais dans le tic.** `RecordUplink.step` tourne dans la tâche du lien
-  (`cloud_step`), qui n'appelle aucune fonction du tic et que le tic n'appelle
-  pas.
+- **Jamais dans le tic.** `RecordUplink.step` tourne dans une tâche à lui
+  (`records_step`, ANH-239), qui n'appelle aucune fonction du tic et que le tic
+  n'appelle pas. Le battement de cœur, les programmes et l'interrogation des
+  lancements ont la leur (`cloud_step`) : ils n'attendent plus l'envoi.
 - **Aucune lecture sur la boucle.** Chaque lecture d'enregistrement et chaque
   écriture de curseur se fait sur un fil `record-io` **réservé à la
   synchronisation**, distinct des fils de l'export et de ceux du traitement
@@ -3082,7 +3084,7 @@ Après un redémarrage **du système**, plus rien ne relie les deux horloges :
      fois dès que le tableau de bord tient la séance pour démarrée, puis
      toutes les 3 s.
 
-  L'étape d'envoi (`cloud_step`) peut attendre une lecture, une écriture de
+  L'étape d'envoi (`records_step`) peut attendre une lecture, une écriture de
   curseur, un envoi ou tout un rattrapage : rien de cela ne retarde ni l'un ni
   l'autre. Mesuré en temps simulé, séance armée au milieu d'un rattrapage,
   temps comptés depuis l'armement (confirmation ou déclaration envoyée /
@@ -3159,8 +3161,17 @@ Après un redémarrage **du système**, plus rien ne relie les deux horloges :
   interrogation à 45 s, et les battements suivants à 55, 105 et 115 s. À la
   sortie, cette tâche est annulée avec les autres avant l'arrêt du variateur :
   une demande restée sans réponse ne retarde ni la sortie ni cet arrêt.
-- **La sortie n'attend pas.** À la sortie de la console, la tâche du lien est
-  annulée avant l'arrêt du variateur ; une étape qui attendait le disque ou le
+- **L'envoi des séances ne retient rien d'autre.** Une tâche à lui,
+  `records_step`, l'avance d'une étape par seconde, puis les retours des
+  passagers, qui attendent que la fin de leur séance soit arrivée. Mesuré en
+  temps simulé (`tests/test_records_task.py`), au repos pendant 130 s, une
+  séance laissée sur le disque à rattraper et sa déclaration qui met 45 s à
+  recevoir sa réponse : battement de cœur à 0, 10, 20... 130 s, interrogation
+  des lancements à 0, 3, 6... 129 s. Envoyé depuis l'étape du lien, comme
+  avant, le même envoi faisait partir le deuxième battement de cœur et la
+  deuxième interrogation à 45 s.
+- **La sortie n'attend pas.** À la sortie de la console, les tâches du lien,
+  celle de l'envoi comprise, sont annulées avant l'arrêt du variateur ; une étape qui attendait le disque ou le
   réseau rend la main à l'instant, et le fil de lecture, démon, ne retient pas
   le processus. L'ordre de sortie reste : variateur arrêté d'abord.
 
@@ -3233,11 +3244,13 @@ lequel la même requête serait encore refusée.
   plusieurs secondes. Mesuré en temps simulé, 100 minutes à rattraper : 7,5 s
   avec chaque requête à 2,5 s ; avec en plus des lectures à 1,8 s, 14,7 s
   pour une séance armée en plein rattrapage (le cas de 8.6) et 18,3 s pour une
-  séance armée au démarrage même de la console. Le battement de cœur, les
-  programmes et le poll, qui sont dans cette étape, attendent d'autant (le
-  seuil hors ligne du tableau de bord est à 90 s). Ni la déclaration ou la
-  confirmation de la séance en cours, ni la demande d'arrêt du tableau de
-  bord n'y sont : elles ont leur tâche (8.6). Le tic, l'arrêt à la console et
+  séance armée au démarrage même de la console. Seul l'envoi attend
+  d'autant : le battement de cœur, les programmes et le poll ont leur tâche
+  (`cloud_step`) depuis ANH-239, et la déclaration ou la confirmation de la
+  séance en cours et la demande d'arrêt du tableau de bord la leur (8.6). Le
+  registre des séances perdues, écrit par l'étape du lien avant qu'elle
+  attende le réseau, attend son tour derrière une lecture de l'envoi en cours
+  (2 s au plus) plutôt que d'être refusé pour elle. Le tic, l'arrêt à la console et
   le superviseur n'en dépendent pas non plus.
 - Une séance en cours dont l'enregistrement ne peut pas être lié à elle
   (manifeste qui ne se lit pas, lectures du disque qui ne reviennent pas,

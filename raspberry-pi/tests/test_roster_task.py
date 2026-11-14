@@ -122,10 +122,10 @@ async def measured(
 ) -> Measured:
     """``seconds`` of the link, its tasks run as the console runs them, on the test's clock.
 
-    The sending and the list once a second, the stop watch twenty times a
-    second, each a task of its own. With ``one_task`` the list is asked from
-    the sending task instead, just before its step, as it was asked from
-    inside the step before. ``release_at``: when a held list is let through.
+    The dashboard step, the sending and the list once a second, the stop
+    watch twenty times a second, each a task of its own. With ``one_task``
+    the list is asked from the dashboard task instead, just before its step,
+    as it was asked from inside the step before. ``release_at``: when a held list is let through.
     ``armed_at``: when a session started at the machine is armed.
     """
     clock = ManualClock()
@@ -171,6 +171,7 @@ async def measured(
 
     tasks = [
         asyncio.create_task(every(float(CLOUD_PERIOD), sending)),
+        asyncio.create_task(every(float(CLOUD_PERIOD), sync.send_records)),
         asyncio.create_task(every(float(STOP_WATCH_PERIOD), sync.watch_stop)),
     ]
     if not one_task:

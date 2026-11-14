@@ -291,13 +291,14 @@ class Rig:
         assert isinstance(accepted, Ok), accepted
 
     async def step(self, seconds: float = 1.0) -> None:
-        """One second of the link's three tasks: the riders' list, then the sending, the
-        stop watch looking before and after them, as it does on the console, where it
-        looks four times a second."""
+        """One second of the link's four tasks: the riders' list, the dashboard step, then
+        the sending, the stop watch looking before and after them, as it does on the
+        console, where it looks four times a second."""
         self.clock.advance(Seconds(seconds))
         await self.sync.watch_stop()
         await self.sync.refresh_roster()
         await self.sync.step()
+        await self.sync.send_records()
         await self.sync.watch_stop()
 
 
@@ -1136,6 +1137,7 @@ async def test_a_late_2xx_cannot_reuse_a_confirmation_after_a_local_session(
 
     release.set()
     await asyncio.wait_for(request, timeout=1.0)
+    await r.panel.records_step()  # the sending's own task: the failed end goes out
 
     assert r.panel.surface.pending is None
     assert state_of(r.panel) is RuntimeState.FINISHED
@@ -1433,6 +1435,7 @@ async def test_a_reply_for_a_replaced_offer_cannot_submit_or_arm_it(
 
     release.set()
     await asyncio.wait_for(request, timeout=1.0)
+    await r.panel.records_step()  # the sending's own task: an end owed goes out
 
     assert r.panel.runtime.state is RuntimeState.IDLE
     assert r.panel.surface.pending is None
@@ -1641,6 +1644,7 @@ async def test_a_dashboard_launch_fails_closed_without_local_preflight(tmp_path:
     assert isinstance(accepted, Ok)
     r.clock.advance(Seconds(1.0))
     await sync.step()
+    await sync.send_records()
 
     assert r.dashboard.to(START) == []
     ends = r.dashboard.to("/api/machine/training/end")
@@ -2090,6 +2094,7 @@ async def test_a_late_refusal_does_not_refuse_a_new_remote_offer(tmp_path: Path)
     assert offer.reason is None
 
     await r.sync.step()
+    await r.sync.send_records()
     ends = r.dashboard.to("/api/machine/training/end")
     assert ends[-1]["sessionId"] == "remote-1"
     assert ends[-1]["reason"] == expected_dashboard_refusal(detail, LAUNCH)
@@ -2723,12 +2728,14 @@ class Linked:
             self.panel.surface.note_presence(OPERATOR)
             await self.panel.ecg_step()
             await self.panel.control_step()
-            # The link's three tasks: the stop watch four times a second (here at
-            # each tick), the riders' list and the sending once a second.
+            # The link's four tasks: the stop watch four times a second (here at
+            # each tick), the riders' list, the dashboard step and the sending once a
+            # second.
             await self.panel.cloud_stop_step()
             if n % 5 == 0:
                 await self.panel.roster_step()
                 await self.panel.cloud_step()
+                await self.panel.records_step()
 
 
 def state_of(panel: LocalPanel) -> RuntimeState:
@@ -3433,12 +3440,27 @@ async def test_a_failure_of_the_riders_list_request_never_reaches_the_console(
     await rig_.panel.close()
 
 
+async def test_a_failure_of_the_sending_never_reaches_the_console(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    rig_ = linked(tmp_path)
+
+    async def broken(_self: CloudSync) -> None:
+        raise RuntimeError("bug in the sending")
+
+    monkeypatch.setattr(CloudSync, "send_records", broken)
+    await rig_.panel.records_step()
+    assert "dashboard sending step failed" in caplog.text
+    await rig_.panel.close()
+
+
 async def test_an_unlinked_console_has_no_link_step(tmp_path: Path) -> None:
     clock = ManualClock()
     config = config_of(MACHINE_API_KEY="")
     panel = build_panel(config, clock=clock, profiles_path=tmp_path / "p.json")
     assert panel.cloud is None
     await panel.cloud_step()
+    await panel.records_step()
     await panel.cloud_stop_step()
     await panel.roster_step()
     assert panel.roster.state(clock.monotonic()) is RosterState.UNLINKED

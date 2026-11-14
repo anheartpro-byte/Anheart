@@ -85,8 +85,10 @@ What the dashboard receives of a session (telemetry, events, end) is read back
 from that session's record, from the place the dashboard last acknowledged
 (:mod:`src.record_uplink`): a lost link, or a console that restarts, loses
 nothing of a session that is on disk. Those reads have a thread of their own
-(:func:`record_source`), and the dashboard task that asks for them is cancelled
-first at exit: neither a tick nor the stop of the drive ever waits for them.
+(:func:`record_source`), and the task that asks for them
+(:meth:`LocalPanel.records_step`, apart from the heartbeat and the poll) is
+cancelled first at exit: neither a tick nor the stop of the drive ever waits
+for them.
 
 A stop asked for from the dashboard is looked for by another task
 (:meth:`LocalPanel.cloud_stop_step`), which does nothing else: the question
@@ -2078,11 +2080,12 @@ class LocalPanel:
             self._recorder.note_sensors(readings)
 
     async def cloud_step(self) -> None:
-        """One dashboard step: heartbeat, programmes, poll, the sending, then the feedback.
+        """One dashboard step: heartbeat, programmes, then the poll for a launch.
 
-        Every :data:`CLOUD_PERIOD` at most: a step that waits on the sending
-        (a slow disk, a slow upload) delays the next one by as much. What must
-        not wait behind it has a task of its own: the stop watch
+        Every :data:`CLOUD_PERIOD` at most: a step that waits on the link
+        delays the next one by as much. What must not wait behind it has a
+        task of its own: the sending of the sessions and of the riders'
+        feedback (:meth:`records_step`), the stop watch
         (:meth:`cloud_stop_step`), the riders' list, the catalogue and the
         operators' list.
 
@@ -2099,9 +2102,28 @@ class LocalPanel:
             return
         try:
             await cloud.step()
-            await self._feedback.step(cloud)
         except Exception:  # see the docstring: an observer must not stop the machine
             _logger.exception("dashboard link step failed; the session is unaffected")
+
+    async def records_step(self) -> None:
+        """One step of sending the sessions, then the riders' feedback. No-op without a link.
+
+        A task of its own, apart from :meth:`cloud_step`: a record read or an
+        upload that takes as long as its bound allows holds neither the
+        heartbeat nor the poll for a launch. The feedback comes after, in the
+        same task, as it did after the sending in the dashboard step: the
+        dashboard takes it only once the session's end has reached it. The
+        same fence, for the same reason: a bug in the sending must not bring a
+        running session down; what it did not send is still on the disk.
+        """
+        cloud = self._cloud
+        if cloud is None:
+            return
+        try:
+            await cloud.send_records()
+            await self._feedback.step(cloud)
+        except Exception:  # as cloud_step: an observer must not stop the machine
+            _logger.exception("dashboard sending step failed; the session is unaffected")
 
     async def cloud_stop_step(self) -> None:
         """Look whether the dashboard wants the running session stopped. No-op without a link.
@@ -2220,6 +2242,7 @@ class LocalPanel:
             asyncio.create_task(self._every(SENSOR_PERIOD, self.sensor_step, stop)),
             asyncio.create_task(self._every(PRESENCE_PERIOD, self.presence_step, stop)),
             asyncio.create_task(self._every(CLOUD_PERIOD, self.cloud_step, stop)),
+            asyncio.create_task(self._every(CLOUD_PERIOD, self.records_step, stop)),
             asyncio.create_task(self._every(STOP_WATCH_PERIOD, self.cloud_stop_step, stop)),
             asyncio.create_task(self._every(CLOUD_PERIOD, self.roster_step, stop)),
             asyncio.create_task(self._every(CLOUD_PERIOD, self.catalog_step, stop)),

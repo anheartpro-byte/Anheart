@@ -578,6 +578,7 @@ class Scene:
                 self.journal.drain()
                 await self.console.panel.cloud_stop_step()
             await self.console.panel.cloud_step()
+            await self.console.panel.records_step()
             row = await self.panel()
             self.shown.append((row.dashboard.state, row.dashboard.detail))
 
@@ -816,6 +817,7 @@ class Wired:
                 self.journal.drain()
                 await self.console.panel.cloud_stop_step()
             await self.console.panel.cloud_step()
+            await self.console.panel.records_step()
             row = parse(PanelRow, await self.browser.get("/api/panel"))
             self.shown.append(row.dashboard)
 
@@ -1148,6 +1150,7 @@ async def test_a_426_listing_thousands_of_majors_stays_a_short_line_on_the_page_
                 journal.drain()
                 await console.panel.cloud_stop_step()
             await console.panel.cloud_step()
+            await console.panel.records_step()
         row = parse(PanelRow, await browser.get("/api/panel"))
         assert console.panel.runtime.state is RuntimeState.RUNNING, "the session goes on"
         stopped = await browser.post(
