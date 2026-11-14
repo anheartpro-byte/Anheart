@@ -660,7 +660,7 @@ Index : `by_machine`.
 | `localRef` | Clé d'idempotence côté Pi (séances locales). |
 | `stopRequestedAt` | Posé par `requestStop` : le Pi le lit et arrête. |
 | `endReason` | Raison de fin donnée par le Pi (ou « Cancelled before start by … », ou la phrase d'un refus à l'armement, par exemple « expired before the machine armed it »). |
-| `endCode` | Code stable d'un lancement refusé avant que sa machine l'arme (ANH-144) : `expired_before_start`, `right_revoked_before_start`... ([Revérification à l'armement](#revérification-à-larmement-anh-144)). Le site le traduit. Depuis ANH-102, aussi `cancelled_before_start` (annulé sur le site pendant qu'il attendait, `requestStop`) et `refused_by_machine` (fin échouée de la machine dont la raison commence par `refusee par la machine : `) ; le site dit alors `endReason`. Absent sur toute autre séance, et sur ces deux fins écrites avant leurs codes. |
+| `endCode` | Code stable d'un lancement refusé avant que sa machine l'arme (ANH-144) : `expired_before_start`, `right_revoked_before_start`... ([Revérification à l'armement](#revérification-à-larmement-anh-144)). Le site le traduit. Depuis ANH-102, aussi `cancelled_before_start` (annulé sur le site pendant qu'il attendait, `requestStop`) et `refused_by_machine` (fin échouée de la machine, sur une séance encore `pending`, dont la raison commence par `refusee par la machine : `) ; le site dit alors `endReason`, et la page de la séance dit, pour le premier, que le lancement a été annulé depuis le site. Absent sur toute autre séance, et sur ces deux fins écrites avant leurs codes. |
 | `interruptedAt` | Quand la tâche planifiée a marqué la séance `interrupted` (horloge du serveur). Présent exactement tant que la séance l'est. |
 | `ballast` | `{massKg}` : une séance de banc lestée lancée du site (ANH-250, `launchBenchSession`), `kind: manual`, `origin: remote`, capsule lestée et aucune personne à bord. `massKg` est la masse déclarée par le lanceur, en kg, ou `null` s'il n'en a pas donné ; jamais mesurée, rien ne décide sur elle. Absent sur toute autre séance. Une telle séance ne prend jamais de retour du passager (`personOnBoard` est faux, quelle que soit sa note). |
 
@@ -2659,11 +2659,13 @@ illisibles ne masquent pas les séances lisibles.
 Les séances `pending` sont exclues, ainsi que les séances
 `failed` avec un `endCode` de `ARMING_REFUSAL_CODES` (refus à l'armement,
 expiration comprise), `cancelled_before_start` (annulation par `requestStop`
-avant départ) ou `refused_by_machine` (refus du Pi avant départ, terminé par
-`/training/end`, raison au préfixe `refusee par la machine : ` écrit par
-`raspberry-pi/src/cloud_sync.py`), ou, écrites avant ces deux codes, sans
-`endCode` et dont `endReason` commence par `Cancelled before start by` ou par
-ce préfixe. Le prédicat est un seul, `endedBeforeStart`
+avant départ) ou `refused_by_machine` (refus du Pi d'un lancement encore
+`pending`, terminé par `/training/end`, raison au préfixe
+`refusee par la machine : ` écrit par `raspberry-pi/src/cloud_sync.py`), ou,
+sans `endCode`, dont `endReason` commence par `Cancelled before start by` ou
+par ce préfixe : les lignes écrites avant ces deux codes, et un refus du Pi
+arrivé sur une séance que le serveur tenait déjà démarrée (2xx du départ
+perdu). Le prédicat est un seul, `endedBeforeStart`
 (`convex/sessionReports.ts`), que les rapports lisent aussi.
 Seules les fins avant départ connues sont exclues ; toute autre fin compte,
 l'alerte penchant vers le signalement (fail closed). Une séance armée reste
@@ -3225,10 +3227,12 @@ caractère non ASCII, tiennent sous 2,5 Mio ; 600 points aux nombres les plus
 longs sous 300 Kio ; le plus grand heartbeat de la console (128 codes de
 défaut du variateur) fait environ 8 Kio. Les programmes d'une console
 viennent d'un catalogue signé de 500 000 octets au plus, où chacun prend au
-moins 350 octets (ses 19 clés seules en prennent 322) : 1 430 programmes au
+moins 341 octets (ses 19 clés seules en prennent 322) : 1 470 programmes au
 plus, dont les mots, même écrits `\uXXXX`, et le rapport de 200 entrées
-tiennent sous 4 Mio. Ces deux bornes (ANH-228) gardent le contrat inchangé :
-ni champ ni code nouveau. Les autres routes `POST` n'ont pas
+tiennent sous 4 Mio ; les tests du Pi l'épinglent
+(`test_cloud_rate_limit.py`). Ces deux bornes (ANH-228), `max_body_bytes` et
+`max_programmes` du contrat partagé, n'ajoutent ni champ ni code sur le fil :
+la version du contrat ne change pas. Les autres routes `POST` n'ont pas
 de taille propre ; seule la limite de Convex sur le corps d'une action HTTP
 les borne (20 Mio selon sa documentation publique, non vérifiée ici).
 
@@ -3601,12 +3605,15 @@ Ce n'est donc pas le critère de la machine hors ligne : une machine qui
 répond mais ne nomme plus la séance (console redémarrée sur un enregistrement
 illisible) la voit marquée aussi, et une machine muette 2 min ne fait rien
 marquer. Les séances de l'ancien mode (sans `kind`) ne sont pas touchées.
-Une passe que la tâche lance pendant qu'une page de la précédente attend
-encore ou s'exécute ne fait rien (`{marked: 0, done: false}`) : celle-là lit
-toutes les pages. Elle le voit dans la table du planificateur
-(`_scheduled_functions`), sur les 5 dernières minutes seulement
-(`INTERRUPT_RUN_LOOKBACK_MS`) ; une page restée en attente plus longtemps
-n'empêche pas la passe suivante.
+Une passe à la fois. Sa première page écrit un marqueur, une ligne de
+`job_runs` (`name: "interrupt"`, le début de la passe comme identité), chaque
+page le renouvelle et la dernière le retire ; chacune le lit par son index,
+une seule ligne. La tâche ne lance rien tant qu'un marqueur renouvelé il y a
+moins de 5 min (`INTERRUPT_RUN_STALE_MS`) tient (`{marked: 0, done: false}`) :
+cette passe-là lit toutes les pages. Un marqueur plus ancien (une page qui a
+échoué, une page perdue) est repris par la passe suivante, qui repart de la
+première page ; une page de la passe reprise, si elle arrive encore, ne lit
+rien et ne touche pas au nouveau marqueur.
 
 C'est une tâche à part, bornée. Une transaction lit au plus
 `INTERRUPT_BATCH` (50) séances actives, une page de l'index

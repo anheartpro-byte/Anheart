@@ -603,6 +603,7 @@ describe("ANH-147 machine registry", () => {
     "cancelled",
     "expired",
     "pi_refused",
+    "pi_refused_after_start",
     "active",
     "completed",
     "failed",
@@ -647,6 +648,27 @@ describe("ANH-147 machine registry", () => {
           endReason: "refusee par la machine : TEST",
           endCode: "refused_by_machine",
         });
+      } else if (state === "pi_refused_after_start") {
+        // The 2xx of its start lost: the server holds it started, the machine
+        // refuses it. No code (it was not waiting), known by its reason alone.
+        expect(
+          await w.t.mutation(internal.training.markTrainingStarted, {
+            machineId: w.machine,
+            sessionId,
+          }),
+        ).toEqual({ armed: true });
+        await w.t.mutation(internal.training.endTrainingSession, {
+          machineId: w.machine,
+          sessionId,
+          failed: true,
+          reason: "refusee par la machine : TEST",
+        });
+        const refused = await w.t.run((ctx) => ctx.db.get(sessionId));
+        expect(refused).toMatchObject({
+          status: "failed",
+          endReason: "refusee par la machine : TEST",
+        });
+        expect(refused?.endCode).toBeUndefined();
       } else if (state === "expired") {
         vi.setSystemTime(NOW + pendingSessionTtlMs() + 1);
         expect(

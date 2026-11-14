@@ -42,6 +42,7 @@ from src.cloud_sync import (
     Refused,
     Unreachable,
     answer_of,
+    profile_row,
     retry_after_of,
 )
 from src.contract import (
@@ -54,6 +55,12 @@ from src.contract import (
 from src.health import HealthContext, HealthWatch
 from src.link_state import MAX_DETAIL, UNREACHABLE_AFTER, LinkState
 from src.local_panel import CLOUD_PERIOD, build_panel
+from src.programme_catalog import (
+    MAX_ID_CHARS,
+    MAX_PAYLOAD_BYTES,
+    MAX_REASON_CHARS,
+    MAX_REPORT_ENTRIES,
+)
 from src.record.deposit import FILES_PER_STEP
 from src.record.upload import MAX_EVENTS, MAX_POINTS, read_events
 from src.record_uplink import (
@@ -66,7 +73,7 @@ from src.record_uplink import (
     Refusal,
 )
 from src.result import Err, Ok, Result
-from src.training.plan import JsonValue
+from src.training.plan import JsonValue, profile_to_document
 from src.training.types import TelemetrySnapshot
 from src.units import Monotonic, Seconds, UnixMillis
 from tests.record_uplink_support import armed, bench, recording
@@ -538,6 +545,43 @@ def test_the_largest_batch_of_events_the_console_reads_fits_the_route(tmp_path: 
     assert len(events) == MAX_EVENTS
     body: Mapping[str, JsonValue] = {"sessionId": "s" * 32, "events": list(events)}
     assert wire_bytes(body) <= sizes()[f"POST {EVENTS}"]
+
+
+def test_the_largest_programme_list_the_console_sends_fits_the_route(tmp_path: Path) -> None:
+    """ANH-228: as many programmes as a signed catalogue can hold, every character of it
+    written ``\\uXXXX`` (6 bytes), and the longest report the console makes beside them.
+
+    A programme of the catalogue is a profile document (``profile_to_document``)
+    and its medical version, in compact JSON: at its smallest, every key with a
+    one-character value, it bounds how many fit in ``MAX_PAYLOAD_BYTES``. A
+    character not ASCII takes 2 bytes of that text or more, and 6 on the wire.
+    """
+    panel = build_panel(config_of(), clock=clock(), profiles_path=tmp_path / "p.json")
+    store = panel.services.store
+    shipped = store.list_profiles()[0]
+    keys = [*profile_to_document(shipped), "medical_parameters_version"]
+    smallest = len(json.dumps(dict.fromkeys(keys, 0), separators=(",", ":"))) + 1
+    most = MAX_PAYLOAD_BYTES // smallest + len(store.list_profiles())
+    limits = cast("Mapping[str, object]", shared()["max_body_bytes"])
+    assert most <= cast("int", limits["max_programmes"])
+
+    row = dict(profile_row(shipped))
+    rows: list[JsonValue] = [{**row, "profileId": "", "name": ""} for _ in range(most)]
+    rows[0] = {**row, "profileId": "", "name": "é" * (MAX_PAYLOAD_BYTES // 2)}
+    rejected: list[JsonValue] = [
+        {"profileId": "é" * MAX_ID_CHARS, "reason": "é" * MAX_REASON_CHARS}
+        for _ in range(MAX_REPORT_ENTRIES)
+    ]
+    body: Mapping[str, JsonValue] = {
+        "storeRev": 9_007_199_254_740_991,
+        "programsEnabled": True,
+        "profiles": rows,
+        "catalogRevision": 9_007_199_254_740_991,
+        "accepted": [],
+        "rejected": rejected,
+        "profilesDigest": "f" * 64,
+    }
+    assert wire_bytes(body) <= sizes()[f"POST {PROFILES}"]
 
 
 def test_the_largest_batch_of_points_fits_the_route() -> None:

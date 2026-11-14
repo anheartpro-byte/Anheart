@@ -705,8 +705,8 @@ export default defineSchema({
     // site words it from this code; `endReason` says it in English. Or, for
     // a session that ended before its start otherwise (ANH-102),
     // `cancelled_before_start` (cancelled from the site while it waited) or
-    // `refused_by_machine` (its machine refused it before arming), which the
-    // site says by `endReason`. Absent on every other session, and on those
+    // `refused_by_machine` (its machine refused it while it still waited),
+    // which the site says by `endReason`. Absent on every other session, and on those
     // two endings written before their codes.
     endCode: v.optional(v.string()),
     // When the server marked the session "interrupted" (server's clock).
@@ -1004,6 +1004,15 @@ export default defineSchema({
   record_upload_sweeps: defineTable({
     name: v.literal("uploads"),
     cutoff: v.number(),
+  }).index("by_name", ["name"]),
+
+  // The run of a paged job under way, one row per job (ANH-231): written by
+  // its first page, renewed by each page, removed by its last. Today only
+  // `training.interruptSilentSessions` (`interrupt`).
+  job_runs: defineTable({
+    name: v.literal("interrupt"),
+    startedAt: v.number(),
+    renewedAt: v.number(),
   }).index("by_name", ["name"]),
 
   machine_heartbeats: defineTable({

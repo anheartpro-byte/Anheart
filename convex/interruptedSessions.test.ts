@@ -46,7 +46,7 @@ import { machineHeaders } from "./machineAuth.fixtures";
 import {
   AUTO_RAMP_MARGIN_MS,
   INTERRUPT_BATCH,
-  INTERRUPT_RUN_LOOKBACK_MS,
+  INTERRUPT_RUN_STALE_MS,
   REPEATED_START_WINDOW_MS,
 } from "./training";
 import {
@@ -637,8 +637,16 @@ async function silentWorld() {
   return { w, sessions };
 }
 
-const interrupt = (w: Pick<LimitedWorld, "t">, cursor: string | null) =>
+const interrupt = (w: Pick<LimitedWorld, "t">, cursor: null) =>
   w.t.mutation(internal.training.interruptSilentSessions, { cursor });
+
+/** The next page of the run under way, as the last page handed it to the scheduler. */
+const interruptNext = async (w: Pick<LimitedWorld, "t">) =>
+  w.t.mutation(internal.training.interruptSilentSessions, await nextPage(w));
+
+/** The marker of the run under way, or null. */
+const runMarker = (w: Pick<LimitedWorld, "t">) =>
+  w.t.run((ctx) => ctx.db.query("job_runs").unique());
 
 /** The pages of the job handed to the scheduler, in the order they were. */
 const scheduledPages = (w: Pick<LimitedWorld, "t">) =>
@@ -648,11 +656,16 @@ const scheduledPages = (w: Pick<LimitedWorld, "t">) =>
     ),
   );
 
-/** The cursor the last page scheduled hands over to the next one. */
-async function nextCursor(w: Pick<LimitedWorld, "t">): Promise<string> {
+/** What the last page scheduled hands over to the next one: its cursor and its run. */
+async function nextPage(
+  w: Pick<LimitedWorld, "t">,
+): Promise<{ cursor: string; run: number }> {
   const pages = await scheduledPages(w);
-  const [args] = pages[pages.length - 1].args as { cursor: string }[];
-  return args.cursor;
+  const [args] = pages[pages.length - 1].args as {
+    cursor: string;
+    run: number;
+  }[];
+  return args;
 }
 
 const rowsOf = (w: Pick<LimitedWorld, "t">, ids: Id<"sessions">[]) =>
@@ -796,7 +809,7 @@ describe("ANH-231 EX-3 the job marks the silent sessions a bounded page per tran
 
     const reports = [await interrupt(w, null)];
     while (!reports[reports.length - 1].done) {
-      reports.push(await interrupt(w, await nextCursor(w)));
+      reports.push(await interruptNext(w));
     }
 
     expect(reports.map((report) => report.marked)).toEqual([
@@ -825,7 +838,7 @@ describe("ANH-231 EX-3 the job marks the silent sessions a bounded page per tran
       }
     });
 
-    expect(await interrupt(w, await nextCursor(w))).toEqual({
+    expect(await interruptNext(w)).toEqual({
       marked: 0,
       done: true,
     });
@@ -863,7 +876,7 @@ describe("ANH-231 EX-3 the job marks the silent sessions a bounded page per tran
     });
     const [registered] = await insertSilentSessions(w, 1);
 
-    expect(await interrupt(w, await nextCursor(w))).toEqual({
+    expect(await interruptNext(w)).toEqual({
       marked: 1,
       done: true,
     });
@@ -886,7 +899,7 @@ describe("ANH-231 EX-3 the job marks the silent sessions a bounded page per tran
     expect(await scheduledPages(w)).toEqual([]);
   });
 
-  it("starts no second run while a page of the one before waits: that one reads every page", async () => {
+  it("starts no second run while a run is under way: that one reads every page, and frees the job at its end", async () => {
     const w = await limitedWorld();
     const sessions = await insertSilentSessions(w, INTERRUPT_BATCH + 3);
     vi.setSystemTime(DUE);
@@ -894,19 +907,81 @@ describe("ANH-231 EX-3 the job marks the silent sessions a bounded page per tran
       marked: INTERRUPT_BATCH,
       done: false,
     });
+    expect(await runMarker(w)).toMatchObject({
+      name: "interrupt",
+      startedAt: DUE,
+      renewedAt: DUE,
+    });
 
-    // The job's next minute comes while that page still waits.
+    // The job's next minute comes while its next page still waits.
     vi.setSystemTime(DUE + 60 * SECOND);
     expect(await interrupt(w, null)).toEqual({ marked: 0, done: false });
     expect(await scheduledPages(w)).toHaveLength(1);
-    // A page left waiting longer than the look back is no run under way.
-    vi.setSystemTime(DUE + INTERRUPT_RUN_LOOKBACK_MS + SECOND);
-    expect(await interrupt(w, null)).toEqual({ marked: 3, done: true });
 
+    // Its last page marks the rest and removes the marker.
     await w.t.finishAllScheduledFunctions(vi.runAllTimers);
     expect(await statusesOf(w, sessions)).toEqual(new Set(["interrupted"]));
-    // Once its pages have run, the job's next run starts from the first page.
+    expect(await runMarker(w)).toBeNull();
+    // The job's next run starts from the first page.
     expect(await interrupt(w, null)).toEqual({ marked: 0, done: true });
+    expect(await runMarker(w)).toBeNull();
+  });
+
+  it("takes over a run whose pages stopped coming, and a page of that run, if one comes, does nothing", async () => {
+    const w = await limitedWorld();
+    const sessions = await insertSilentSessions(w, INTERRUPT_BATCH + 3);
+    vi.setSystemTime(DUE);
+    expect(await interrupt(w, null)).toEqual({
+      marked: INTERRUPT_BATCH,
+      done: false,
+    });
+    const stalled = await nextPage(w);
+
+    // Its next page never ran: the marker holds the job until it is stale.
+    vi.setSystemTime(DUE + INTERRUPT_RUN_STALE_MS - SECOND);
+    expect(await interrupt(w, null)).toEqual({ marked: 0, done: false });
+    vi.setSystemTime(DUE + INTERRUPT_RUN_STALE_MS);
+    expect(await interrupt(w, null)).toEqual({ marked: 3, done: true });
+    expect(await statusesOf(w, sessions)).toEqual(new Set(["interrupted"]));
+    expect(await runMarker(w)).toBeNull();
+
+    // The stalled page comes at last, now and during a later run: it reads nothing.
+    expect(
+      await w.t.mutation(internal.training.interruptSilentSessions, stalled),
+    ).toEqual({ marked: 0, done: true });
+    const later = await insertSilentSessions(w, INTERRUPT_BATCH + 1);
+    vi.setSystemTime(DUE + INTERRUPT_RUN_STALE_MS + SESSION_SILENCE_MS + SECOND);
+    expect(await interrupt(w, null)).toEqual({
+      marked: INTERRUPT_BATCH,
+      done: false,
+    });
+    const current = await runMarker(w);
+    expect(
+      await w.t.mutation(internal.training.interruptSilentSessions, stalled),
+    ).toEqual({ marked: 0, done: true });
+    expect(await runMarker(w)).toEqual(current);
+    await w.t.finishAllScheduledFunctions(vi.runAllTimers);
+    expect(await statusesOf(w, later)).toEqual(new Set(["interrupted"]));
+    expect(await runMarker(w)).toBeNull();
+  });
+
+  it("is held by a marker a failed page left behind only until it is stale", async () => {
+    const w = await limitedWorld();
+    const sessions = await insertSilentSessions(w, 2);
+    vi.setSystemTime(DUE);
+    // A page that failed after its run began: its marker stays, renewed by nobody.
+    await w.t.run((ctx) =>
+      ctx.db.insert("job_runs", {
+        name: "interrupt",
+        startedAt: DUE - 2 * 60 * SECOND,
+        renewedAt: DUE - 60 * SECOND,
+      }),
+    );
+    expect(await interrupt(w, null)).toEqual({ marked: 0, done: false });
+    expect(await statusesOf(w, sessions)).toEqual(new Set(["active"]));
+    vi.setSystemTime(DUE - 60 * SECOND + INTERRUPT_RUN_STALE_MS);
+    expect(await interrupt(w, null)).toEqual({ marked: 2, done: true });
+    expect(await runMarker(w)).toBeNull();
   });
 });
 

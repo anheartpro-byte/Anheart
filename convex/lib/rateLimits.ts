@@ -99,6 +99,9 @@ export const MAX_TELEMETRY_BYTES = sizeOf(
 );
 export const MAX_EVENTS_BYTES = sizeOf("POST /api/machine/training/events");
 export const MAX_PROFILES_BYTES = sizeOf("POST /api/machine/profiles");
+/** Programmes in one list of `POST /api/machine/profiles` (ANH-228), as the contract says. */
+export const MAX_PROFILES_PER_PUSH: number =
+  machineApi.max_body_bytes.max_programmes;
 
 /** Milliseconds to wait, as a whole number never below zero. */
 function waitOf(retryAfter: number): number {

@@ -710,10 +710,11 @@ export const EXPIRED_REASON = "expired before the machine armed it";
 /**
  * The `endCode` of a session that ended before its start and is no arming
  * refusal (ANH-102): cancelled from the site while it waited
- * (`requestStop`), or refused by its machine, whose reason starts with
- * {@link MACHINE_REFUSAL_PREFIX} (`endTrainingSession`). Never answered to a
- * machine; the site says their `endReason`. Rows written before them carry
- * none, and are known by that reason alone (`endedBeforeStart`).
+ * (`requestStop`), or refused by its machine while it still waited, whose
+ * reason starts with {@link MACHINE_REFUSAL_PREFIX} (`endTrainingSession`).
+ * Never answered to a machine. Rows written before them carry none, and are
+ * known by that reason alone (`endedBeforeStart`), as is a refusal that
+ * reached a session the server already held started.
  */
 export const CANCELLED_BEFORE_START = "cancelled_before_start";
 export const REFUSED_BY_MACHINE = "refused_by_machine";
@@ -2352,8 +2353,12 @@ export const endTrainingSession = internalMutation({
       endedAt = Math.max(s.startedAt, args.endedAt + axis.shift);
     }
     const status = args.failed ? "failed" : "completed";
+    // Only a launch still waiting: a session the server holds started is no
+    // end before its start for the server, whatever its machine says of it.
     const refused =
-      args.failed && args.reason.startsWith(MACHINE_REFUSAL_PREFIX);
+      s.status === "pending" &&
+      args.failed &&
+      args.reason.startsWith(MACHINE_REFUSAL_PREFIX);
     await ctx.db.patch(args.sessionId, {
       status,
       endedAt,
@@ -2640,31 +2645,22 @@ async function heardOfSince(
 export const INTERRUPT_BATCH = 50;
 
 /**
- * How far back a run of `interruptSilentSessions` started by its job looks
- * for a page of an earlier run still waiting (ANH-231): each page hands the
- * next to the scheduler at once, so a run under way has one created moments
- * ago. Reads the scheduler's own table over that span only.
+ * How long the marker of a run of `interruptSilentSessions` holds the job
+ * after its last page (ANH-231): a run whose pages stopped coming (a page
+ * that failed, a scheduler that lost it) never holds it for good. A healthy
+ * page follows the one before at once, so five minutes is far beyond one.
  */
-export const INTERRUPT_RUN_LOOKBACK_MS = 5 * 60_000;
+export const INTERRUPT_RUN_STALE_MS = 5 * 60_000;
 
-/** Whether a page of an earlier run of `interruptSilentSessions` waits or runs. */
-async function interruptRunUnderWay(
-  ctx: MutationCtx,
-  now: number,
-): Promise<boolean> {
-  const recent = ctx.db.system
-    .query("_scheduled_functions")
-    .withIndex("by_creation_time", (q) =>
-      q.gt("_creationTime", now - INTERRUPT_RUN_LOOKBACK_MS),
-    );
-  for await (const job of recent) {
-    if (
-      job.name.includes("interruptSilentSessions") &&
-      (job.state.kind === "pending" || job.state.kind === "inProgress")
-    )
-      return true;
-  }
-  return false;
+/** The marker of the run under way: one row, read and written by its name. */
+const INTERRUPT_RUN = "interrupt" as const;
+
+/** The marker of the run under way, or null: one indexed point lookup. */
+function interruptRun(ctx: MutationCtx) {
+  return ctx.db
+    .query("job_runs")
+    .withIndex("by_name", (q) => q.eq("name", INTERRUPT_RUN))
+    .unique();
 }
 
 /**
@@ -2677,10 +2673,14 @@ async function interruptRunUnderWay(
  * marks, and schedules the next page at once. Its own job, apart from
  * `machines.checkOfflineMachines`: however many sessions are silent, its cost
  * or its failure never keeps a machine from being marked offline. Returns how
- * many sessions this page marked, and whether it was the last page. A run
- * the job starts while a page of the one before still waits does nothing
- * (`interruptRunUnderWay`): that one reads every page; two at once would only
- * read the same sessions twice.
+ * many sessions this page marked, and whether it was the last page.
+ *
+ * One run at a time (ANH-231). Its first page writes a marker (`job_runs`,
+ * the run's start as its identity), every page renews it, and the last page
+ * removes it. The job starts nothing while a marker renewed less than
+ * `INTERRUPT_RUN_STALE_MS` ago stands (`{marked: 0, done: false}`): that run
+ * reads every page. An older marker is taken over, and a page of the run it
+ * named, if one still comes, stops at once without touching the new one.
  *
  * Never `completed` nor `failed`: its end is unknown, and it may still be
  * running on a machine that cannot reach the server. Nothing is asked of the
@@ -2691,12 +2691,34 @@ async function interruptRunUnderWay(
  * left as they are.
  */
 export const interruptSilentSessions = internalMutation({
-  args: { cursor: v.union(v.string(), v.null()) },
+  args: {
+    cursor: v.union(v.string(), v.null()),
+    // The run a page belongs to (its start); absent from the job's call.
+    run: v.optional(v.number()),
+  },
   returns: v.object({ marked: v.number(), done: v.boolean() }),
   handler: async (ctx, args) => {
     const now = Date.now();
-    if (args.cursor === null && (await interruptRunUnderWay(ctx, now)))
-      return { marked: 0, done: false };
+    const marker = await interruptRun(ctx);
+    let run: number;
+    if (args.cursor === null) {
+      if (marker !== null && now - marker.renewedAt < INTERRUPT_RUN_STALE_MS)
+        return { marked: 0, done: false };
+      run = now;
+      if (marker === null)
+        await ctx.db.insert("job_runs", {
+          name: INTERRUPT_RUN,
+          startedAt: run,
+          renewedAt: now,
+        });
+      else await ctx.db.patch(marker._id, { startedAt: run, renewedAt: now });
+    } else {
+      // A page of a run taken over, or already ended: the run under way reads it.
+      if (marker === null || marker.startedAt !== args.run)
+        return { marked: 0, done: true };
+      run = marker.startedAt;
+      await ctx.db.patch(marker._id, { renewedAt: now });
+    }
     const since = now - SESSION_SILENCE_MS;
     const page = await ctx.db
       .query("sessions")
@@ -2716,8 +2738,11 @@ export const interruptSilentSessions = internalMutation({
       await ctx.scheduler.runAfter(
         0,
         internal.training.interruptSilentSessions,
-        { cursor: page.continueCursor },
+        { cursor: page.continueCursor, run },
       );
+    } else {
+      const ended = await interruptRun(ctx);
+      if (ended !== null) await ctx.db.delete(ended._id);
     }
     return { marked, done: page.isDone };
   },

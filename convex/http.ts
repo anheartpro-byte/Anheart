@@ -25,6 +25,7 @@ import {
   MAX_EVENTS_BYTES,
   MAX_HEARTBEAT_BYTES,
   MAX_PROFILES_BYTES,
+  MAX_PROFILES_PER_PUSH,
   MAX_TELEMETRY_BYTES,
   payloadTooLarge,
   type MachineLimit,
@@ -394,18 +395,14 @@ http.route({
 });
 
 /**
- * Programmes accepted in one list of `POST /api/machine/profiles` (ANH-228):
- * a catalogue of `max_payload_bytes` holds 1,430 at most, each taking 350
- * bytes of it or more (its 19 keys alone take 322), and a list is two writes
- * a programme in one mutation.
- */
-const MAX_PROFILES_PER_PUSH = 2000;
-
-/**
  * POST /api/machine/profiles {storeRev, programsEnabled, profiles[]}
  * One every 10 s per machine, five in reserve (ANH-228). At most
- * `max_body_bytes` of body and `MAX_PROFILES_PER_PUSH` programmes, both
- * refused (413) before a programme is read.
+ * `max_body_bytes` of body and `max_programmes` programmes
+ * (`MAX_PROFILES_PER_PUSH`), both refused (413) before a programme is read: a
+ * catalogue of `max_payload_bytes` holds fewer than 1,470, each taking more
+ * than 340 bytes of it (its 19 keys alone take 322), and a list is two
+ * writes a programme in one mutation. The Pi's tests pin its largest list
+ * under both (test_cloud_rate_limit.py).
  * Contract 1.11 (ANH-138): and `{catalogRevision, accepted, rejected}`, what
  * the machine made of the signed catalogue; absent from an older console,
  * whose machine then has no catalogue state any more.

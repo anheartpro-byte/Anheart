@@ -1048,7 +1048,8 @@
     "legacyTitle": "Ancien enregistrement ECG",
     "legacyDescription": "Cette séance vient de l'ancien mode d'enregistrement ECG, retiré du logiciel. Elle est conservée en lecture seule.",
     "dataBatches": "Lots de données",
-    "failedBeforeStartDescription": "Ce lancement a été refusé avant que le serveur n'en confirme le départ à la machine."
+    "failedBeforeStartDescription": "Ce lancement a été refusé avant que le serveur n'en confirme le départ à la machine.",
+    "cancelledBeforeStartDescription": "Ce lancement a été annulé depuis le site avant que sa machine ne le démarre."
   },
   "sessionLive": {
     "viewDetails": "Voir le détail de la session",

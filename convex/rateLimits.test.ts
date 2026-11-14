@@ -29,6 +29,7 @@ import {
   MAX_EVENTS_BYTES,
   MAX_HEARTBEAT_BYTES,
   MAX_PROFILES_BYTES,
+  MAX_PROFILES_PER_PUSH,
   MAX_TELEMETRY_BYTES,
   rateLimiter,
 } from "./lib/rateLimits";
@@ -50,7 +51,7 @@ const shared = JSON.parse(sharedText) as {
       { rate: number; period_ms: number; capacity: number }
     >;
   };
-  max_body_bytes: { routes: Record<string, number> };
+  max_body_bytes: { routes: Record<string, number>; max_programmes: number };
   error_codes: Record<string, { statuses: number[] }>;
 };
 
@@ -496,6 +497,8 @@ describe("ANH-166 EX-2 the largest body of a machine route", () => {
   });
 
   it("refuses 2001 programmes before reading one, and takes 2000", async () => {
+    expect(MAX_PROFILES_PER_PUSH).toBe(shared.max_body_bytes.max_programmes);
+    expect(MAX_PROFILES_PER_PUSH).toBe(2000);
     const w = await seedMachineWorld(modules);
     const before = await machineProfiles(w);
     const list = Array.from({ length: 2000 }, (_, rank) => programme(rank));
