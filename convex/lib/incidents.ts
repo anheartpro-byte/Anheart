@@ -35,6 +35,7 @@
 import machineApi from "../../contracts/machine-api.json";
 import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
+import { incidentSummary, writeLogbook } from "./logbook";
 import { personOnBoard } from "./machineRegistry";
 import {
   driveFaultAlerts,
@@ -226,6 +227,18 @@ async function join(
       sessionId: session._id,
     });
   }
+  if (reopened) {
+    const named = precise ? observation : incident;
+    await writeLogbook(
+      ctx,
+      { _id: session.machineId, organizationId: session.organizationId },
+      {
+        kind: "incident",
+        summary: incidentSummary(named, "rouvert", severity),
+        refs: { incidentId: incident._id },
+      },
+    );
+  }
   return incident._id;
 }
 
@@ -269,6 +282,15 @@ export async function openIncident(
       sessionId: session._id,
     });
   }
+  await writeLogbook(
+    ctx,
+    { _id: session.machineId, organizationId: session.organizationId },
+    {
+      kind: "incident",
+      summary: incidentSummary(observation, "ouvert", severity),
+      refs: { incidentId },
+    },
+  );
   return incidentId;
 }
 

@@ -295,9 +295,19 @@ export const DASHBOARD_ERRORS = {
   // The incident register (convex/incidents.ts, ANH-145).
   incident_open:
     "A high-severity incident of the machine is open or analysed: no programmed session is launched or armed there until an Anheart admin closes it. Thrown by `launchAutoSession`; also an arming refusal (contract 1.10).",
+  drive_intervention_required:
+    "A drive fault the console does not reset (`manual_reset_only` in contracts/drive-faults.json) closes the machine's programmed sessions until its incident is closed and an `intervention` logbook entry names it (ANH-149). Thrown by `launchAutoSession`. A bench session stays possible.",
   incident_not_found:
     "The incident does not exist, or concerns a machine the caller does not reach.",
   incident_closed: "The incident is closed: it is no longer analysed.",
+  invalid_logbook_entry:
+    "A logbook entry's line is under 3 or over 200 characters, its details over 2000, its date in the future, or it names an incident without being an intervention.",
+  invalid_logbook_file:
+    "The attachment is not a PDF, JPEG or PNG of at most 10 MiB uploaded within the hour, or it is already attached to an entry.",
+  logbook_kind_not_allowed:
+    "The caller may not write this kind of entry: an Anheart admin writes interventions, calibrations, parts replaced and notes, an org_admin of the machine's organisation notes only; the server writes the others.",
+  logbook_incident_mismatch:
+    "The incident named by an intervention does not exist, or is not one of this machine.",
   incident_text_required:
     "Analysing or closing an incident requires its cause and its action, each of 1 to INCIDENT_TEXT_MAX (2000) characters.",
 } as const satisfies Record<string, string>;

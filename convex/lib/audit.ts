@@ -120,6 +120,7 @@ export const AUDIT_ACTIONS = [
   "machine_config.rejected", // Admin rejects or replaces a revision; target: revision.
   "machine_config.applied", // Machine says it applied a revision; target: revision.
   "machine_config.refused", // Machine refuses a revision, without its reason; target: revision.
+  "logbook.entry_added", // Admin or org_admin writes a logbook entry by hand, its kind only; target: machine.
 ] as const;
 export type AuditAction = (typeof AUDIT_ACTIONS)[number];
 export const auditActionValidator = v.union(
@@ -191,6 +192,7 @@ export const AUDIT_ACTION_TARGET: Record<AuditAction, AuditTargetType> = {
   "machine_config.rejected": "machine_config",
   "machine_config.applied": "machine_config",
   "machine_config.refused": "machine_config",
+  "logbook.entry_added": "machine",
 };
 
 const detailRoleValidator = v.union(
@@ -265,6 +267,7 @@ export const SENSITIVE_MUTATIONS: Readonly<
   "fitness.validateFitnessAssessment": ["fitness.validated"],
   "incidents.analyze": ["incident.analyzed"],
   "incidents.close": ["incident.closed"],
+  "machineLogbook.addEntry": ["logbook.entry_added"],
   "fitness.signConsent": ["consent.signed"],
   "fitness.withdrawConsent": ["consent.withdrawn"],
   "machineKeys.createMachineKey": [
@@ -354,6 +357,8 @@ export const NON_SENSITIVE_MUTATIONS: Readonly<Record<string, string>> = {
     "Cron removes expired heartbeat and machine health history samples.",
   "machineKeys.recordKeyUse":
     "Machine HTTP authentication refreshes the key-use timestamp, without a rights change.",
+  "machineLogbook.generateUploadUrl":
+    "Admin or org_admin prepares an upload URL; the entry that attaches it is audited.",
   "machineRegistry.generateUploadUrl":
     "Anheart admin prepares an upload URL; registry and programme report attachments are audited separately.",
   "machines.updateMachine":

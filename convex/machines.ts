@@ -24,6 +24,7 @@ import {
   sameOrganization,
 } from "./lib/auth";
 import { refusal } from "./lib/errors";
+import { writeLogbook } from "./lib/logbook";
 import { insertMachineKey } from "./lib/machineKeys";
 import { authenticateMachine, authenticatedMachine } from "./lib/machineAuth";
 import { scheduleAlert } from "./lib/notifications";
@@ -768,6 +769,21 @@ export const recordHeartbeat = internalMutation({
             lastVersionSeenAt: now,
           }),
     });
+
+    // ANH-149: a software version the console says changed is a logbook entry.
+    if (
+      args.contractVersion !== undefined &&
+      args.softwareVersion !== undefined &&
+      machine.softwareVersion !== undefined &&
+      args.softwareVersion !== machine.softwareVersion
+    ) {
+      await writeLogbook(ctx, machine, {
+        kind: "software_update",
+        summary: `logiciel ${machine.softwareVersion} -> ${args.softwareVersion}`,
+        at: now,
+        refs: { softwareVersion: args.softwareVersion },
+      });
+    }
 
     // Record heartbeat history
     const sessionId = args.activeSessionId

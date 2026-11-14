@@ -180,6 +180,18 @@ export const incidentKindValidator = v.union(
   v.literal("record_rejected"),
   v.literal("manual"),
 );
+/** What a machine logbook entry records (ANH-149, convex/lib/logbook.ts). */
+export const logbookKindValidator = v.union(
+  v.literal("intervention"),
+  v.literal("calibration"),
+  v.literal("part_replaced"),
+  v.literal("drive_parameter_change"),
+  v.literal("software_update"),
+  v.literal("config_change"),
+  v.literal("incident"),
+  v.literal("validation_review"),
+  v.literal("note"),
+);
 export const incidentSeverityValidator = v.union(
   v.literal("low"),
   v.literal("medium"),
@@ -952,8 +964,37 @@ export default defineSchema({
     ])
     // A machine's incidents, most recently opened last (a gestionnaire's list).
     .index("by_machine", ["machineId"])
+    // Its drive faults, for the logbook's intervention rule (ANH-149).
+    .index("by_machine_and_kind", ["machineId", "kind"])
     .index("by_organization", ["organizationId"])
     .index("by_session", ["sessionId", "rule", "t"]),
+
+  // The machine logbook (ANH-149): one chronological line per machine, written
+  // by the mutations that change it (convex/lib/logbook.ts) and by hand by an
+  // admin (`machineLogbook.addEntry`). Never edited, never deleted. Identifiers
+  // only: who wrote it is a user id, and no entry names a person.
+  machine_logbook: defineTable({
+    machineId: v.id("machines"),
+    organizationId, // The machine's organisation when the entry was written
+    at: v.number(), // When it happened, the server's clock unless the admin dates it
+    kind: logbookKindValidator,
+    summary: v.string(), // One line, at most 200 characters
+    details: v.optional(v.string()), // At most 2000 characters
+    by: v.optional(v.id("users")), // Who wrote it; absent: written by the server
+    refs: v.object({
+      incidentId: v.optional(v.id("incidents")),
+      configRevision: v.optional(v.number()),
+      softwareVersion: v.optional(v.string()),
+      storageId: v.optional(v.id("_storage")),
+    }),
+  })
+    // A machine's line of time, oldest first.
+    .index("by_machine_and_at", ["machineId", "at"])
+    // The interventions written for an incident (the drive fault rule).
+    .index("by_incident_and_kind", ["refs.incidentId", "kind"])
+    // An attachment is attached once.
+    .index("by_storage", ["refs.storageId"])
+    .index("by_organization", ["organizationId"]),
 
   machine_health_history: defineTable({
     machineId: v.id("machines"),
