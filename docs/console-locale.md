@@ -315,6 +315,9 @@ Ces règles ne sont pas cosmétiques. Elles sont écrites en tête de `app.js`.
      pastille `good` ou `a l'arret` ne reste pas verte à côté d'un nombre barré ;
    - la pastille **Liaison** passe à `donnees figees` ou `hors ligne`.
 
+   Une liaison rouverte n'est « en direct » qu'à sa première image : la dernière image
+   de la liaison d'avant ne compte plus, et `N s` compte depuis elle.
+
    La même règle vaut pour les deux autres sources. Sans réponse de `/api/panel`
    depuis 3,5 s, les pastilles **Console**, **Serveur**, **Service** et BITalino
    (`acquisition`) sont barrées, comme celle de la barre mobile (`serveur …`) ;
@@ -1941,7 +1944,7 @@ Résultats possibles (vérifiés en simulation) :
 - `acquitte par doc : operator_estop` ;
 - `the emergency stop is still latched: confirm the mushroom has been pulled back out (estop_released) before acknowledging` (case non cochée après un E-STOP) ;
 - `nothing is latched to acknowledge` ;
-- un verdict `GO_SILENT` ne s'acquitte pas : `… demanded GO_SILENT, which is one-way: this process will not command motion again, and recovery is an operator action on a machine that has demonstrably stopped`. Il faut redémarrer la console.
+- un verdict `GO_SILENT` ne s'acquitte pas : `… demanded GO_SILENT, which is one-way: this process will not command motion again, and recovery is an operator action on a machine that has demonstrably stopped`. Il faut redémarrer la console. Ce refus vient avant celui de la chaîne STO : une liaison perdue avec le variateur fait lire la chaîne `inconnue` sur ses entrées, et la rétablir ne lèverait rien.
 
 Un refus s'affiche sous le bouton et dans une boîte d'alerte `acquittement refuse : …`.
 

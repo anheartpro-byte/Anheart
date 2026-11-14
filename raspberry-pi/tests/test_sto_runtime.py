@@ -39,7 +39,7 @@ from src.training.runtime import (
     Subject,
     TrainingRuntime,
 )
-from src.training.safety import SafetyLimits, Unattributed
+from src.training.safety import GoSilentIsTerminal, SafetyLimits, Unattributed
 from src.training.types import Occupancy, Phase, SafetyAction
 from src.units import Bpm, Monotonic, MotorRpm, OutputRpm, RawRegister, RegisterAddress, Seconds
 from tests import test_cloud_sync as dashboard_tests
@@ -49,7 +49,7 @@ from tests.test_failure_rig import PROGRAMME_ENV, attest, make_rig, start_manual
 from tests.test_runtime import GEOMETRY, LIMITS, OPERATOR, FakeDrive, Rig
 from tests.test_runtime import sto_rig as _rig
 from tests.test_sto import RegisterPort
-from tests.test_web_api import shown_digest
+from tests.test_web_api import make_observation, shown_digest
 
 
 @dataclass(slots=True)
@@ -449,6 +449,27 @@ async def test_any_acknowledgement_requires_ready_even_for_another_latch(state: 
     assert isinstance(rig.runtime.acknowledge(OPERATOR, estop_released=True), Ok)
     assert rig.standing() is None
     assert rig.drive.trace == before
+
+
+@pytest.mark.parametrize("state", [StoState.READY, StoState.UNKNOWN, StoState.OPEN])
+async def test_the_supervisor_s_go_silent_is_named_before_the_chain_whatever_it_reads(
+    state: StoState,
+) -> None:
+    """A lost drive link latches the supervisor's GO_SILENT, and a chain read on the drive's
+    inputs then reads unknown. Acknowledging names GO_SILENT, which nothing clears: never
+    the chain, which the operator would restore for nothing (R2 of ANH-92)."""
+    source = MemorySto(reading(StoState.READY))
+    rig = _rig(sto=source)
+    supervisor = rig.runtime.supervisor
+    supervisor.trip_from_thread("drive_comm", SafetyAction.GO_SILENT, "link gone")
+    supervisor.evaluate(make_observation())
+    floor = supervisor.floor
+    assert floor is not None
+    assert floor.action is SafetyAction.GO_SILENT
+    source.reading = reading(state)
+    refused = rig.runtime.acknowledge(OPERATOR, estop_released=True)
+    assert refused == Err(GoSilentIsTerminal("drive_comm"))
+    assert supervisor.floor is floor, "nothing cleared"
 
 
 @pytest.mark.parametrize("unknown", [False, True])

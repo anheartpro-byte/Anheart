@@ -2670,10 +2670,11 @@ def build_panel(  # noqa: PLR0915  # one statement per wired part
         limit_radius=config.leg_tip_radius,
         arming_gate=storage,
         preflight=None if monitor is None else monitor.refusal,
-        # Every other source attests the wired mushroom, ANH-92's statement.
+        # The bench statement under the declared bridge, read on the source by the same
+        # test the page's routes make; every other source attests the wired mushroom.
         attestation=(
             BENCH_BRIDGED_ATTESTATION
-            if config.sto_source is StoSourceKind.BRIDGED_DECLARED
+            if sto_bridged(sto.latest(clock.monotonic()))
             else ESTOP_ATTESTATION
         ),
     )

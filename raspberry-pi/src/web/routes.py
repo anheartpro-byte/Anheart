@@ -81,7 +81,7 @@ from src.control_surface import (
 )
 from src.geometry import MachineGeometry
 from src.motor.drive import DriveState, FaultReport
-from src.motor.sto import BridgedDeclaredStoSource, StoState, UnconfiguredStoSource, sto_bridged
+from src.motor.sto import StoState, UnconfiguredStoSource, sto_bridged
 from src.passenger_feedback import FeedbackView, PassengerFeedback, parse_feedback
 from src.record.export import BUSY, TIMEOUT, UNKNOWN_RECORD, discard
 from src.record.schema import RecordError
@@ -731,7 +731,7 @@ def _register_reads(
         pending = surface.pending
         drive_state, drive_fault = _drive_seen(surface.latest, now)
         latest = surface.latest
-        bench = _bench_declared(services)
+        bench = _sto_bridged(services)
         if latest is not None:
             sto = latest.sto
         elif services.sto is None:
@@ -1300,7 +1300,7 @@ def _register_safety(
         false attestation can be recorded (``attestation_fields`` in
         ``/api/status`` names the confirmations of the console's mode).
         """
-        if _bench_declared(services):
+        if _sto_bridged(services):
             if body.sto_jumper_removed or body.mushroom_wired_nc or not body.bench_bridged_declared:
                 raise HTTPException(
                     status_code=HTTPStatus.BAD_REQUEST,
@@ -1671,19 +1671,14 @@ def _require_nothing_latched(services: Services, occupancy: Occupancy) -> None:
 
 
 def _sto_bridged(services: Services) -> bool:
-    """Whether this console's STO source is the declared bridge, by the arming rule's own test."""
+    """Whether this console's STO source is the declared bridge, by the arming rule's own test.
+
+    Also whether this console attests the bench bridge: the supervisor's statement
+    is chosen by the same test on the same source (:func:`~src.local_panel.build_panel`),
+    never by its text (ANH-92).
+    """
     sto = services.sto
     return sto is not None and sto_bridged(sto.latest(services.clock.monotonic()))
-
-
-def _bench_declared(services: Services) -> bool:
-    """Whether this console attests the declared bench bridge: its STO source says its mode.
-
-    The source's own type, as :func:`~src.local_panel.build_sto` makes it from
-    ``STO_SOURCE``, the value the supervisor's statement comes from too: never
-    that statement's text (ANH-92).
-    """
-    return isinstance(services.sto, BridgedDeclaredStoSource)
 
 
 def _require_occupancy(value: str) -> Occupancy:

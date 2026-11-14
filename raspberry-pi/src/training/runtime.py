@@ -3548,7 +3548,8 @@ class TrainingRuntime:
         session object can be created, and nothing here restarts the session it
         cleared. ``GO_SILENT`` cannot be cleared at all, here or in the
         supervisor: recovery from silence is an operator action on a machine that
-        has demonstrably stopped.
+        has demonstrably stopped. Either one's GO_SILENT is said before anything
+        but the operator's name is checked, the chain included.
 
         ``estop_released`` is the operator stating that the latching mushroom has
         been pulled back out. Software cannot see that contact, so the default is
@@ -3572,6 +3573,11 @@ class TrainingRuntime:
         mine = self._latched
         if mine is not None and mine.action is SafetyAction.GO_SILENT:
             return Err(GoSilentIsTerminal(mine.rule))
+        # The supervisor's own GO_SILENT too, before the chain: a lost link reads the STO
+        # unknown, and naming the chain would send the operator to restore it for nothing.
+        floor = self._supervisor.floor
+        if floor is not None and floor.action is SafetyAction.GO_SILENT:
+            return Err(GoSilentIsTerminal(floor.rule))
         reading = self._sto.latest(self._clock.monotonic())
         if not sto_bridged(reading):
             sto = check_sto_ready(reading) or self._sto_reading_too_old(reading)

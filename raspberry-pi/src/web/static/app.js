@@ -60,6 +60,7 @@ var state = {
   socket: null,
   connected: false,
   lastFrameAt: 0,
+  socketQuiet: false,    // the socket now open has brought no frame yet: nothing of it is live
   snapshot: null,
   zone: null,            // {low, high} from the chosen profile, for the band
   profiles: [],
@@ -488,7 +489,7 @@ function markStale(ids, stale) {
   numbers you must not believe.
 */
 function refreshLiveness() {
-  var fresh = state.connected && performance.now() - state.lastFrameAt < STALE_FRAME_MS;
+  var fresh = framesLive();
   var reworded = false;
   if (!fresh) {
     var detail = el("banner-detail");
@@ -1367,14 +1368,16 @@ function connect() {
   state.socket = socket;
   // A new socket may be another console's: what the frames of this one show is its own.
   state.stream += 1;
+  // Live again from its first frame only: the last one shown came on the socket before.
+  state.socketQuiet = true;
 
   socket.onopen = function () {
     state.connected = true;
-    state.lastFrameAt = performance.now();
     refreshLiveness();
   };
 
   socket.onmessage = function (message) {
+    state.socketQuiet = false;
     state.lastFrameAt = performance.now();
     var envelope;
     try {
@@ -3528,7 +3531,9 @@ function verdictWords(verdict) {
 
 /** Whether frames are arriving: the socket is open and its last message is recent. */
 function framesLive() {
-  return state.connected && performance.now() - state.lastFrameAt < STALE_FRAME_MS;
+  return (
+    state.connected && !state.socketQuiet && performance.now() - state.lastFrameAt < STALE_FRAME_MS
+  );
 }
 
 function liveVerdict() {
