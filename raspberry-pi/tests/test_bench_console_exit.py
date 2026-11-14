@@ -42,14 +42,17 @@ import signal
 import socket
 import subprocess
 import sys
+import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from functools import partial
+from http import HTTPStatus
 from pathlib import Path
 from types import FrameType
 from typing import Final, Literal, assert_never, cast, override
 
+import httpx
 import pytest
 
 import scripts.bench_console as bench
@@ -183,6 +186,57 @@ def _rig(
     worker = bench.BusWorker(_link(), max_rpm=300)
     worker.snap.armed = True
     return _Rig(worker=worker, drive=drive, master=master)
+
+
+async def test_once_the_exit_has_begun_every_motion_route_is_refused_and_the_stop_asked(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ANH-218, in process: an armed console, then the exit. Enable, speed and arming are
+    409 at once, nothing is queued, and the bus thread has been asked for the stop."""
+    rig = _rig(monkeypatch)
+    monkeypatch.setattr(bench, "worker", rig.worker)
+    monkeypatch.setattr(bench, "LEAVING", threading.Event())
+    asked: list[str] = []
+    queued: list[str] = []
+
+    def shutdown(_worker: bench.BusWorker) -> None:
+        asked.append("stop")
+
+    def submit(_worker: bench.BusWorker, command: bench.Command) -> None:
+        queued.append(command.action)
+
+    monkeypatch.setattr(bench.BusWorker, "shutdown", shutdown)
+    monkeypatch.setattr(bench.BusWorker, "submit", submit)
+    page = httpx.AsyncClient(transport=httpx.ASGITransport(app=bench.app), base_url="http://bench")
+    async with page:
+        assert (await page.post("/api/speed", json={"rpm": 30})).status_code == HTTPStatus.OK
+        rig.worker.snap.armed = True
+        bench.disarm_and_stop()  # what the exit signal calls
+        refused = [
+            await page.post("/api/enable"),
+            await page.post("/api/speed", json={"rpm": 60}),
+            await page.post("/api/arm", json={"motor_uncoupled": True}),
+        ]
+        disarmed = await page.post("/api/arm", json={"motor_uncoupled": False})
+    assert [answer.status_code for answer in refused] == [HTTPStatus.CONFLICT] * 3
+    assert all(bench.LEAVING_REFUSAL in answer.text for answer in refused)
+    assert disarmed.status_code == HTTPStatus.OK, "disarming stays possible"
+    assert rig.worker.snap.armed is False
+    assert asked == ["stop"]
+    assert queued == ["speed"], "only the speed asked for before the exit was queued"
+
+
+def test_a_command_still_queued_when_the_stop_is_asked_for_is_never_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The bus thread drains its queue only while no stop is asked for (ANH-218)."""
+    rig = _rig(monkeypatch)
+    rig.worker.submit(bench.Command("speed", 60))
+    rig.worker.shutdown()
+    # This stand-in has no speed to write: run, the speed would raise out of the thread.
+    rig.worker.run()
+    assert rig.drive.stops == 1
+    assert rig.worker.snap.setpoint_rpm == 0
 
 
 async def _raising(_self: bench.BusWorker, _command: bench.Command) -> str:
@@ -641,8 +695,10 @@ def test_a_signal_to_the_serving_console_ends_in_the_driver_s_stop_once(
     said = console.said()
 
     assert words.count("stopping") == 1, f"the driver's stop ran {words.count('stopping')} times"
-    assert words[-4:] == ["served", *ENDED_WELL], (
-        f"not one whole stop after the web server: {words}"
+    # The stop starts with the signal (ANH-218): the web server closes beside it.
+    assert "served" in words, f"the web server never closed: {words}"
+    assert [word for word in words if word != "served"][-3:] == ENDED_WELL, (
+        f"not one whole stop: {words}"
     )
     assert code == status, said
     assert CONFIRMED_LINE in said
@@ -685,10 +741,94 @@ def test_a_request_left_open_does_not_keep_the_console_from_its_stop(
     words = console.words()
 
     assert words.count("stopping") == 1, f"the driver's stop ran {words.count('stopping')} times"
-    assert words[-4:] == ["served", *ENDED_WELL], f"not one whole stop: {words}"
+    assert [word for word in words if word != "served"][-3:] == ENDED_WELL, (
+        f"not one whole stop: {words}"
+    )
+    # ANH-218: the driver's stop began while the web server still waited for the request.
+    assert words.index("stopping") < words.index("served"), f"the stop waited: {words}"
     assert code == status, console.said()
     # Sooner, and the server had no request under way: the bound was never put to the test.
     assert took >= bench.GRACEFUL_SHUTDOWN_S, f"ended {took:.2f} s after the signal"
+
+
+def _post(port: int, path: str, body: str) -> tuple[int, str]:
+    """One whole request to the console's page: its status and its body.
+
+    The page listens once the web server's start-up is over: until then the
+    connection is refused, and tried again.
+    """
+    deadline = time.monotonic() + PATIENCE
+    client: socket.socket | None = None
+    while client is None:
+        try:
+            client = socket.create_connection(("127.0.0.1", port), timeout=PATIENCE)
+        except ConnectionRefusedError:
+            assert time.monotonic() < deadline, f"the page never listened on {port}"
+            time.sleep(0.02)
+    with client:
+        payload = body.encode()
+        client.sendall(
+            f"POST {path} HTTP/1.1\r\nHost: bench\r\nContent-Type: application/json\r\n"
+            f"Content-Length: {len(payload)}\r\nConnection: close\r\n\r\n".encode()
+            + payload
+        )
+        return _answer(client)
+
+
+def _answer(client: socket.socket) -> tuple[int, str]:
+    """The status and the body of the one answer a connection gets, read to its close."""
+    received = b""
+    while chunk := client.recv(4096):
+        received += chunk
+    head, _, answer = received.partition(b"\r\n\r\n")
+    return int(head.split()[1]), answer.decode()
+
+
+@signals_reach_a_process
+@pytest.mark.parametrize("sent", [signal.SIGTERM, HANG_UP], ids=["SIGTERM", "SIGHUP"])
+def test_from_the_exit_signal_no_motion_request_reaches_the_drive_and_the_stop_begins(
+    tmp_path: Path, sent: signal.Signals
+) -> None:
+    """ANH-218: the signal disarms the console and starts the driver's stop at once.
+
+    Two clients are halfway through a speed request on an armed console when the
+    signal arrives. The web server waits for them, up to ``GRACEFUL_SHUTDOWN_S``.
+    Before, the one that completed its request in that window reached the drive.
+    Now it is answered 409, nothing is written, and the stop has already begun.
+    """
+    port = _free_port()
+    console = _console(tmp_path, http_port=port)
+    holding: socket.socket | None = None
+    late: socket.socket | None = None
+    try:
+        console.wait_for("serving")
+        armed = _post(port, "/api/arm", '{"motor_uncoupled": true}')
+        assert armed[0] == HTTPStatus.OK, armed
+        holding = _held_request(port)
+        late = _held_request(port)
+        time.sleep(0.3)  # both requests under way on the server
+        signalled = time.monotonic()
+        console.process.send_signal(sent)
+        console.wait_for("stopping")
+        began = time.monotonic() - signalled
+        # The second client completes its request inside the graceful window.
+        late.sendall(b'"rpm": 60}' + b" " * 89)
+        status, answer = _answer(late)
+        code = console.ended()
+    finally:
+        for client in (holding, late):
+            if client is not None:
+                client.close()
+        _kill_if_left(console)
+    words = console.words()
+
+    assert status == HTTPStatus.CONFLICT, answer
+    assert bench.LEAVING_REFUSAL in answer
+    assert not [word for word in words if word.startswith("wrote-")], words
+    assert "enabled" not in words
+    assert began < bench.GRACEFUL_SHUTDOWN_S, f"the stop began {began:.2f} s after the signal"
+    assert words.count("stopping") == 1, words
+    assert code == (BY_SIGTERM if sent == signal.SIGTERM else BY_HANG_UP), console.said()
 
 
 @signals_reach_a_process
