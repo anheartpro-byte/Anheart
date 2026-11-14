@@ -209,6 +209,7 @@ class Dashboard:
 
 
 DOWN: Final[Reply] = Err(Unreachable("no route to host"))
+KEY_REFUSED_WORDS: Final[str] = "refuse la cle de cette machine"
 POLL_PATH: Final[str] = "/api/machine/training/poll"
 START: Final[str] = "/api/machine/training/start"
 STATUS: Final[str] = "/api/machine/training/status"
@@ -1158,6 +1159,67 @@ async def test_a_late_2xx_cannot_reuse_a_confirmation_after_a_local_session(
         caplog,
         (PROFILE, "passager de 30 ans", RIDER_NAME, "Dr Manager"),
     )
+
+
+@pytest.mark.parametrize(
+    ("answer", "words"),
+    [
+        pytest.param(ok({"riders": []}), "n'est pas dans", id="without-the-rider"),
+        pytest.param(Err(Refused(status=401, detail="no")), KEY_REFUSED_WORDS, id="key-401"),
+        pytest.param(Err(Refused(status=403, detail="no")), KEY_REFUSED_WORDS, id="key-403"),
+    ],
+)
+async def test_a_list_that_drops_the_rider_while_the_start_is_asked_for_refuses_the_arming(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, answer: Reply, words: str
+) -> None:
+    """ANH-239: the riders' list arrives while ``training/start`` is on its way, in the same
+    second. The order is no longer fixed (the list has a task of its own), and this is the
+    newer one: the start was asked for with the rider, the list came without them, or the
+    dashboard refused the machine's key (401, 403), which empties the list at once. The
+    arming reads the list again (``LocalPanel._rider_for``): refused, nothing armed, and
+    never a session for a rider the list no longer offers.
+    """
+    r = linked(tmp_path)
+    r.dashboard.answer(POLL_PATH, launch_answer(dict(LAUNCH)))
+    # The list was asked for at the start; it is due again a moment after the click.
+    await r.run(float(ROSTER_PERIOD) - 0.4)
+    confirm_linked(r.panel)
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    original_post = r.dashboard.post
+
+    async def post(path: str, body: Mapping[str, JsonValue]) -> Reply:
+        if path == START:
+            entered.set()
+            await release.wait()
+        return await original_post(path, body)
+
+    monkeypatch.setattr(r.dashboard, "post", post)
+    request = asyncio.create_task(r.panel.cloud_step())
+    await asyncio.wait_for(entered.wait(), timeout=1.0)
+
+    # Within the same second, the list's own task brings a list without the rider.
+    r.dashboard.answer(ROSTER_PATH, answer)
+    for _ in range(3):
+        r.clock.advance(TICK)
+        r.panel.surface.note_presence(OPERATOR)
+        await r.panel.ecg_step()
+        await r.panel.control_step()
+    await r.panel.roster_step()
+    assert len(r.dashboard.to(ROSTER_PATH)) >= 2, "the list was asked for again"
+    release.set()
+    await asyncio.wait_for(request, timeout=1.0)
+    assert pending_start(r.panel.surface) is not None, "the 2xx handed the launch to the loop"
+
+    await r.run(2.0)
+    assert state_of(r.panel) is RuntimeState.IDLE
+    assert r.panel.surface.pending is None
+    assert len(r.dashboard.to(START)) == 1
+    (end,) = r.dashboard.to("/api/machine/training/end")
+    assert end["sessionId"] == "remote-1"
+    assert end["failed"] is True
+    assert words in str(end["reason"])
+    await r.panel.close()
 
 
 async def test_a_late_2xx_while_a_local_session_runs_keeps_the_failed_end(
