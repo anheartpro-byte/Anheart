@@ -743,9 +743,10 @@ class SessionListener(Protocol):
     def begin_arming(self, cloud_session_id: str) -> str | None:
         """The loop is about to arm the launch ``cloud_session_id``: ``None``, or why it may not.
 
-        Asked once, right before the drive is touched. Refused, the dashboard
-        already holds the launch failed: the loop tells the console and nobody
-        else. Past ``None`` the launch's wait no longer runs out: the loop ends
+        Asked once, before the start's gates, which await nothing: nothing is
+        awaited between this answer and the drive being touched. Refused, the
+        dashboard already holds the launch failed: the loop tells the console
+        and nobody else. Past ``None`` the launch's wait no longer runs out: the loop ends
         it with :meth:`session_started` or :meth:`start_refused`.
         """
 
