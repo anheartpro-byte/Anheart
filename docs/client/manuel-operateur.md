@@ -993,7 +993,7 @@ Les règles que vous verrez le plus souvent sur la ligne « regle » :
 | « hr_stale » | Plus de fréquence cardiaque fiable (séance avec passager). | « freeze » après 10 secondes, « reduce » après 30 secondes. Fin de séance dès que la vitesse commandée est revenue à zéro, et au plus tard après 60 secondes. Si la fréquence revient avant cette fin de séance, donc tant que la console n'a pas ramené la vitesse commandée à zéro, la séance reprend seule. |
 | « hr_hard_max » | La fréquence cardiaque reste au-dessus du seuil « max absolu ». Si elle n'est plus mesurée à ce moment-là, la console garde la dernière fréquence fiable, tant qu'elle date de 10 secondes au plus. | Fin de séance en douceur. |
 | « hr_critical » | La fréquence cardiaque atteint le seuil « critique ». | Arrêt d'urgence logiciel. |
-| « hr_drop » | La fréquence cardiaque chute brutalement. | Fin de séance en douceur. |
+| « hr_drop » | La fréquence cardiaque chute brutalement. En séance manuelle avec une personne à bord, la console prend pour fréquence de repos la dernière lecture utilisable avant le premier mouvement du bras. | Fin de séance en douceur. |
 | « hr_rate » | La fréquence cardiaque monte trop vite. | « reduce ». Quand la montée cesse, la séance reprend seule, sauf si la vitesse commandée est revenue à zéro entre-temps : la séance est alors terminée. |
 | « loop_stall » | La console a pris du retard dans son propre fonctionnement. | « freeze » verrouillé, qui ne disparaît pas seul, ou « go_silent ». Pour ce « freeze » verrouillé, lisez l'avertissement au-dessus de ce tableau avant d'acquitter. |
 | « drive_fault » | Le variateur est en défaut. | Fin de séance. Voir la [section 9.5](#95-le-variateur-passe-en-défaut). |
