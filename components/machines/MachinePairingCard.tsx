@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useId, useState } from "react";
 import { useQuery } from "convex/react";
 import { useLocale, useTranslations } from "next-intl";
 import { format } from "date-fns";
@@ -50,6 +50,7 @@ export function MachinePairingCard({
   const clock = useLocalClock(15_000);
 
   const [issued, setIssued] = useState<IssuedPairingCode | null>(null);
+  const noSerialId = useId();
   const [busy, setBusy] = useState(false);
 
   const serial = normalizedSerial(registry?.serialPi);
@@ -86,7 +87,10 @@ export function MachinePairingCard({
           <Skeleton className="h-16 w-full" />
         ) : (
           <>
-            <p className="text-sm">
+            <p
+              className="text-sm"
+              id={serial === null ? noSerialId : undefined}
+            >
               {serial === null ? (
                 t("noSerial")
               ) : (
@@ -111,7 +115,11 @@ export function MachinePairingCard({
                     })}
             </p>
             <div className="flex flex-wrap gap-2">
-              <Button onClick={handleIssue} disabled={busy || serial === null}>
+              <Button
+                onClick={handleIssue}
+                disabled={busy || serial === null}
+                aria-describedby={serial === null ? noSerialId : undefined}
+              >
                 {open === null ? t("issue") : t("reissue")}
               </Button>
               {open !== null && (

@@ -109,10 +109,12 @@ describe("machine pairing: what the card shows", () => {
   ])("offers no code for a registry with %s", async (_case, serialPi) => {
     await card({ serialPi });
 
-    expect(screen.getByText(t.noSerial)).toBeTruthy();
-    expect(
-      screen.getByRole("button", { name: t.issue }).hasAttribute("disabled"),
-    ).toBe(true);
+    const reason = screen.getByText(t.noSerial);
+    const issue = screen.getByRole("button", { name: t.issue });
+    expect(issue.hasAttribute("disabled")).toBe(true);
+    // The reason it is greyed is the button's description.
+    expect(reason.id).not.toBe("");
+    expect(issue.getAttribute("aria-describedby")).toBe(reason.id);
   });
 
   it("says who issued the open code and until when, never the code, and offers to revoke it", async () => {
@@ -196,6 +198,8 @@ describe("machine pairing: a new code, shown once", () => {
     issued();
     const { user } = await card();
     await user.click(screen.getByRole("button", { name: t.issue }));
+    // The status region is there, empty, before the code expires.
+    expect(screen.getByRole("status").textContent).toBe("");
 
     await act(async () => {
       vi.advanceTimersByTime(61_000);

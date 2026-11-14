@@ -61,15 +61,28 @@ function ShownCode({ issued }: { issued: IssuedPairingCode }) {
   const t = useTranslations("machinePairing");
   const clock = useLocalClock();
   const remaining = issued.expiresAt - serverClockAt(issued.serverNow, clock);
-  if (remaining <= 0) {
-    return (
-      <p role="status" className="text-sm font-medium text-destructive">
-        {t("expired")}
-      </p>
-    );
-  }
+  const expired = remaining <= 0;
   return (
     <div className="space-y-4">
+      {/* There from the start, filled at expiry: a reader announces what changes in it. */}
+      <p role="status" className="text-sm font-medium text-destructive">
+        {expired ? t("expired") : ""}
+      </p>
+      {!expired && <LiveCode issued={issued} remaining={remaining} />}
+    </div>
+  );
+}
+
+function LiveCode({
+  issued,
+  remaining,
+}: {
+  issued: IssuedPairingCode;
+  remaining: number;
+}) {
+  const t = useTranslations("machinePairing");
+  return (
+    <>
       <p
         aria-hidden="true"
         className="rounded-md bg-muted py-6 text-center font-mono text-4xl font-semibold tracking-[0.25em]"
@@ -86,6 +99,6 @@ function ShownCode({ issued }: { issued: IssuedPairingCode }) {
         <AlertTriangle className="h-4 w-4 shrink-0" aria-hidden="true" />
         {t("codeWarning")}
       </p>
-    </div>
+    </>
   );
 }
