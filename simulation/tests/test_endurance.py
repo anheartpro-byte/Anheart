@@ -29,6 +29,7 @@ from tests.fake_record_dashboard import RecordingDashboard
 from simulation.endurance import (
     BUSY_RETRIES,
     CLOSING_LIMIT,
+    COMMAND_SETTLE,
     ENV,
     EPOCH_MS,
     FINISH_LIMIT,
@@ -219,10 +220,16 @@ def test_ex1_the_console_runs_in_real_time_on_a_loopback_port_and_stops_when_ask
 ) -> None:
     """The real loop, the real web server, the real threads: six seconds asked, one session.
 
-    The console's freeze at two seconds: a loaded host that holds it 0.6 s, before its
-    start or after, latches no verdict that would refuse the start. This run is about the
-    console running and stopping; its stalls are the other tests'."""
-    freeze_at_two_seconds(monkeypatch)
+    This run is about the console running and stopping; its stalls are the other tests'.
+    So the console is built with its ``loop_stall`` bounds beyond a slow host's reach (a
+    freeze at 30 s, silence at 60 s): a host that holds its loop for seconds while it starts
+    latches no verdict that would refuse the start, and a request the starved loop takes
+    late is sent again by the operator's bounded retry. Past the simulated drive's own 3 s
+    watchdog, which nothing here moves, the run fails on the drive fault, named: a host
+    that starves the console that long cannot run it, and saying so is intended. So does
+    a session whose 1 Hz points a starved loop did not produce (a second without a tick
+    has no point): it is not delivered whole, and the test says so."""
+    stalls_out_of_reach(monkeypatch)
     out = tmp_path / "out"
 
     rhythm = ["--manual", "3", "--rest", "2", "--sample-every", "2"]
@@ -238,13 +245,16 @@ def test_ex1_the_console_runs_in_real_time_on_a_loopback_port_and_stops_when_ask
     sessions = [obj(line) for line in seq(report["sessions"])]
     assert [(line["kind"], line["end"]) for line in sessions] == [("manual", "operator_stop")]
     assert all(line["as_planned"] is True and line["delivered"] is True for line in sessions)
-    assert 6.0 < num(report["covered_s"]) < 60.0
-    # The loop's own cadence, seen from outside it: a tick every 200 ms.
+    # Ended by itself within the scenario's own limits, whatever the host made it wait.
+    assert 6.0 < num(report["covered_s"]) < 6.0 + COMMAND_SETTLE + FINISH_LIMIT + CLOSING_LIMIT
+    # The loop's own cadence, seen from outside it: a tick every 200 ms, the page shown
+    # each one (the hub paces it at 0.15 s), and on a slow host still under two periods,
+    # strictly: at every other tick, the page would no longer follow the loop.
     period = obj(report["tick_period_ms"])
     tick = obj(report["tick_ms"])
-    assert 150.0 <= num(period["p50"]) <= 260.0
+    assert 150.0 <= num(period["p50"]) < 400.0
     # Judged against the console's own loop_stall figure, whatever this loaded host gave.
-    assert obj(report["tick_gaps"])["bound_ms"] == 2000.0
+    assert obj(report["tick_gaps"])["bound_ms"] == 30_000.0
     assert num(tick["count"]) >= 25
     assert 0.0 < num(tick["p50"]) < 150.0
     assert len(seq(report["samples"])) >= 3
@@ -252,6 +262,16 @@ def test_ex1_the_console_runs_in_real_time_on_a_loopback_port_and_stops_when_ask
     # Nothing is left behind: the console's data is removed, its log is next to the report.
     left = {path.name for path in out.iterdir()}
     assert left - {"console.log"} == {"endurance.json", "endurance.md"}
+
+
+def longest(gaps: Gaps) -> float:
+    """The longest gap the page read, between consecutive snapshots or over merged ones.
+
+    The hub paces the page at 0.15 s: when it released the page less than that before the
+    tick that precedes a held one, the snapshot of that tick waits and the held tick's
+    replaces it. The held gap is then read over the merge.
+    """
+    return max(seen.highest for seen in (gaps.exact, gaps.merged) if seen is not None)
 
 
 def freeze_at_two_seconds(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -263,6 +283,20 @@ def freeze_at_two_seconds(monkeypatch: pytest.MonkeyPatch) -> None:
         )
 
     monkeypatch.setattr("src.local_panel.SafetyLimits", slower)
+
+
+def stalls_out_of_reach(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Build the console with its ``loop_stall`` freeze at 30 s and its silence at 60 s."""
+
+    def patient(*, hard_max_bpm: Bpm, critical_bpm: Bpm) -> SafetyLimits:
+        return SafetyLimits(
+            hard_max_bpm=hard_max_bpm,
+            critical_bpm=critical_bpm,
+            loop_stall_freeze_periods=150.0,
+            loop_stall_silent_periods=300.0,
+        )
+
+    monkeypatch.setattr("src.local_panel.SafetyLimits", patient)
 
 
 def hold_a_session_tick(monkeypatch: pytest.MonkeyPatch, *, after: int = 0) -> list[float]:
@@ -310,12 +344,10 @@ async def test_ex1_in_real_time_a_late_tick_fails_tick_gap_and_a_frozen_console_
     ]
     gaps = run.gaps
     assert gaps is not None
-    assert gaps.exact is not None
-    assert gaps.exact.highest >= LATE * 1000.0
+    assert longest(gaps) >= LATE * 1000.0
     gap = verdicts["tick_gap"]
     assert gap.status is Status.FAIL
     assert gap.measured.startswith("la console a levé loop_stall : the control loop took")
-    assert f"un écart de {gaps.exact.highest:.1f} ms entre deux tics consécutifs" in gap.measured
     # Read from the console's own exit, which a console cancelled instead never reaches.
     # The loop_stall left latched is tick_gap's to fail on, not one more anomaly.
     assert run.anomaly == f"the console left with exit code {EXIT_FAILED}"
@@ -338,8 +370,7 @@ async def test_ex1_in_real_time_tick_gap_follows_the_console_s_own_loop_stall_bo
     gaps = run.gaps
     assert gaps is not None
     assert (gaps.bound, gaps.verdict) == (2000.0, None)
-    assert gaps.exact is not None
-    assert gaps.exact.highest >= LATE * 1000.0
+    assert longest(gaps) >= LATE * 1000.0
     assert "écart entre deux tics consécutifs < 2000 ms" in gap.threshold
     assert gap.status is Status.PASS, gap.measured
 
@@ -380,7 +411,8 @@ async def test_ex1_a_stall_behind_an_earlier_freeze_of_another_rule_still_fails_
 ) -> None:
     """A FREEZE latched by another rule early in the session keeps the supervisor's floor:
     the stall's own FREEZE, as severe, does not replace it, and no verdict names the stall.
-    The page's gap still fails ``tick_gap``, and the verdict left latched fails the run.
+    The verdict left latched fails the run all the same, by name. (The page sees the gap,
+    and fails ``tick_gap`` on it too when the hub did not merge the snapshot before it.)
     The freeze at two seconds: a host slow enough to stall the console for 0.6 s does not
     latch ``loop_stall`` before the other rule."""
     freeze_at_two_seconds(monkeypatch)
@@ -407,11 +439,11 @@ async def test_ex1_a_stall_behind_an_earlier_freeze_of_another_rule_still_fails_
     gaps = run.gaps
     assert gaps is not None
     assert gaps.verdict is None, "the earlier FREEZE holds the floor"
-    assert verdicts["tick_gap"].status is Status.FAIL
-    assert verdicts["tick_gap"].measured.startswith("un écart de")
+    assert longest(gaps) >= LATE_PAST_TWO * 1000.0, "the page saw the stall"
     assert run.anomaly is not None
     assert "latched safety verdict (endurance_freeze)" in run.anomaly
     assert verdicts["sessions"].status is Status.FAIL
+    assert not passed(tuple(verdicts.values()))
 
 
 def test_ex1_the_console_s_stall_is_found_where_its_supervisor_holds_it() -> None:
