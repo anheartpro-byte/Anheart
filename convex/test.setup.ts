@@ -35,6 +35,11 @@ export const modules = import.meta.glob([
   "!./**/*.matrix.ts",
 ]);
 
+/** The version of the shipped file: what the seeded machines announce (ANH-235). */
+export const SHIPPED_MEDICAL_VERSION = (
+  JSON.parse(shippedMedicalContent) as { version: string }
+).version;
+
 const shippedMedicalSignature = /^data:[^,]*;base64,([A-Za-z0-9+/=]+)$/.exec(
   shippedMedicalSignatureUrl,
 )?.[1];
@@ -320,6 +325,7 @@ export async function seedWorld(
         lastHeartbeat: NOW,
         createdAt: NOW,
         programsEnabled: true,
+        medicalParametersVersion: SHIPPED_MEDICAL_VERSION,
       });
     const machine = await mkMachine(orgA);
     const otherMachine = await mkMachine(orgA);
@@ -550,6 +556,7 @@ export async function seedMachineWorld(
       await ctx.db.patch(machineId, {
         status: "online",
         programsEnabled: true,
+        medicalParametersVersion: SHIPPED_MEDICAL_VERSION,
       });
       await ctx.db.insert("machine_profiles", {
         organizationId,
@@ -628,6 +635,7 @@ export async function seedLegacyWorld(
       lastHeartbeat: NOW,
       createdAt: NOW,
       programsEnabled: true,
+      medicalParametersVersion: SHIPPED_MEDICAL_VERSION,
     });
     const machineLink = await ctx.db.insert("machine_gestionnaires", {
       machineId: machine,

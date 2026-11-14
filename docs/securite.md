@@ -1993,6 +1993,13 @@ en **mode banc seulement**.
   `unknown`, sans libellé sur la fiche ; programmes désactivés et version
   serveur inscrite, le refus est `programs_disabled` : « Programmes auto
   désactivés sur cette machine : aucune séance auto ne peut y être lancée. ».
+  Programmes activés, une annonce absente ou mal formée est refusée depuis
+  ANH-235 (`medical_parameters_unannounced`) : « La machine n'a pas annoncé
+  quels paramètres médicaux elle utilise : aucune séance auto ne peut y être
+  lancée tant qu'elle ne l'a pas fait ». Avant, le serveur la laissait
+  passer et seule la console refusait au départ. La carte et la fenêtre de
+  lancement le bloquent avant le clic avec la même phrase (statut `unknown`,
+  après les programmes désactivés, comme le serveur).
   Au contrôle médical local en mode
   banc, la console refuse : « refusee par la machine : parametres medicaux non
   signes (raison) : console en mode banc seulement, aucune seance programmee

@@ -1378,8 +1378,12 @@ describe("what the dashboard is shown about machines and sessions", () => {
 
   it("reports programmes as disabled until the machine has announced them", async () => {
     const w = await seedWorld(modules);
+    // A machine that has announced nothing yet: neither programmes nor a medical version.
     await w.t.run((ctx) =>
-      ctx.db.patch(w.machine, { programsEnabled: undefined }),
+      ctx.db.patch(w.machine, {
+        programsEnabled: undefined,
+        medicalParametersVersion: undefined,
+      }),
     );
 
     expect(await launchable(w, "patient")).toMatchObject([

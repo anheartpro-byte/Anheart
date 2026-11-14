@@ -702,8 +702,8 @@ describe("ANH-203 a machine of « My machines »: the launch button", () => {
       lastHeartbeat: NOW - 3_000,
       serverNow: NOW,
       programsEnabled: true,
-      medicalParametersVersion: undefined,
-      medicalParametersStatus: "unknown",
+      medicalParametersVersion: "0.1.0",
+      medicalParametersStatus: "current",
       medicalParametersReferenceVersion: "0.1.0",
       live: live(),
       profiles: [ENDURANCE],
@@ -842,6 +842,13 @@ describe("ANH-203 a machine of « My machines »: the launch button", () => {
       true,
       t.launch.medicalParametersUnavailable,
     ],
+    // ANH-235: as the server refuses it.
+    [
+      "no medical version announced",
+      "unknown",
+      true,
+      t.launch.medicalParametersUnannounced,
+    ],
   ] as const)(
     "cannot launch a machine in %s, and shows the exact reason",
     async (_label, medicalParametersStatus, programsEnabled, reason) => {
@@ -865,6 +872,23 @@ describe("ANH-203 a machine of « My machines »: the launch button", () => {
       expect(onLaunch).not.toHaveBeenCalled();
     },
   );
+
+  it("ANH-235: says the disabled programmes, not the missing version, when both hold", () => {
+    const screen = render(
+      <LaunchableMachineCard
+        machine={machine({
+          medicalParametersStatus: "unknown",
+          programsEnabled: false,
+        })}
+        isUser
+        onLaunch={vi.fn()}
+      />,
+    );
+
+    expect(launch(screen).hasAttribute("disabled")).toBe(true);
+    expect(screen.text()).toContain(t.programs.disabled);
+    expect(screen.text()).not.toContain(t.launch.medicalParametersUnannounced);
+  });
 
   it("blocks a machine whose reference is missing even when its reported version is unknown", async () => {
     const onLaunch = vi.fn();

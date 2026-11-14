@@ -184,6 +184,8 @@ export const DASHBOARD_ERRORS = {
     "No signed medical parameters version is registered on the server, so auto launches are refused.",
   medical_parameters_unsigned:
     "The machine's medical parameters are unsigned: it is in bench mode only, with no programmed session or person on board.",
+  medical_parameters_unannounced:
+    "The machine's programmes are enabled, but its last heartbeat announced no readable medical parameters version: no auto session is launched on it until one does (ANH-235).",
   programme_not_on_machine:
     "The programme is not, or no longer, among the machine's programmes.",
   rider_hr_max_missing:

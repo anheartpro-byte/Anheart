@@ -1024,6 +1024,7 @@ S'ouvre depuis **Mes machines** ou le détail d'une machine.
 | « La machine est hors ligne. » | Pas de signal depuis plus de 90 s. | Vérifier que la machine est allumée, connectée à Internet, et que sa console tourne. |
 | « La machine est déjà en séance. » | Une séance tourne. | Attendre la fin, ou l'arrêter. |
 | « Programmes auto désactivés sur cette machine : aucune séance auto ne peut y être lancée. » | La machine refuse les séances auto (réglage de la machine). | Voir [§6.5](#65-pourquoi-programmes-auto-désactivés-sur-cette-machine). |
+| « La machine n'a pas annoncé quels paramètres médicaux elle utilise : aucune séance auto ne peut y être lancée tant qu'elle ne l'a pas fait. » | Programmes activés, mais la machine n'a annoncé aucune version lisible de ses paramètres médicaux (ANH-235) : le serveur refuserait le lancement. Ce message vient après celui des programmes désactivés. | Vérifier que la console de la machine tourne à jour et envoie ses signaux ; attendre son prochain signal. |
 | « Aucun programme n'a été synchronisé depuis la machine. » | Aucun programme reçu. | Créer un programme à la console de la machine. |
 | « Chargement de la fiche du pratiquant… » | La fiche du patient choisi n'est pas encore arrivée : **Lancer** reste grisé en attendant. | Patienter. |
 | « Pratiquant introuvable : sa fiche a été supprimée ou ne vous est plus accessible. » | Le serveur ne donne plus la fiche du patient choisi. | Choisir un autre pratiquant ; vérifier dans **Patients**. |
@@ -2504,6 +2505,7 @@ rapport à la FC max du pratiquant, et l'âge. Un refus donne une séance
 | « La machine est hors ligne. » | Fenêtre de lancement, Mes machines | Pas de signal. | [§6.3](#63-si-la-machine-est-hors-ligne). |
 | « La machine est déjà en séance. » | Idem | Séance en cours. | Attendre ou arrêter. |
 | « Programmes auto désactivés sur cette machine : aucune séance auto ne peut y être lancée. » | Fenêtre de lancement | Voir plus haut. | [§6.5](#65-pourquoi-programmes-auto-désactivés-sur-cette-machine). |
+| « La machine n'a pas annoncé quels paramètres médicaux elle utilise : aucune séance auto ne peut y être lancée tant qu'elle ne l'a pas fait. » | Fenêtre de lancement, carte de la machine, liste des programmes | La machine, programmes activés, n'a annoncé aucune version lisible de ses paramètres médicaux (ANH-235). | Vérifier la console de la machine ; attendre son prochain signal. |
 | « Aucun programme n'a été synchronisé depuis la machine. » | Fenêtre de lancement | Idem. | P9. |
 | « La FC max (ou l'année de naissance) du pratiquant n'est pas renseignée... » | Fenêtre de lancement | Physiologie absente, ou FC max enregistrée qui n'est pas un nombre entier. | P7. |
 | « L'année de naissance du pratiquant n'est pas renseignée... » | Fenêtre de lancement | Année absente (obligatoire), ou année enregistrée qui n'est pas un nombre entier. | P7. |

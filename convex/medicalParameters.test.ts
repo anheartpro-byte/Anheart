@@ -18,6 +18,7 @@ import {
   modules,
   NOW,
   registerShippedMedicalParameters,
+  SHIPPED_MEDICAL_VERSION,
   seedLaunchWorld as seedWorld,
   type World,
 } from "./test.setup";
@@ -793,14 +794,37 @@ describe("current medical parameters in training", () => {
     ).toEqual(sessionsBefore);
   });
 
-  it("does not add a refusal when the machine has not announced a medical version", async () => {
+  it("refuses a machine whose programmes are enabled but which has announced no medical version (ANH-235)", async () => {
     const w = await seedWorld(modules);
+    const launchArgs = { machineId: w.machine, profileId: w.profileId, userId: w.patient };
+    const sessionsBefore = await w.t.run((ctx) =>
+      ctx.db.query("sessions").collect(),
+    );
     await w.t.run((ctx) =>
       ctx.db.patch(w.machine, { medicalParametersVersion: undefined }),
     );
+    await expect(
+      as(w.t, "manager").mutation(api.training.launchAutoSession, launchArgs),
+    ).rejects.toThrow(/medical_parameters_unannounced/);
+    // Programmes disabled: that refusal comes first, as for an unsigned machine.
+    await w.t.run((ctx) => ctx.db.patch(w.machine, { programsEnabled: false }));
+    await expect(
+      as(w.t, "manager").mutation(api.training.launchAutoSession, launchArgs),
+    ).rejects.toThrow(/programs_disabled/);
+    expect(
+      await w.t.run((ctx) => ctx.db.query("sessions").collect()),
+    ).toEqual(sessionsBefore);
+
+    // Announced again: launched as before.
+    await w.t.run((ctx) =>
+      ctx.db.patch(w.machine, {
+        medicalParametersVersion: SHIPPED_MEDICAL_VERSION,
+        programsEnabled: true,
+      }),
+    );
     const sessionId = await as(w.t, "manager").mutation(
       api.training.launchAutoSession,
-      { machineId: w.machine, profileId: w.profileId, userId: w.patient },
+      launchArgs,
     );
     expect(await w.t.run((ctx) => ctx.db.get(sessionId))).toMatchObject({
       status: "pending",
