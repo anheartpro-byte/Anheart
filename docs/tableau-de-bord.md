@@ -540,8 +540,9 @@ patient = celles où il a le droit.
   **Séance de banc lestée** (§5.6 ; grisé si la machine n'est pas en ligne,
   quels que soient ses programmes), lien **Détails**. 90 s après le dernier
   signal, la carte affiche « Hors ligne » et grise le bouton (§6). Elle le grise
-  aussi si la machine annonce des paramètres médicaux non signés ou si aucune
-  version de référence n'est enregistrée, avec la raison affichée.
+  aussi si la machine annonce des paramètres médicaux non signés, si aucune
+  version de référence n'est enregistrée, ou si, programmes activés, elle n'a
+  annoncé aucune version lisible (ANH-235), avec la raison affichée.
 - La carte **Code de console** (ANH-152) paraît à un admin ou un gestionnaire
   activé comme opérateur d'au moins une machine de son organisation : la
   liste de ces machines avec « Code défini le … » ou « Code à définir », et un
@@ -1267,7 +1268,9 @@ affichée (`aria-describedby`). L'absence de version
 de référence affiche « Aucune version des paramètres médicaux n'est enregistrée
 sur le serveur : aucune séance auto ne peut être lancée à distance. » Le mode banc
 affiche « Paramètres médicaux non signés : la machine est en mode banc
-uniquement. » Elle **avertit** si la zone dépasse la fraction de FC max fixée
+uniquement. » Une machine aux programmes activés qui n'a annoncé aucune version
+lisible affiche, après les programmes désactivés, comme le serveur la refuse
+(ANH-235) : « La machine n'a pas annoncé quels paramètres médicaux elle utilise : aucune séance auto ne peut y être lancée tant qu'elle ne l'a pas fait. » Elle **avertit** si la zone dépasse la fraction de FC max fixée
 par la version courante ou si la FC limite du programme dépasse la FC max
 (« Le serveur refusera ce lancement. »).
 
