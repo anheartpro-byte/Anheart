@@ -184,6 +184,24 @@ test("the page shows the one section that is read: no HTML that hides a line, on
   assert.match(refusalRules, /code\s+compris/);
 });
 
+test("ANH-236: a list item or a quote the script does not follow is read as GitHub shows it, or refused", () => {
+  const real = table([row()]).replace("# Exceptions\n\n", "");
+  // A fence opened in a list item or a quote ends with its container: the table after it is shown, and read.
+  for (const container of ["- ```\n  x\n", "> ```\n> x\n", "- ~~~\n"]) {
+    const { exceptions, problems } = parse(`# Exceptions\n\n${container}\n${real}`, TODAY);
+    assert.deepEqual(problems, [], container);
+    assert.equal(exceptions.length, 1, container);
+  }
+  // The title written inside such a fence is code on the page: never read as the section, refused.
+  const inList = parse(`# Exceptions\n\n- \`\`\`\n  ${SECTION}\n  \`\`\`\n\n${real}`, TODAY);
+  assert.deepEqual(inList.exceptions, []);
+  assert.match(inList.problems.join(), /is written 2 times/);
+  // A title with a `#` glued to its end is another title for GitHub: refused, not read.
+  const glued = parse(`# Exceptions\n\n${real.replace(SECTION, `${SECTION}#`)}`, TODAY);
+  assert.deepEqual(glued.exceptions, []);
+  assert.match(glued.problems.join(), /must be the line "## Exceptions en cours"/);
+});
+
 test("ANH-236: what the page shows otherwise than the script reads is refused, before anything is read", () => {
   const real = table([row()]);
   for (const [name, text, refusal] of [
