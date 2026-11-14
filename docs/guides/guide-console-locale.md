@@ -2461,15 +2461,26 @@ Jamais en même temps que la console sur le même câble. Le second programme la
 refusé (`drive cable already owned`) et n'a aucune liaison avec le variateur : fermez
 la console d'abord (voir §3.4 et §14).
 
-**Le bouton `Acquitter défaut` de `scripts/bench_console.py`.**
-Il écrit CMD=128 puis CMD=6, et seulement si l'état lu à cet instant n'est pas
-`OPERATION_ENABLED` et que l'arbre y est lu à l'arrêt (RFRD=0) : c'est la règle de la
-console. Sinon rien n'est écrit et la dernière action le dit :
-`fault_reset: ECHEC: reset refuse, arbre non lu a l'arret (...)`, avec la raison (étage
-de puissance actif, vitesse lue, état illisible). Sur un variateur en marche, ces deux
-mots couperaient l'étage de puissance : l'arbre finirait en roue libre. La page grise le
-bouton tant que son dernier état reçu ne montre pas un défaut et un arbre à l'arrêt ;
-le refus de l'outil reste la barrière.
+**Les boutons de `scripts/bench_console.py`, et ce que chacun écrit au variateur.**
+
+| Bouton | Ce qu'il écrit |
+|---|---|
+| case `moteur désaccouplé` puis `Armer` | rien : il arme l'outil, sans quoi `Activer` et une consigne sont refusés (409 `console non armee`) |
+| curseur de vitesse puis `Envoyer` | LFRD à la vitesse demandée, bornée à `--max-rpm`, relue sur LFRD ; ensuite, armé et activé, la même consigne à chaque lecture (maintien du ttO) |
+| `1. Activer (LFRD=0, 6→7→15)` | LFRD=0 relu d'abord, puis CMD=6, 7, 15, chaque pas vérifié sur ETA ; rien de plus si LFRD=0 n'est pas confirmé. Rien du tout sur un variateur déjà activé, un arbre que RFRD ne lit pas à 0, ou sans état lu à cet instant (`enable: ECHEC: activation refusee (...)`) : le 6 couperait l'étage de puissance d'un variateur en marche, et le 7 et le 15 remettraient sous tension un arbre qui tourne. La page grise le bouton tant que le variateur se dit activé ou que l'arbre tourne |
+| `2. Arrêt en rampe` | LFRD=0 et CMD=7 (rampe dEC), puis CMD=6 seulement une fois l'arbre lu à l'arrêt (RFRD=0) ; sinon jamais CMD=6, et l'échec est dit |
+| `ARRÊT D'URGENCE` | désarme tout de suite, puis LFRD=0 et CMD=7 (rampe dEC) ; jamais CMD=6 |
+| `Acquitter défaut` | CMD=128 puis CMD=6, et seulement sur un variateur en défaut, arbre lu à l'arrêt (RFRD=0), défaut nommé que la console peut acquitter |
+
+`Acquitter défaut` suit la règle de la console : sinon rien n'est écrit et la dernière
+action le dit, `fault_reset: ECHEC: reset refuse (...)`, avec la raison (aucun défaut,
+arbre non lu à l'arrêt, défaut non nommé ou non réarmable, état illisible). Sur un
+variateur en marche, ces deux mots couperaient l'étage de puissance : l'arbre finirait
+en roue libre. La page grise le bouton tant que son dernier état reçu ne montre pas un
+défaut et RFRD à 0 ; le refus de l'outil reste la barrière. Limite, la même que pour la
+console : en défaut l'étage de puissance est coupé et RFRD est la fréquence de sortie,
+qui lit 0 même sur un arbre qui tourne encore sur son élan. « Arbre lu à l'arrêt » veut
+dire RFRD à 0 ; l'opérateur regarde l'arbre.
 
 **Comment `scripts/bench_console.py` s'arrête, et ce qu'il ne peut pas couvrir.**
 Sur Ctrl+C, sur `kill` ou l'arrêt d'un service (SIGTERM), quand le terminal ou la

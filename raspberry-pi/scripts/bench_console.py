@@ -42,7 +42,11 @@ The second rewrite fixed two review findings in the operator actions:
 
 * **enable** writes LFRD = 0 (verified by read-back) BEFORE the start sequence.
   CMD = 15 with a stale non-zero LFRD from an earlier session would start the
-  motor at that speed the instant the output stage energises.
+  motor at that speed the instant the output stage energises. And it writes
+  nothing on a drive already OPERATION_ENABLED, on a shaft RFRD does not read
+  at 0, or without a status read at that moment: 6 out of OPERATION_ENABLED
+  drops the output stage (a freewheel), and 7 and 15 then re-power a turning
+  shaft.
 * **stop** writes SHUTDOWN (6) only after RFRD has been READ as 0. Writing 6 to a
   turning shaft is CiA402 transition 8: the output stage drops and the machine
   freewheels. If standstill cannot be confirmed the run command is left in
@@ -54,10 +58,15 @@ whatever the drive was doing. 128 has bits 0 to 3 clear: out of
 OPERATION_ENABLED it is CiA402 "disable voltage", the output stage drops, and
 6 is transition 8. On a turning drive that was the one button that commanded a
 freewheel. It is now refused, nothing written, unless the status read at that
-moment is not OPERATION_ENABLED and RFRD reads 0 in that same read; an
-unreadable status refuses too. That is the main console's rule. The page greys
-the button unless its last live report shows a fault and a shaft at rest; the
-bus thread's refusal is the barrier.
+moment shows all three: the drive in FAULT, RFRD at exactly 0, and a named
+fault this machine may reset (``FaultSpec.resettable``). Anything else refuses,
+an unreadable status too. That is the main console's rule
+(``TrainingRuntime._check_faulted_drive``), with an exact 0 where the console
+allows ``standstill_rpm``. In a fault the output stage is off and RFRD is the
+output frequency: it reads 0 on a shaft still coasting, so "read at rest" is
+RFRD, not the shaft, and the operator looks at the shaft. The page greys the
+button unless its last live report shows a fault and RFRD at 0; the bus
+thread's refusal is the barrier.
 
 And one safety change in the loop: when the driver latches the link down, the
 console DISARMS. It then reconnects, but the keepalive does not resume until
@@ -172,7 +181,14 @@ from scripts.drive_link import (
 from src.clock import RealClock
 from src.geometry import CONFIRMED_GEAR_RATIO, MachineGeometry
 from src.local_config import DriveLink
-from src.motor.drive import ControlWord, DriveError, DriveState, DriveStatus, decode_speed
+from src.motor.drive import (
+    ControlWord,
+    DriveError,
+    DriveState,
+    DriveStatus,
+    decode_speed,
+    describe_fault,
+)
 from src.result import Err, Ok, Result
 from src.units import Metres, Monotonic, MotorRpm, elapsed
 
@@ -386,7 +402,30 @@ class BusWorker(threading.Thread):
                 return describe_error(error)
         raise assert_never(sent)
 
+    async def _enable_refusal(self) -> str | None:
+        """Why the start sequence may not be written now, or ``None``: one status read decides.
+
+        Not on a drive already OPERATION_ENABLED, nor while RFRD reads anything
+        but 0 in that read, nor without a status: the sequence's 6 drops the
+        output stage of an enabled drive, and its 7 and 15 re-power a turning
+        shaft (see the module docstring).
+        """
+        read = await self._built.drive.read_status()
+        match read:
+            case Ok(status):
+                if status.state is DriveState.OPERATION_ENABLED:
+                    return "variateur deja active (OPERATION_ENABLED)"
+                if status.output_rpm != 0:
+                    return f"arbre non lu a l'arret: RFRD={status.output_rpm} tr/min"
+                return None
+            case Err(error):
+                return f"etat illisible: {describe_error(error)}"
+        raise assert_never(read)
+
     async def _do_enable(self) -> str:
+        refused = await self._enable_refusal()
+        if refused is not None:
+            return f"ECHEC: activation refusee ({refused}); rien n'est ecrit"
         # LFRD = 0 FIRST. The start sequence ends with CMD = 15, and 15 with a
         # stale non-zero LFRD starts the motor at that speed. ATV320Drive.enable
         # deliberately writes no speed of its own (that is policy), so the
@@ -477,17 +516,25 @@ class BusWorker(threading.Thread):
     async def _reset_refusal(self) -> str | None:
         """Why a fault reset may not be written now, or ``None``: one status read decides.
 
-        Not while the output stage is enabled, nor while RFRD reads anything but
-        0 in that read, nor without a status: CMD = 128 and 6 drop the output
-        stage, which on a turning shaft is a freewheel (see the module docstring).
+        The main console's rule (``TrainingRuntime._check_faulted_drive``): the
+        drive in FAULT, RFRD at exactly 0 in that read, a named fault this
+        machine may reset. Anything else refuses, an unreadable status too:
+        CMD = 128 and 6 drop the output stage, which on a turning shaft is a
+        freewheel (see the module docstring).
         """
         read = await self._built.drive.read_status()
         match read:
             case Ok(status):
-                if status.state is DriveState.OPERATION_ENABLED:
-                    return "etage de puissance actif (OPERATION_ENABLED)"
+                if status.state is not DriveState.FAULT:
+                    return f"aucun defaut a acquitter ({status.state.name})"
                 if status.output_rpm != 0:
-                    return f"RFRD={status.output_rpm} tr/min"
+                    return f"arbre non lu a l'arret: RFRD={status.output_rpm} tr/min"
+                code = status.fault_code
+                if code is None:
+                    return "defaut non nomme (LFT non lu)"
+                fault = describe_fault(code).fault
+                if not fault.resettable:
+                    return f"defaut {fault.mnemonic} non rearmable depuis la console"
                 return None
             case Err(error):
                 return f"etat illisible: {describe_error(error)}"
@@ -496,7 +543,7 @@ class BusWorker(threading.Thread):
     async def _do_fault_reset(self) -> str:
         refused = await self._reset_refusal()
         if refused is not None:
-            return f"ECHEC: reset refuse, arbre non lu a l'arret ({refused}); rien n'est ecrit"
+            return f"ECHEC: reset refuse ({refused}); rien n'est ecrit"
         reset_failed = await self._command(ControlWord.FAULT_RESET)
         if reset_failed is not None:
             return f"ECHEC CMD=128: {reset_failed}"
@@ -913,6 +960,8 @@ async function tick(){
   set('tq',  s.derived.torque_pct===null?null:s.derived.torque_pct+'%');
   set('flt', s.fault);
   set('eta', s.status_word===null?null:'0x'+s.status_word.toString(16).padStart(4,'0'));
+  // Not on a drive already enabled or a shaft read turning: the console refuses it itself.
+  $('en').disabled=!(s.armed && s.link_ok && s.enabled===false && s.output_rpm===0);
   // Only a fault on a shaft read at rest: the console refuses any other reset itself.
   $('fr').disabled=!(s.link_ok && s.fault!==null && s.fault!=='aucun' && s.output_rpm===0);
   set('sp',  s.setpoint_rpm+' tr/min');
@@ -930,7 +979,7 @@ async function tick(){
       s.link.implausible+' valeurs impossibles rejetees.';
   } else b.style.display='none';
   $('act').textContent='derniere action: '+s.last_action+(s.last_error?(' | '+s.last_error):'');
- }catch(e){ set('st',null); $('fr').disabled=true; $('linkbad').style.display='block';
+ }catch(e){ set('st',null); $('fr').disabled=true; $('en').disabled=true; $('linkbad').style.display='block';
    $('linkbad').innerHTML='<b>CONSOLE INJOIGNABLE.</b>'; }
 }
 setInterval(tick,500); tick();

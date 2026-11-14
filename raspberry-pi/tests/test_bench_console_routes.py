@@ -32,6 +32,7 @@ from src.result import Ok
 from tests.test_atv320 import (
     ETA_FAULT,
     ETA_SWITCH_ON_DISABLED,
+    ETA_SWITCHED_ON,
     LFT_OVERCURRENT,
     Behave,
     FakeBus,
@@ -42,6 +43,9 @@ from tests.test_atv320 import build_drive as driver_over
 
 WAIT_S: Final[float] = 10.0
 """How long a test waits for the bus thread at most; it is done within a cycle or two."""
+
+LFT_MODBUS_LOSS: Final[int] = 5
+"""SLF1, the Modbus loss the bench saw: a fault the console may reset."""
 
 UNLISTED_LFT: Final[int] = 999
 """A fault code no table of the driver's knows."""
@@ -111,7 +115,8 @@ class Bench:
         assert armed.status_code == HTTPStatus.OK
         enabled = await self.press("/api/enable")
         assert enabled.status_code == HTTPStatus.OK
-        assert (await self.result("enable")).startswith("enable: ok")
+        result = await self.result("enable")
+        assert result.startswith("enable: ok")
 
 
 def _commands(writes: list[tuple[int, int | None]], cmd: int) -> list[int | None]:
@@ -183,10 +188,12 @@ async def test_enable_zeroes_the_reference_then_runs_the_start_sequence(rig: Ben
 
 
 async def test_enable_is_not_tried_when_the_zero_reference_is_not_confirmed(rig: Bench) -> None:
-    assert (await rig.press("/api/arm", {"motor_uncoupled": True})).status_code == HTTPStatus.OK
+    armed = await rig.press("/api/arm", {"motor_uncoupled": True})
+    assert armed.status_code == HTTPStatus.OK
     mark = rig.mark()
     rig.bus.script_writes.append(io_exception())
-    assert (await rig.press("/api/enable")).status_code == HTTPStatus.OK
+    enabled = await rig.press("/api/enable")
+    assert enabled.status_code == HTTPStatus.OK
     shown = await rig.result("enable")
     assert "activation NON tentee" in shown, shown
     assert [address for address, _value in rig.since(mark)] == [rig.regs.lfrd]
@@ -196,7 +203,8 @@ async def test_a_speed_is_bounded_by_the_tool_s_ceiling_and_kept_alive(rig: Benc
     await rig.armed_and_enabled()
     asked = await rig.press("/api/speed", {"rpm": 450})
     assert asked.status_code == HTTPStatus.OK
-    assert await rig.result("speed") == "speed 450 tr/min: ok (relu sur LFRD)"
+    result = await rig.result("speed")
+    assert result == "speed 450 tr/min: ok (relu sur LFRD)"
     assert rig.worker.snap.setpoint_rpm == 300, "clamped to --max-rpm"
     mark = rig.mark()
     await rig.polled()
@@ -206,6 +214,52 @@ async def test_a_speed_is_bounded_by_the_tool_s_ceiling_and_kept_alive(rig: Benc
     assert set(kept_alive) == {(rig.regs.lfrd, 300)}
     await rig.press("/api/stop")
     await rig.result("stop")
+
+
+async def test_enable_is_refused_on_a_drive_already_enabled_and_turning(rig: Bench) -> None:
+    """R2 of ANH-218: the sequence's 6 would drop the output stage of a running drive, then 7
+    and 15 re-power a turning shaft. Nothing is written, and the console stays armed."""
+    await rig.armed_and_enabled()
+    rig.bus.registers[rig.regs.rfrd] = TURNING_RPM
+    await rig.polled()
+    mark = rig.mark()
+    rig.worker.snap.last_action = "-"  # the first enable's result is not this one's
+    again = await rig.press("/api/enable")
+    assert again.status_code == HTTPStatus.OK
+    shown = await rig.result("enable")
+    assert shown == (
+        "enable: ECHEC: activation refusee (variateur deja active (OPERATION_ENABLED)); "
+        "rien n'est ecrit"
+    )
+    assert _commands(rig.since(mark), rig.regs.cmd) == []
+    assert rig.worker.snap.armed is True
+    rig.bus.registers[rig.regs.rfrd] = 0
+
+
+async def test_enable_is_refused_on_a_shaft_still_turning_with_its_stage_off(rig: Bench) -> None:
+    armed = await rig.press("/api/arm", {"motor_uncoupled": True})
+    assert armed.status_code == HTTPStatus.OK
+    rig.bus.registers[rig.regs.rfrd] = 300  # coasting: SWITCH_ON_DISABLED, RFRD 300
+    await rig.polled()
+    mark = rig.mark()
+    await rig.press("/api/enable")
+    shown = await rig.result("enable")
+    assert "activation refusee (arbre non lu a l'arret: RFRD=300 tr/min)" in shown, shown
+    assert rig.since(mark) == [], "not even LFRD"
+    rig.bus.registers[rig.regs.rfrd] = 0
+
+
+async def test_enable_is_refused_without_a_status(rig: Bench) -> None:
+    armed = await rig.press("/api/arm", {"motor_uncoupled": True})
+    assert armed.status_code == HTTPStatus.OK
+    await rig.polled()
+    mark = rig.mark()
+    rig.bus.sticky_reads = io_exception()
+    await rig.press("/api/enable")
+    shown = await rig.result("enable")
+    rig.bus.sticky_reads = Behave.NORMALLY
+    assert "activation refusee (etat illisible: " in shown, shown
+    assert rig.since(mark) == []
 
 
 # =========================================================================
@@ -218,7 +272,8 @@ async def test_stop_ramps_and_writes_6_only_once_the_shaft_reads_still(rig: Benc
     mark = rig.mark()
     stopped = await rig.press("/api/stop")
     assert stopped.status_code == HTTPStatus.OK
-    assert await rig.result("stop") == "stop: ok (RFRD=0, puis CMD=6)"
+    result = await rig.result("stop")
+    assert result == "stop: ok (RFRD=0, puis CMD=6)"
     written = rig.since(mark)
     assert _commands(written, rig.regs.cmd) == [ControlWord.SWITCH_ON, ControlWord.SHUTDOWN]
     assert _references(written, rig.regs.lfrd) == {0}
@@ -252,7 +307,8 @@ async def test_estop_disarms_zeroes_the_reference_and_keeps_the_dec_ramp(rig: Be
     assert answered.status_code == HTTPStatus.OK
     assert answered.json() == {"queued": "estop", "armed": False}
     assert rig.worker.snap.armed is False, "disarmed at once, before the bus thread runs it"
-    assert await rig.result("estop") == "estop: ok (LFRD=0 relu, CMD=7: rampe dEC)"
+    result = await rig.result("estop")
+    assert result == "estop: ok (LFRD=0 relu, CMD=7: rampe dEC)"
     written = rig.since(mark)
     assert _commands(written, rig.regs.cmd) == [ControlWord.SWITCH_ON], "never 6"
     assert _references(written, rig.regs.lfrd) == {0}
@@ -275,8 +331,8 @@ async def test_the_fault_reset_is_refused_on_a_turning_enabled_drive(rig: Bench)
     assert answered.status_code == HTTPStatus.OK
     shown = await rig.result("fault_reset")
     assert shown == (
-        "fault_reset: ECHEC: reset refuse, arbre non lu a l'arret "
-        "(etage de puissance actif (OPERATION_ENABLED)); rien n'est ecrit"
+        "fault_reset: ECHEC: reset refuse (aucun defaut a acquitter (OPERATION_ENABLED)); "
+        "rien n'est ecrit"
     )
     assert _commands(rig.since(mark), rig.regs.cmd) == []
     assert rig.worker.snap.armed is True, "a refused reset changes nothing"
@@ -292,7 +348,7 @@ async def test_the_fault_reset_is_refused_in_fault_while_the_shaft_still_turns(
     mark = rig.mark()
     await rig.press("/api/fault-reset")
     shown = await rig.result("fault_reset")
-    assert "reset refuse, arbre non lu a l'arret (RFRD=300 tr/min)" in shown, shown
+    assert "reset refuse (arbre non lu a l'arret: RFRD=300 tr/min)" in shown, shown
     assert _commands(rig.since(mark), rig.regs.cmd) == []
     rig.bus.registers[rig.regs.rfrd] = 0
 
@@ -306,21 +362,49 @@ async def test_the_fault_reset_is_refused_without_a_status(rig: Bench) -> None:
     await rig.press("/api/fault-reset")
     shown = await rig.result("fault_reset")
     rig.bus.sticky_reads = Behave.NORMALLY
-    assert "reset refuse, arbre non lu a l'arret (etat illisible: " in shown, shown
+    assert "reset refuse (etat illisible: " in shown, shown
     assert _commands(rig.since(mark), rig.regs.cmd) == []
 
 
 async def test_the_fault_reset_writes_128_then_6_on_a_drive_in_fault(rig: Bench) -> None:
     rig.bus.registers[rig.regs.eta] = ETA_FAULT
-    rig.bus.registers[rig.regs.lft] = LFT_OVERCURRENT
+    rig.bus.registers[rig.regs.lft] = LFT_MODBUS_LOSS
     await rig.polled()
-    assert rig.worker.snap.fault == "OVERCURRENT"
+    assert rig.worker.snap.fault == "MODBUS_COMM_LOSS"
     mark = rig.mark()
     answered = await rig.press("/api/fault-reset")
     assert answered.status_code == HTTPStatus.OK
-    assert await rig.result("fault_reset") == "fault_reset: ok"
+    result = await rig.result("fault_reset")
+    assert result == "fault_reset: ok"
     cmd = rig.regs.cmd
     assert rig.since(mark) == [(cmd, ControlWord.FAULT_RESET), (cmd, ControlWord.SHUTDOWN)]
+
+
+async def test_the_fault_reset_is_refused_on_a_drive_not_in_fault_even_with_its_stage_off(
+    rig: Bench,
+) -> None:
+    """Not enabled is not enough: the console's rule asks for a fault."""
+    rig.bus.registers[rig.regs.eta] = ETA_SWITCHED_ON
+    await rig.polled()
+    mark = rig.mark()
+    await rig.press("/api/fault-reset")
+    shown = await rig.result("fault_reset")
+    assert "reset refuse (aucun defaut a acquitter (SWITCHED_ON))" in shown, shown
+    assert _commands(rig.since(mark), rig.regs.cmd) == []
+
+
+async def test_the_fault_reset_is_refused_on_a_fault_the_console_may_not_reset(
+    rig: Bench,
+) -> None:
+    """OCF, an overcurrent: named, the shaft read at rest, and still not resettable here."""
+    rig.bus.registers[rig.regs.eta] = ETA_FAULT
+    rig.bus.registers[rig.regs.lft] = LFT_OVERCURRENT
+    await rig.polled()
+    mark = rig.mark()
+    await rig.press("/api/fault-reset")
+    shown = await rig.result("fault_reset")
+    assert "reset refuse (defaut OCF non rearmable depuis la console)" in shown, shown
+    assert _commands(rig.since(mark), rig.regs.cmd) == []
 
 
 # =========================================================================
