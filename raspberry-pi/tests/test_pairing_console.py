@@ -208,7 +208,7 @@ def test_main_ignores_a_file_that_is_not_one_and_starts_unpaired(
     assert KEY not in caplog.text
 
 
-def test_main_takes_the_env_s_key_over_the_file_s_and_says_so(
+def test_main_leaves_the_file_out_whole_when_the_env_has_its_own_key(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     path = tmp_path / "machine.env"
@@ -217,12 +217,16 @@ def test_main_takes_the_env_s_key_over_the_file_s_and_says_so(
     monkeypatch.setattr(local_panel, "APPLIED_CONFIG_PATH", tmp_path / "none.json")
     other = "anh1." + "3" * 32 + "." + "4" * 64
     seen = capture(monkeypatch)
-    assert main({**BASE_ENV, "MACHINE_API_KEY": other}) == EXIT_OK
+    elsewhere = "https://other.convex.site"
+    assert main({**BASE_ENV, "MACHINE_API_KEY": other, "CONVEX_URL": elsewhere}) == EXIT_OK
     config, _ = seen[0]
     assert config.cloud is not None
-    assert config.cloud.api_key == other
-    assert "MACHINE_API_KEY of the .env differs from data/machine.env" in caplog.text
+    assert (config.cloud.url, config.cloud.api_key) == (elsewhere, other)
+    # Not the file's machine either: nothing of the file is mixed with the .env's key.
+    assert config.record.machine_id == "unassigned"
+    assert "data/machine.env not used (the .env sets MACHINE_API_KEY)" in caplog.text
     assert other not in caplog.text
+    assert KEY not in caplog.text
 
 
 async def test_on_the_simulated_drive_a_code_typed_pairs_restarts_and_links_the_next_start(
@@ -251,7 +255,8 @@ async def test_on_the_simulated_drive_a_code_typed_pairs_restarts_and_links_the_
     assert paired.status_code == httpx.codes.OK
     assert [str(request.url) for request in asked] == [f"{ORIGIN}/api/machine/pair"]
     # The restart asked is taken at rest, with its own code.
-    assert await panel.run(asyncio.Event(), FakeWeb()) == EXIT_RESTART
+    outcome = await panel.run(asyncio.Event(), FakeWeb())
+    assert outcome == EXIT_RESTART
     written = tmp_path / "data" / "machine.env"
     assert read_paired(written) == Ok(PairedLink(KEY, ORIGIN, MACHINE))
     # The next start: the environment main() starts on (startup_environment).

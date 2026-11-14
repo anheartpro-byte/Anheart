@@ -4321,12 +4321,20 @@ Le code ([`src/pairing.py`](../raspberry-pi/src/pairing.py)) :
 * **Le Pi.** Son numéro de série est lu dans `/proc/device-tree/serial-number`,
   comparé comme le serveur le fait (sans espaces de tête ni de fin, en minuscules).
   Illisible : la carte le dit, et aucun appairage n'est possible.
-* **L'adresse.** Le `CONVEX_URL` du `.env` quand il est une adresse https ; sinon
-  la carte la demande, https seulement.
+* **L'adresse.** Le `CONVEX_URL` du `.env` de root quand il est une adresse https,
+  quelle qu'elle soit : c'est la porte des essais et de la simulation. Sinon la carte
+  la demande, et n'accepte qu'un déploiement d'Anheart : https, et un hôte qui finit
+  par `.convex.site` (`typed_address_host_suffix` du contrat). Une console appairée
+  à un autre serveur, qui accepterait n'importe quel code, lui enverrait ses séances
+  et ses enregistrements, et pourrait recevoir de lui des départs. Le modèle
+  `.env.example` laisse `CONVEX_URL` vide : la carte demande alors l'adresse, au lieu
+  d'appairer contre un exemple.
 * **L'appel.** `POST /api/machine/pair {code, serialPi}` avec l'en-tête du contrat
   et sans clé. La réponse est refusée, et rien n'est écrit, si sa clé ou son
-  identifiant sont mal formés, ou si son `convexUrl` n'est pas l'origine https à
-  laquelle la console vient de parler. Un `RECORD_MACHINE_ID` du `.env` autre que
+  identifiant sont mal formés, si le préfixe qu'elle donne de la clé n'est pas
+  exactement `anh1.` et 8 caractères hexadécimaux du début de cette clé (le serveur
+  ne peut pas faire afficher la clé entière), ou si son `convexUrl` n'est pas
+  l'origine https à laquelle la console vient de parler. Un `RECORD_MACHINE_ID` du `.env` autre que
   la machine du code : refus, rien n'est écrit, et la carte dit de corriger le
   `.env` puis de demander un nouveau code (le serveur a déjà donné une clé et
   révoqué les autres). Le code tapé n'est ni gardé, ni journalisé, ni renvoyé ; la
@@ -4342,9 +4350,14 @@ Le code ([`src/pairing.py`](../raspberry-pi/src/pairing.py)) :
   trois clés, une fois chacune, sans guillemets, espaces ni rien qu'un shell
   étendrait, une clé bien formée, une origine https, un identifiant. Tout autre
   contenu fait ignorer le fichier, avec une ligne au journal, et la console démarre
-  sans clé : le fichier ne peut jamais régler une clé de sûreté. Clé par clé, une
-  valeur du `.env` l'emporte sur celle du fichier, avec un avertissement quand
-  elles diffèrent.
+  sans clé : le fichier ne peut jamais régler une clé de sûreté. Le fichier est
+  ouvert d'abord, sans suivre de lien et sans attendre, puis jugé sur ce qui a été
+  ouvert (un fichier ordinaire, 1 Kio au plus) : un tube glissé à sa place ne
+  bloque pas le démarrage. Les trois clés sont prises ensemble ou pas du tout :
+  un `.env` qui règle sa propre `MACHINE_API_KEY`, un autre `RECORD_MACHINE_ID` ou
+  un autre `CONVEX_URL` fait laisser le fichier de côté, entier, avec un
+  avertissement. Une clé d'une machine n'est jamais envoyée avec l'identifiant
+  d'une autre, ni à un autre déploiement.
 * **Ensuite.** La console redémarre au repos (le redémarrage contrôlé, code 75) et
   revient reliée au tableau de bord. Deux étapes de la mise en service ne sont pas
   encore les siennes, et la carte les liste comme à faire : l'inscription au

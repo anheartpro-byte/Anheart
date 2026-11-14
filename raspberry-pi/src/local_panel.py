@@ -3073,9 +3073,10 @@ def build_panel(  # noqa: PLR0915  # one statement per wired part
 
 
 APPLIED_CONFIG_PATH: Final[Path] = LOCAL_PROFILES_PATH.parent / APPLIED_FILE
-PAIRED_PATH: Final[Path] = LOCAL_PROFILES_PATH.parent / MACHINE_ENV_FILE
-"""What a pairing writes (ANH-115): the machine's key, address and identifier."""
 """``data/config.applied.json``: the dashboard's configuration this console applied (ANH-141)."""
+
+PAIRED_PATH: Final[Path] = LOCAL_PROFILES_PATH.parent / MACHINE_ENV_FILE
+"""``data/machine.env``: what a pairing wrote (ANH-115): the key, address and machine."""
 
 OPERATORS_FILE: Final[str] = "operators.json"
 """The signed operator list accepted last, next to the programmes (ANH-152)."""

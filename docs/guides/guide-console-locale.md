@@ -2185,7 +2185,8 @@ de la machine sur le site.
    ne sert qu'une fois.
 3. Taper le code dans **Code d'appairage** (majuscules ou minuscules, avec ou sans le
    tiret). Si la carte montre **Adresse du tableau de bord**, y taper l'adresse
-   `https://<deploiement>.convex.site`.
+   `https://<deploiement>.convex.site` : la carte n'accepte qu'un déploiement
+   d'Anheart, une adresse https en `.convex.site`.
 4. **Appairer**. La carte dit « console appairee (cle anh1.…) : elle redemarre au
    repos, reliee au tableau de bord ». La console redémarre d'elle même ; après le
    redémarrage, la carte n'apparaît plus et la pastille du tableau de bord passe à

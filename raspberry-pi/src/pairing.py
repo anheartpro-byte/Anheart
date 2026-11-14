@@ -70,6 +70,16 @@ PAIR_ROUTE: Final[str] = "/api/machine/pair"
 API_KEY: Final[re.Pattern[str]] = re.compile(r"anh1\.[0-9a-f]{32}\.[0-9a-f]{64}")
 """A machine key as the dashboard issues it: ``anh1.<selector>.<secret>``, in hexadecimal."""
 
+KEY_PREFIX: Final[re.Pattern[str]] = re.compile(r"anh1\.[0-9a-f]{8}")
+"""What the dashboard shows of a key (``keyPrefix`` of convex/lib/machineKeys.ts): ``anh1.``
+and the first 8 characters of its selector, never more of the key."""
+
+TYPED_HOST_SUFFIX: Final[str] = ".convex.site"
+"""The end of the host of an address typed on the screen: one of Anheart's deployments
+(``typed_address_host_suffix`` of ``machine_pairing``, pinned by the tests). An address the
+root's ``.env`` sets is not held to it: that is the override, for development and the
+simulation."""
+
 SERIAL: Final[re.Pattern[str]] = re.compile(r"[0-9a-z][0-9a-z._:-]{0,63}")
 """A serial number as the dashboard compares it (``normalizedSerial`` of
 convex/lib/machinePairing.ts)."""
@@ -125,8 +135,21 @@ def https_origin(url: str) -> str | None:
         or parsed.userinfo
     ):
         return None
+    # The host as it goes on the wire: an internationalised name encoded, IPv6 in brackets.
+    host = parsed.raw_host.decode("ascii")
+    named = f"[{host}]" if ":" in host else host
     port = "" if parsed.port is None else f":{parsed.port}"
-    return f"https://{parsed.host}{port}"
+    return f"https://{named}{port}"
+
+
+def typed_origin(url: str) -> str | None:
+    """An address typed on the screen as its origin, when it is one of Anheart's
+    deployments (:data:`TYPED_HOST_SUFFIX`); ``None`` otherwise."""
+    origin = https_origin(url)
+    if origin is None:
+        return None
+    host = httpx.URL(origin).raw_host.decode("ascii")
+    return origin if host.endswith(TYPED_HOST_SUFFIX) and host != TYPED_HOST_SUFFIX[1:] else None
 
 
 def read_serial(path: Path = SERIAL_PATH) -> Result[str, str]:
@@ -188,24 +211,28 @@ def read_paired(path: Path) -> Result[PairedLink | None, str]:  # noqa: PLR0911 
     """The file a pairing wrote, ``None`` when there is none, or why it is not read.
 
     A link, anything but a regular file, a file larger than :data:`MAX_FILE_BYTES` or one
-    :func:`parse_paired` refuses is not read. Never raises.
+    :func:`parse_paired` refuses is not read. Opened first, without following a link and
+    without waiting (a pipe swapped in would otherwise hold the startup), then judged on
+    what was opened. Never raises.
     """
     try:
-        status = path.lstat()
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     except FileNotFoundError:
         return Ok(None)
     except OSError as error:
         return Err(describe_os_error(error))
-    if not stat.S_ISREG(status.st_mode):
-        return Err("pas un fichier ordinaire")
-    if status.st_size > MAX_FILE_BYTES:
-        return Err("trop grand")
     try:
-        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
-        with os.fdopen(descriptor, "rb") as handle:
+        status = os.fstat(descriptor)
+        if not stat.S_ISREG(status.st_mode):
+            return Err("pas un fichier ordinaire")
+        if status.st_size > MAX_FILE_BYTES:
+            return Err("trop grand")
+        with os.fdopen(descriptor, "rb", closefd=False) as handle:
             raw = handle.read(MAX_FILE_BYTES + 1)
     except OSError as error:
         return Err(describe_os_error(error))
+    finally:
+        os.close(descriptor)
     try:
         text = raw.decode("ascii")
     except UnicodeDecodeError:
@@ -218,21 +245,22 @@ def read_paired(path: Path) -> Result[PairedLink | None, str]:  # noqa: PLR0911 
 
 def write_paired(path: Path, link: PairedLink) -> Result[None, str]:
     """Write the file: a private temporary file, flushed, renamed over ``path``, then
-    the directory flushed. A link at ``path`` is refused. Never raises."""
-    if path.is_symlink():
-        return Err("un lien est a la place du fichier")
+    the directory flushed. A link at ``path`` is refused. Never raises: a key the
+    dashboard issued and the console then lost to an exception would be lost for good."""
     temporary = path.with_name(f".{path.name}.tmp")
     try:
+        if path.is_symlink():
+            return Err("un lien est a la place du fichier")
         path.parent.mkdir(parents=True, exist_ok=True)
         temporary.unlink(missing_ok=True)
         create_private(temporary, render_paired(link))
         fsync_path(temporary)
         temporary.replace(path)
         fsync_path(path.parent)
-    except OSError as error:
-        with contextlib.suppress(OSError):
+    except (OSError, ValueError) as error:
+        with contextlib.suppress(OSError, ValueError):
             temporary.unlink(missing_ok=True)
-        return Err(describe_os_error(error))
+        return Err(describe_os_error(error) if isinstance(error, OSError) else type(error).__name__)
     return Ok(None)
 
 
@@ -244,23 +272,24 @@ def _given(env: Mapping[str, str], key: str) -> str | None:
 
 def paired_environment(
     env: Mapping[str, str], link: PairedLink | None
-) -> tuple[Mapping[str, str], tuple[str, ...]]:
-    """``env`` with the file's keys where it sets none, and the keys it sets otherwise.
+) -> tuple[Mapping[str, str], str | None]:
+    """``env`` with the file's three keys, or ``env`` alone and why the file is left out.
 
-    Key by key: a key the ``.env`` sets wins over the file's, and is named when the two
-    differ, for the console to say so once.
+    The three together or none: a key of one machine is never sent with the identifier
+    of another, nor to another deployment. The ``.env`` wins whenever it disagrees: it
+    sets a key of its own, names another machine, or another address.
     """
     if link is None:
-        return env, ()
-    merged = dict(env)
-    differing: list[str] = []
-    for key, value in link.values().items():
-        given = _given(env, key)
-        if given is None:
-            merged[key] = value
-        elif given != value:
-            differing.append(key)
-    return merged, tuple(differing)
+        return env, None
+    if _given(env, KEY_MACHINE_API_KEY) is not None:
+        return env, f"the .env sets {KEY_MACHINE_API_KEY}"
+    machine = _given(env, KEY_RECORD_MACHINE_ID)
+    if machine is not None and machine != link.machine_id:
+        return env, f"the .env names another {KEY_RECORD_MACHINE_ID}"
+    url = _given(env, KEY_CONVEX_URL)
+    if url is not None and https_origin(url) != link.convex_url:
+        return env, f"the .env sets another {KEY_CONVEX_URL}"
+    return {**env, **link.values()}, None
 
 
 def startup_environment(env: Mapping[str, str], path: Path) -> Mapping[str, str]:
@@ -278,12 +307,12 @@ def startup_environment(env: Mapping[str, str], path: Path) -> Mapping[str, str]
             read.error,
         )
         return env
-    merged, differing = paired_environment(env, read.value)
-    for key in differing:
+    merged, left_out = paired_environment(env, read.value)
+    if left_out is not None:
         _logger.warning(
-            "pairing: %s of the .env differs from data/%s: the .env's is used",
-            key,
+            "pairing: data/%s not used (%s): the console starts on its .env alone",
             MACHINE_ENV_FILE,
+            left_out,
         )
     return merged
 
@@ -378,7 +407,11 @@ def _paired_of(fields: Document | None, origin: str) -> Result[Paired, PairingEr
         return Err(PairingUnusable("identifiant de machine"))
     if api_key is None or API_KEY.fullmatch(api_key) is None:
         return Err(PairingUnusable("cle"))
-    if key_prefix is None or not api_key.startswith(key_prefix):
+    if (
+        key_prefix is None
+        or KEY_PREFIX.fullmatch(key_prefix) is None
+        or not api_key.startswith(key_prefix)
+    ):
         return Err(PairingUnusable("prefixe de la cle"))
     if convex_url is None or https_origin(convex_url) != origin:
         return Err(PairingUnusable("adresse : pas celle qui a repondu"))
@@ -514,9 +547,12 @@ class PairingDesk:
         serial = self._serial
         if isinstance(serial, Err):
             return Err(f"numero de serie du Pi {serial.error} : aucun appairage possible")
-        origin = self._setup.address or https_origin(typed_address or "")
+        origin = self._setup.address or typed_origin(typed_address or "")
         if origin is None:
-            return Err("adresse du tableau de bord attendue : https://<deploiement>.convex.site")
+            return Err(
+                "adresse du tableau de bord attendue : https://<deploiement>.convex.site, "
+                "un deploiement d'Anheart"
+            )
         typed = code.strip()
         if not typed or len(typed) > MAX_CODE_CHARS:
             return Err("code d'appairage attendu : les 8 caracteres affiches sur le site")

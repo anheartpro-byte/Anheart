@@ -13,10 +13,11 @@ import os
 import stat
 from collections.abc import Callable
 from pathlib import Path
-from typing import Final
+from typing import Final, cast
 
 import httpx
 import pytest
+from dotenv import dotenv_values
 
 from src import pairing
 from src.contract import CONTRACT_HEADER, CONTRACT_VERSION
@@ -24,6 +25,7 @@ from src.pairing import (
     ALREADY_PAIRED,
     MAX_FILE_BYTES,
     PAIRING_BUSY,
+    TYPED_HOST_SUFFIX,
     PairedLink,
     PairingDesk,
     PairingRefused,
@@ -45,7 +47,9 @@ from src.pairing import (
     write_paired,
 )
 from src.result import Err, Ok
+from tests.test_contract import shared
 
+REPO: Final[Path] = Path(__file__).resolve().parents[2]
 ORIGIN: Final[str] = "https://deploiement.convex.site"
 SERIAL: Final[str] = "10000000c0ffee42"
 MACHINE: Final[str] = "machine123"
@@ -100,6 +104,9 @@ def serial_file(tmp_path: Path, raw: bytes = SERIAL.upper().encode() + b"\x00") 
         ("https://user:pass@deploiement.convex.site", None),
         ("https://[::1", None),
         ("", None),
+        ("https://bücher.convex.site", "https://xn--bcher-kva.convex.site"),
+        ("https://xn--bcher-kva.convex.site", "https://xn--bcher-kva.convex.site"),
+        ("https://[::1]:8443", "https://[::1]:8443"),
     ],
 )
 def test_only_an_https_origin_is_an_address(url: str, origin: str | None) -> None:
@@ -184,7 +191,45 @@ def test_a_link_where_the_file_belongs_is_neither_written_nor_read(tmp_path: Pat
     path = tmp_path / "machine.env"
     path.symlink_to(target)
     assert write_paired(path, LINK) == Err("un lien est a la place du fichier")
+    assert read_paired(path) == Err("OSError:ELOOP")
+
+
+def test_a_pipe_where_the_file_belongs_is_refused_at_once(tmp_path: Path) -> None:
+    """Swapped in after any look at the name, a pipe would hold the startup on its read:
+    opened without waiting, it is judged on what was opened, and refused."""
+    path = tmp_path / "machine.env"
+    os.mkfifo(path)
     assert read_paired(path) == Err("pas un fichier ordinaire")
+
+
+def test_a_file_the_disk_fails_once_opened_is_said_and_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "machine.env"
+    assert write_paired(path, LINK) == Ok(None)
+    closed: list[int] = []
+    real_close = os.close
+
+    def failing(_descriptor: int) -> os.stat_result:
+        raise OSError(5, "Input/output error")
+
+    def remembered(descriptor: int) -> None:
+        closed.append(descriptor)
+        real_close(descriptor)
+
+    monkeypatch.setattr(os, "fstat", failing)
+    monkeypatch.setattr(os, "close", remembered)
+    assert read_paired(path) == Err("OSError:EIO")
+    assert len(closed) == 1
+
+
+def test_the_writer_never_raises_whatever_it_is_given(tmp_path: Path) -> None:
+    """A key the dashboard issued and the console then lost to an exception would be lost
+    for good: what cannot be written is said, and nothing raises."""
+    unicode = PairedLink(KEY, "https://bücher.convex.site", MACHINE)
+    assert write_paired(tmp_path / "machine.env", unicode) == Err("UnicodeEncodeError")
+    assert list(tmp_path.iterdir()) == []
+    assert write_paired(tmp_path / "machine\x00.env", LINK) == Err("ValueError")
 
 
 def test_a_write_the_disk_refuses_leaves_no_file(tmp_path: Path) -> None:
@@ -236,24 +281,40 @@ def test_what_is_not_a_small_ascii_file_of_the_three_keys_is_not_read(
 # --- the .env and the file ----------------------------------------------------------------
 
 
-def test_each_key_the_env_sets_wins_and_is_named_when_the_file_says_otherwise() -> None:
-    assert paired_environment({"A": "1"}, None) == ({"A": "1"}, ())
-    merged, differing = paired_environment(
-        {"CONVEX_URL": ORIGIN, "RECORD_MACHINE_ID": "unassigned", "MACHINE_API_KEY": " "}, LINK
-    )
-    assert (merged["MACHINE_API_KEY"], merged["CONVEX_URL"], merged["RECORD_MACHINE_ID"]) == (
-        KEY,
-        ORIGIN,
-        MACHINE,
-    )
-    assert differing == ()
-    merged, differing = paired_environment(
-        {"CONVEX_URL": "https://other.convex.site", "RECORD_MACHINE_ID": "machine999"}, LINK
-    )
-    assert merged["CONVEX_URL"] == "https://other.convex.site"
-    assert merged["RECORD_MACHINE_ID"] == "machine999"
-    assert merged["MACHINE_API_KEY"] == KEY
-    assert differing == ("CONVEX_URL", "RECORD_MACHINE_ID")
+@pytest.mark.parametrize(
+    "env",
+    [
+        {},
+        {"MACHINE_API_KEY": " ", "RECORD_MACHINE_ID": "unassigned", "CONVEX_URL": ""},
+        {"RECORD_MACHINE_ID": MACHINE, "CONVEX_URL": f"{ORIGIN}/"},
+    ],
+)
+def test_the_file_s_three_keys_are_taken_together_where_the_env_agrees(
+    env: dict[str, str],
+) -> None:
+    merged, left_out = paired_environment({**env, "UI_PORT": "8090"}, LINK)
+    assert left_out is None
+    assert {key: merged[key] for key in ("MACHINE_API_KEY", "CONVEX_URL", "RECORD_MACHINE_ID")} == {
+        "MACHINE_API_KEY": KEY,
+        "CONVEX_URL": ORIGIN,
+        "RECORD_MACHINE_ID": MACHINE,
+    }
+    assert merged["UI_PORT"] == "8090"
+
+
+@pytest.mark.parametrize(
+    ("env", "why"),
+    [
+        ({"MACHINE_API_KEY": "anh1." + "3" * 32 + "." + "4" * 64}, "the .env sets MACHINE_API_KEY"),
+        ({"RECORD_MACHINE_ID": "machine999"}, "the .env names another RECORD_MACHINE_ID"),
+        ({"CONVEX_URL": "https://other.convex.site"}, "the .env sets another CONVEX_URL"),
+        ({"CONVEX_URL": "http://localhost:3210"}, "the .env sets another CONVEX_URL"),
+    ],
+)
+def test_the_file_is_left_out_whole_where_the_env_disagrees(env: dict[str, str], why: str) -> None:
+    """Never a key of one machine with the identifier of another, or another address."""
+    assert paired_environment({}, None) == ({}, None)
+    assert paired_environment(env, LINK) == (env, why)
 
 
 def test_the_console_starts_on_the_file_or_says_why_not(
@@ -262,10 +323,10 @@ def test_the_console_starts_on_the_file_or_says_why_not(
     path = tmp_path / "machine.env"
     assert startup_environment({"UI_PORT": "8090"}, path) == {"UI_PORT": "8090"}
     assert write_paired(path, LINK) == Ok(None)
+    assert startup_environment({}, path)["MACHINE_API_KEY"] == KEY
     started = startup_environment({"RECORD_MACHINE_ID": "machine999"}, path)
-    assert started["MACHINE_API_KEY"] == KEY
-    assert started["RECORD_MACHINE_ID"] == "machine999"
-    assert "RECORD_MACHINE_ID of the .env differs from data/machine.env" in caplog.text
+    assert started == {"RECORD_MACHINE_ID": "machine999"}
+    assert "data/machine.env not used (the .env names another RECORD_MACHINE_ID)" in caplog.text
     path.write_text("MOTOR_MAX_RPM=900\n")
     assert startup_environment({"UI_PORT": "8090"}, path) == {"UI_PORT": "8090"}
     assert "data/machine.env ignored (3 lignes attendues, 1 lues)" in caplog.text
@@ -319,6 +380,19 @@ async def test_the_dashboard_is_asked_with_the_code_the_serial_and_the_contract(
             httpx.Response(200, json=answer(key_prefix="anh1.99")),
             PairingUnusable("prefixe de la cle"),
         ),
+        (httpx.Response(200, json=answer(key_prefix=KEY)), PairingUnusable("prefixe de la cle")),
+        (
+            httpx.Response(200, json=answer(key_prefix="anh1." + "1" * 32)),
+            PairingUnusable("prefixe de la cle"),
+        ),
+        (
+            httpx.Response(200, json=answer(key_prefix="anh1.1111111")),
+            PairingUnusable("prefixe de la cle"),
+        ),
+        (
+            httpx.Response(200, json=answer(key_prefix="ANH1.11111111")),
+            PairingUnusable("prefixe de la cle"),
+        ),
         (
             httpx.Response(200, json=answer(convex_url=None)),
             PairingUnusable("adresse : pas celle qui a repondu"),
@@ -337,7 +411,8 @@ async def test_every_other_answer_is_an_error_and_nothing_of_it_is_taken(
     response: httpx.Response, error: object
 ) -> None:
     async with client_of(lambda _request: response)() as client:
-        assert await request_pairing(client, ORIGIN, CODE, SERIAL) == Err(error)
+        outcome = await request_pairing(client, ORIGIN, CODE, SERIAL)
+        assert outcome == Err(error)
 
 
 async def test_no_answer_is_said_by_its_kind() -> None:
@@ -345,9 +420,8 @@ async def test_no_answer_is_said_by_its_kind() -> None:
         raise httpx.ConnectError("refused", request=request)
 
     async with client_of(handler)() as client:
-        assert await request_pairing(client, ORIGIN, CODE, SERIAL) == Err(
-            PairingUnreachable("ConnectError")
-        )
+        outcome = await request_pairing(client, ORIGIN, CODE, SERIAL)
+        assert outcome == Err(PairingUnreachable("ConnectError"))
 
 
 def test_each_error_is_said_on_the_screen_never_with_the_code() -> None:
@@ -429,7 +503,8 @@ async def test_a_pairing_writes_the_file_asks_for_the_restart_then_takes_no_othe
     assert restarts == ["restart"]
     assert read_paired(tmp_path / "data" / "machine.env") == Ok(LINK)
     assert screen.view().key_prefix == PREFIX
-    assert await screen.pair(CODE, None) == Err(ALREADY_PAIRED)
+    outcome = await screen.pair(CODE, None)
+    assert outcome == Err(ALREADY_PAIRED)
     assert restarts == ["restart"]
 
 
@@ -442,28 +517,66 @@ async def test_the_address_typed_is_asked_when_the_env_sets_none(tmp_path: Path)
 
     screen = desk(tmp_path, handler, address=None)
     assert screen.view().address is None
-    for typed in (None, "", "http://deploiement.convex.site"):
+    for typed in (
+        None,
+        "",
+        "http://deploiement.convex.site",
+        "https://attacker.example",
+        "https://convex.site",
+        "https://deploiement.convex.site.attacker.example",
+        "https://deploiement.convex.cloud",
+    ):
         refused = await screen.pair(CODE, typed)
         assert refused == Err(
-            "adresse du tableau de bord attendue : https://<deploiement>.convex.site"
-        )
+            "adresse du tableau de bord attendue : https://<deploiement>.convex.site, "
+            "un deploiement d'Anheart"
+        ), typed
     assert asked == []
-    assert isinstance(await screen.pair(CODE, f"{ORIGIN}/"), Ok)
+    outcome = await screen.pair(CODE, f"{ORIGIN}/")
+    assert isinstance(outcome, Ok)
     assert asked == [f"{ORIGIN}/api/machine/pair"]
+
+
+async def test_the_root_s_env_sets_any_https_address_for_development(tmp_path: Path) -> None:
+    """The override: an address the root's .env sets is not held to the deployments' rule."""
+    asked: list[str] = []
+    dev = "https://dev.example:8443"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        asked.append(str(request.url))
+        return httpx.Response(200, json=answer(convex_url=dev))
+
+    screen = desk(tmp_path, handler, address=dev)
+    outcome = await screen.pair(CODE, "https://ignored.convex.site")
+    assert isinstance(outcome, Ok)
+    assert asked == [f"{dev}/api/machine/pair"]
+
+
+def test_the_typed_address_rule_is_the_shared_contract_s() -> None:
+    section = cast("dict[str, object]", shared()["machine_pairing"])
+    assert section["typed_address_host_suffix"] == TYPED_HOST_SUFFIX
+    assert TYPED_HOST_SUFFIX == ".convex.site"
+
+
+def test_the_template_s_address_is_left_for_the_screen_to_ask(tmp_path: Path) -> None:
+    """A placeholder copied from the template is never paired against."""
+    template = dotenv_values(REPO / "raspberry-pi" / ".env.example")
+    given = {key: value for key, value in template.items() if value is not None}
+    assert PairingSetup.of(given, tmp_path / "machine.env").address is None
 
 
 async def test_no_pairing_without_a_serial_number_or_a_code(tmp_path: Path) -> None:
     blind = desk(tmp_path, serial=tmp_path / "none")
     assert blind.view().serial is None
     assert blind.view().serial_problem == "illisible (FileNotFoundError:ENOENT)"
-    assert await blind.pair(CODE, None) == Err(
+    outcome = await blind.pair(CODE, None)
+    assert outcome == Err(
         "numero de serie du Pi illisible (FileNotFoundError:ENOENT) : aucun appairage possible"
     )
     screen = desk(tmp_path)
     for code in ("", "   ", "x" * 33):
-        assert await screen.pair(code, None) == Err(
-            "code d'appairage attendu : les 8 caracteres affiches sur le site"
-        )
+        outcome = await screen.pair(code, None)
+        assert outcome == Err("code d'appairage attendu : les 8 caracteres affiches sur le site")
 
 
 async def test_one_pairing_at_a_time(tmp_path: Path) -> None:
@@ -483,9 +596,11 @@ async def test_one_pairing_at_a_time(tmp_path: Path) -> None:
     )
     first = asyncio.create_task(screen.pair(CODE, None))
     await asyncio.sleep(0.01)
-    assert await screen.pair(CODE, None) == Err(PAIRING_BUSY)
+    outcome = await screen.pair(CODE, None)
+    assert outcome == Err(PAIRING_BUSY)
     release.set()
-    assert isinstance(await first, Ok)
+    outcome = await first
+    assert isinstance(outcome, Ok)
 
 
 async def test_a_refused_code_writes_nothing_and_another_may_follow(tmp_path: Path) -> None:
@@ -500,7 +615,8 @@ async def test_a_refused_code_writes_nothing_and_another_may_follow(tmp_path: Pa
     assert isinstance(refused, Err)
     assert refused.error.startswith("code refuse")
     assert not (tmp_path / "data" / "machine.env").exists()
-    assert isinstance(await screen.pair(CODE, None), Ok)
+    outcome = await screen.pair(CODE, None)
+    assert isinstance(outcome, Ok)
 
 
 async def test_a_code_of_another_machine_than_the_env_s_is_never_written(tmp_path: Path) -> None:
@@ -514,7 +630,8 @@ async def test_a_code_of_another_machine_than_the_env_s_is_never_written(tmp_pat
     assert not (tmp_path / "data" / "machine.env").exists()
     (tmp_path / "same").mkdir()
     same = desk(tmp_path / "same", machine_id=MACHINE)
-    assert isinstance(await same.pair(CODE, None), Ok)
+    outcome = await same.pair(CODE, None)
+    assert isinstance(outcome, Ok)
 
 
 async def test_a_key_the_disk_refuses_is_said_and_nothing_restarts(
@@ -528,7 +645,8 @@ async def test_a_key_the_disk_refuses_is_said_and_nothing_restarts(
         return Err("OSError:ENOSPC")
 
     monkeypatch.setattr(pairing, "write_paired", full)
-    assert await screen.pair(CODE, None) == Err(
+    outcome = await screen.pair(CODE, None)
+    assert outcome == Err(
         "la cle recue n'a pas pu etre ecrite (OSError:ENOSPC) : en demander un nouveau code"
     )
     assert restarts == []

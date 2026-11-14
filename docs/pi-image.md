@@ -297,8 +297,9 @@ console d'un Pi neuf n'est reliée à aucun tableau de bord tant qu'une personne
 n'a pas écrit la clé, ou que la console ne l'a pas reçue par son code d'appairage
 (ANH-115). Elle l'écrit alors dans `/var/lib/anheart/data/machine.env`, au compte
 `anheart`, mode 600, avec l'adresse et l'identifiant de la machine, et dans rien
-d'autre : ce fichier-là ne peut régler aucune limite, et une clé écrite dans
-`/etc/anheart/anheart.env` l'emporte sur la sienne. Que le compte de la console
+d'autre : ce fichier-là ne peut régler aucune limite, et une clé, un autre
+identifiant ou une autre adresse écrits dans `/etc/anheart/anheart.env` le font
+laisser de côté, entier. Que le compte de la console
 puisse lire sa clé est acceptable : la console la tient et s'en sert de toute
 façon ([secrets.md, 3.1](secrets.md#31-clé-de-la-machine)).
 

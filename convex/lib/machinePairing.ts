@@ -20,6 +20,8 @@ export const PAIRING_TTL_MS: number = SECTION.ttl_s * 1000;
 /** Wrong codes a code takes for its serial number before it is burned. */
 export const PAIRING_MAX_FAILURES: number = SECTION.max_failures;
 export const PAIRING_MAX_SERIAL_CHARS: number = SECTION.max_serial_chars;
+/** The end of the host of an address a console's screen accepts: one of Anheart's deployments. */
+export const PAIRING_TYPED_HOST_SUFFIX: string = SECTION.typed_address_host_suffix;
 export const PAIRING_MAX_BODY_BYTES: number = SECTION.max_body_bytes;
 export const PAIRING_GLOBAL_LIMIT = SECTION.global_limit;
 
