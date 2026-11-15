@@ -1068,6 +1068,7 @@ export default defineSchema({
     machineId: v.id("machines"),
     organizationId, // The machine's organisation when it was recorded
     recordedAt: v.number(),
+    ranAt: v.number(), // The end of its checks at the console: one record per machine and end
     operator: v.id("users"),
     attestedBy: v.id("users"),
     verdict: commissioningVerdictValidator,
@@ -1077,6 +1078,8 @@ export default defineSchema({
   })
     // A machine's records, oldest first.
     .index("by_machine_and_recorded_at", ["machineId", "recordedAt"])
+    // A report sent again (the same end at the console) is refused.
+    .index("by_machine_and_ran_at", ["machineId", "ranAt"])
     .index("by_organization", ["organizationId"]),
 
   machine_health_history: defineTable({

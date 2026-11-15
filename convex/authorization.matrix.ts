@@ -4431,7 +4431,7 @@ function registryTarget(w: World, actor: Actor, scope: Scope) {
 /** One synthetic commissioning record of a machine (ANH-115): bridged, so one finding. */
 async function commissioningRecord(w: World, machineId: Id<"machines">) {
   const reference = {
-    sheet: { version: "TEST-v1", signedBy: "TEST signataire", at: 0, parameters: { tfrHz: 60, hspHz: 50, lspHz: 0, accS: 3, decS: 3 } },
+    sheet: { storageId: await registryUpload(w), version: "TEST-v1", signedBy: "TEST signataire", at: 0, parameters: { tfrHz: 60, hspHz: 50, lspHz: 0, accS: 3, decS: 3 } },
     bitalinoAddress: null,
     expectedSoftwareVersion: null,
   };
@@ -4445,7 +4445,7 @@ async function commissioningRecord(w: World, machineId: Id<"machines">) {
   return await w.t.run(async (ctx) => {
     const machine = await ctx.db.get(machineId);
     return await ctx.db.insert("machine_commissioning", {
-      machineId, organizationId: machine?.organizationId, recordedAt: 0, operator: w.manager, attestedBy: w.manager,
+      machineId, organizationId: machine?.organizationId, recordedAt: 0, ranAt: 0, operator: w.manager, attestedBy: w.manager,
       verdict: "nonconforming", findings, payload: JSON.stringify({ reference, report }), signature: null,
     });
   });

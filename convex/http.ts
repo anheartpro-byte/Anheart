@@ -1118,18 +1118,19 @@ http.route({
   handler: limitedRoute("machineCommissioning", async (ctx, req, machineId) => {
     const body = await readBoundedJson(req, MAX_COMMISSIONING_BYTES);
     if (body instanceof Response) return body;
-    const report = parseCommissioningReport(body);
+    const report = parseCommissioningReport(body, Date.now());
     if (report === null) {
       return refuse(
         400,
         "invalid_request",
-        "Expected the commissioning report of contracts/machine-api.json (machine_commissioning)",
+        "Expected the commissioning report of contracts/machine-api.json (machine_commissioning): its texts, its dates and their order",
       );
     }
     const who = {
       machineId,
       operator: report.operator,
       attestedBy: report.attestation.operator,
+      ranAt: report.ranAt,
     };
     const looked = await ctx.runQuery(internal.machineCommissioning.reference, who);
     if (looked.status === "refused") return refuse(409, "commissioning_refused", looked.message);

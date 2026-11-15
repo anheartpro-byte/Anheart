@@ -59,14 +59,16 @@ function refused(message: string): Refused {
 /**
  * What the registry expects of a commissioning of this machine, run by
  * `operator` with the attestation of `attestedBy`; why none can be recorded
- * otherwise: no sheet with its values, or either of them not on the
- * machine's operator list now.
+ * otherwise: no sheet with its values, either of them not on the machine's
+ * operator list now, or a record of the machine already ending at `ranAt`
+ * (a report sent again).
  */
 async function lookUp(
   ctx: QueryCtx,
   machineId: Id<"machines">,
   operator: string,
   attestedBy: string,
+  ranAt: number,
 ): Promise<Refused | Found> {
   const machine = await ctx.db.get(machineId);
   const registry = await ctx.db
@@ -83,13 +85,24 @@ async function lookUp(
   const attesterId = ctx.db.normalizeId("users", attestedBy);
   if (attesterId === null || !(await onOperatorList(ctx, machine, attesterId)))
     return refused(COMMISSIONING_REFUSALS.attester);
+  const replayed = await ctx.db
+    .query("machine_commissioning")
+    .withIndex("by_machine_and_ran_at", (q) => q.eq("machineId", machineId).eq("ranAt", ranAt))
+    .first();
+  if (replayed !== null) return refused(COMMISSIONING_REFUSALS.replayed);
   return {
     status: "found",
     machine,
     operator: operatorId,
     attestedBy: attesterId,
     reference: {
-      sheet: { version: sheet.version, signedBy: sheet.signedBy, at: sheet.at, parameters },
+      sheet: {
+        storageId: sheet.storageId,
+        version: sheet.version,
+        signedBy: sheet.signedBy,
+        at: sheet.at,
+        parameters,
+      },
       bitalinoAddress: registry.bitalinoAddress ?? null,
       expectedSoftwareVersion: registry.expectedSoftwareVersion ?? null,
     },
@@ -98,13 +111,18 @@ async function lookUp(
 
 /** What a commissioning of this machine is compared with, or why it is refused. */
 export const reference = internalQuery({
-  args: { machineId: v.id("machines"), operator: v.string(), attestedBy: v.string() },
+  args: {
+    machineId: v.id("machines"),
+    operator: v.string(),
+    attestedBy: v.string(),
+    ranAt: v.number(),
+  },
   returns: v.union(
     refusedValidator,
     v.object({ status: v.literal("found"), reference: commissioningReferenceValidator }),
   ),
   handler: async (ctx, args) => {
-    const found = await lookUp(ctx, args.machineId, args.operator, args.attestedBy);
+    const found = await lookUp(ctx, args.machineId, args.operator, args.attestedBy, args.ranAt);
     return found.status === "refused"
       ? found
       : { status: "found" as const, reference: found.reference };
@@ -135,6 +153,7 @@ export const record = internalMutation({
     machineId: v.id("machines"),
     operator: v.string(),
     attestedBy: v.string(),
+    ranAt: v.number(),
     reference: commissioningReferenceValidator,
     recordedAt: v.number(),
     verdict: commissioningVerdictValidator,
@@ -148,7 +167,7 @@ export const record = internalMutation({
     v.object({ status: v.literal("recorded"), recordId: v.id("machine_commissioning") }),
   ),
   handler: async (ctx, args) => {
-    const found = await lookUp(ctx, args.machineId, args.operator, args.attestedBy);
+    const found = await lookUp(ctx, args.machineId, args.operator, args.attestedBy, args.ranAt);
     if (found.status === "refused") return found;
     if (!sameReference(found.reference, args.reference))
       return refused(COMMISSIONING_REFUSALS.changed);
@@ -157,6 +176,7 @@ export const record = internalMutation({
       machineId: machine._id,
       organizationId: machine.organizationId,
       recordedAt: args.recordedAt,
+      ranAt: args.ranAt,
       operator: found.operator,
       attestedBy: found.attestedBy,
       verdict: args.verdict,

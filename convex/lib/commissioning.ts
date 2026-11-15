@@ -59,6 +59,8 @@ export type CommissioningFinding = Infer<typeof commissioningFindingValidator>;
 /** What a commissioning is compared with: the registry's, as it stood. */
 export const commissioningReferenceValidator = v.object({
   sheet: v.object({
+    // The file of the sheet the values were typed with: the record names which one.
+    storageId: v.id("_storage"),
     version: v.string(),
     signedBy: v.string(),
     at: v.number(),
@@ -77,7 +79,25 @@ export const COMMISSIONING_REFUSALS = {
   attester:
     "L'auteur de l'attestation de l'arrêt d'urgence n'est pas un opérateur habilité de cette machine",
   changed: "Le registre de la machine a changé pendant l'enregistrement : relancer la mise en service",
+  replayed:
+    "Cette mise en service est déjà enregistrée : même machine, même fin des contrôles à la console",
 } as const;
+
+/** The controls a commissioning must carry, each green (`required_controls`). */
+export const REQUIRED_CONTROLS: readonly string[] = SECTION.required_controls;
+
+/** The latest date a JavaScript date holds (`max_date_ms`): a later one cannot be shown. */
+export const MAX_DATE_MS: number = SECTION.max_date_ms;
+
+/**
+ * How far ahead of the server's clock a console may date the end of its checks
+ * (`clock_skew_ms`). It sends them at once; its clock, when the time service
+ * holds it, is within 5 s (the console's `CLOCK_MAX_ERROR`, judged by its
+ * `clock` control, which the report carries). A minute covers that bound, the
+ * link's latency and the server's own error, and refuses a date of the future
+ * that only a wrong clock or a forgery writes.
+ */
+export const CLOCK_SKEW_MS: number = SECTION.clock_skew_ms;
 
 /** A value as a whole number of tenths, or null when it is not one (50.05, NaN). */
 export function tenthsOf(value: number): number | null {
@@ -102,19 +122,26 @@ export function sheetParametersRefusal(parameters: DriveParameters): DriveField 
   return null;
 }
 
-const CONTROL_CHARS = /[\u0000-\u001f\u007f]/;
+/**
+ * What no text of a report holds: C0, DEL and C1 controls, the bidirectional
+ * overrides and isolates, the line and paragraph separators, the zero-width
+ * characters. A record is read by people: nothing in it may hide or reorder
+ * what it shows.
+ */
+export const FORBIDDEN_CHARS =
+  /[\u0000-\u001f\u007f-\u009f\u200b-\u200d\u2028\u2029\u202a-\u202e\u2060\u2066-\u2069\ufeff]/;
 
-/** Text of 1 to `max` characters, no control character, no space at either end. */
+/** Text of 1 to `max` characters, none of `FORBIDDEN_CHARS`, no space at either end. */
 function text(max: number) {
   return z
     .string()
     .min(1)
     .max(max)
-    .refine((value) => value.trim() === value && !CONTROL_CHARS.test(value));
+    .refine((value) => value.trim() === value && !FORBIDDEN_CHARS.test(value));
 }
 
 const short = text(SECTION.max_text_chars);
-const millis = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
+const millis = z.number().int().nonnegative().max(MAX_DATE_MS);
 const read = z
   .number()
   .min(0)
@@ -153,10 +180,21 @@ const reportSchema = z.strictObject({
 });
 export type CommissioningReport = z.infer<typeof reportSchema>;
 
-/** The report a console sent, or null for a body that is not one. */
-export function parseCommissioningReport(body: unknown): CommissioningReport | null {
+/**
+ * The report a console sent, or null for a body that is not one: its
+ * attestation given before the end of its checks, and that end no later than
+ * `now`, the server's clock, plus `CLOCK_SKEW_MS`.
+ */
+export function parseCommissioningReport(
+  body: unknown,
+  now: number,
+): CommissioningReport | null {
   const parsed = reportSchema.safeParse(body);
-  return parsed.success ? parsed.data : null;
+  if (!parsed.success) return null;
+  const report = parsed.data;
+  return report.attestation.at <= report.ranAt && report.ranAt <= now + CLOCK_SKEW_MS
+    ? report
+    : null;
 }
 
 const FINDING_OF: Record<DriveField, string> = {
@@ -189,8 +227,9 @@ function addressOf(address: string | null): string | null {
 
 /**
  * Every difference between what the console judged and read and what the
- * registry expects, in a fixed order: the STO source, the console's red
- * controls, the drive values, the BITalino, the software version.
+ * registry expects, in a fixed order: the STO source, the console's controls
+ * (a required one not green, any other red, then each required one missing),
+ * the drive values, the BITalino, the software version.
  */
 export function findingsOf(
   report: CommissioningReport,
@@ -204,9 +243,16 @@ export function findingsOf(
       read: report.stoSource,
     });
   }
+  // A required control is green; any other is a finding only red.
   for (const control of report.controls) {
-    if (control.state === "block")
+    const required = REQUIRED_CONTROLS.includes(control.id);
+    if (control.state === "block" || (required && control.state !== "ok"))
       findings.push({ id: `control:${control.id}`, expected: "ok", read: control.detail });
+  }
+  const sent = new Set(report.controls.map((control) => control.id));
+  for (const id of REQUIRED_CONTROLS) {
+    if (!sent.has(id))
+      findings.push({ id: `control_missing:${id}`, expected: "ok", read: "absent du rapport" });
   }
   const drive = report.drive;
   if (drive === null) {
@@ -288,6 +334,7 @@ export function commissioningPayload(record: {
 function orderedReference(reference: CommissioningReference): CommissioningReference {
   return {
     sheet: {
+      storageId: reference.sheet.storageId,
       version: reference.sheet.version,
       signedBy: reference.sheet.signedBy,
       at: reference.sheet.at,

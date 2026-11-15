@@ -1158,8 +1158,9 @@ const SCENARIOS: Record<string, (w: World) => Promise<Doc<"audit_log">[]>> = {
         machineId: w.machine,
         operator: w.manager,
         attestedBy: w.manager,
+        ranAt: NOW,
         reference: {
-          sheet: { version: "v1", signedBy: "synthetic-signer", at: NOW, parameters },
+          sheet: { storageId, version: "v1", signedBy: "synthetic-signer", at: NOW, parameters },
           bitalinoAddress: null,
           expectedSoftwareVersion: null,
         },

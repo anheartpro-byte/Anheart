@@ -664,12 +664,14 @@ une fois par `machineCommissioning.record`, jamais modifié.
 |---|---|
 | `machineId`, `organizationId` | La machine et son organisation au moment de l'enregistrement. |
 | `recordedAt` | L'horloge du serveur à l'enregistrement. |
+| `ranAt` | La fin des contrôles à l'horloge de la console : une seule mise en service par machine et par fin, un rapport renvoyé est refusé. |
 | `operator`, `attestedBy` | Qui a lancé la mise en service à la console et qui y a attesté l'arrêt d'urgence : des identifiants d'utilisateurs, opérateurs habilités de la machine à l'enregistrement. |
 | `verdict`, `findings` | `conforming` sans aucun écart, `nonconforming` sinon ; chaque écart `{id, expected, read}`. |
 | `payload` | Le texte canonique de l'enregistrement (`commissioningPayload`, `kind: "commissioning_record"`) : la référence du registre, le rapport de la console, le verdict et les écarts. |
 | `signature` | Sa signature Ed25519 sur le canal du catalogue, en base 64 ; `null` sans clé utilisable. |
 
 Index : `by_machine_and_recorded_at` (les mises en service d'une machine),
+`by_machine_and_ran_at` (un rapport renvoyé),
 `by_organization`.
 
 ### `machine_operators` et `machine_devices` : qui agit à la console (ANH-152)
@@ -3974,10 +3976,25 @@ source STO, chaque contrôle `{id, state, detail}`, les cinq paramètres du
 variateur relus (ou `null`), l'adresse du BITalino et les versions. Une mise
 en service rouge est envoyée aussi : elle est une preuve.
 
-- **La référence.** La fiche variateur courante du registre avec ses valeurs
-  tapées, l'adresse du BITalino et la version logicielle qu'attend le
-  registre (`machineCommissioning.reference`). Sans fiche portant ses
-  valeurs : 409 `commissioning_refused`, rien d'écrit.
+- **Le rapport** (`parseCommissioningReport`). Chaque champ du contrat, rien
+  d'autre ; les dates sont des millisecondes entières de 0 à 8,64e15 (la plus
+  grande date que JavaScript tient) ; l'attestation ne suit pas la fin des
+  contrôles, et cette fin ne dépasse pas l'horloge du serveur de plus d'une
+  minute (`clock_skew_ms`) : la console envoie dès la fin, son horloge tenue
+  par un service de temps est à 5 s près (son contrôle `clock`, que le
+  rapport porte), et une minute couvre ce bord, la latence du lien et l'erreur
+  du serveur. Aucun texte ni identifiant ne porte un caractère de contrôle
+  (C0, DEL, C1), un contrôle de direction (U+202A à U+202E, U+2066 à
+  U+2069), U+2028, U+2029 ni un caractère de largeur nulle (U+200B à U+200D,
+  U+2060, U+FEFF) : une fiche est lue par des personnes, rien n'y cache ni n'y
+  réordonne ce qu'elle montre. Sinon 400 `invalid_request`, rien d'écrit.
+
+- **La référence.** La fiche variateur courante du registre, son fichier
+  (`storageId`) et ses valeurs tapées, l'adresse du BITalino et la version
+  logicielle qu'attend le registre (`machineCommissioning.reference`) : le
+  texte signé nomme la fiche à laquelle il a été comparé. Sans fiche portant
+  ses valeurs : 409 `commissioning_refused`, rien d'écrit. Une mise en service
+  de la machine de même fin (`ranAt`) déjà enregistrée : 409 aussi, un rejeu.
 - **Les personnes.** Celui qui l'a lancée et celui qui a attesté l'arrêt
   d'urgence sont tous deux sur la liste d'opérateurs de la machine à
   l'instant de l'envoi (`onOperatorList`, la règle de `operatorList`) :
@@ -3986,7 +4003,13 @@ en service rouge est envoyée aussi : elle est une preuve.
   écart `{id, expected, read}` : `sto_bridged` pour une source STO
   `bridged_declared`, `sto_source` pour toute autre source que
   `drive_input` (une machine au STO ponté ou simulé n'est jamais conforme),
-  `control:<id>` pour chaque contrôle jugé `block` par la console,
+  `control:<id>` pour un contrôle de `required_controls` qui n'est pas
+  `ok` (`drive_link`, `drive_state`, `estop`, `verdict`, `disk`, `clock`,
+  `contract`, `medical`, `bitalino`, `sto_source`, `sto_ready`,
+  `drive_limits`, tous rouges en mise en service quand ils ne tiennent pas)
+  et pour tout autre contrôle jugé `block` (un autre `warn`, comme la
+  température, reste conforme), `control_missing:<id>` pour un contrôle
+  requis absent du rapport,
   `drive_unread` ou `drive_tfr`, `drive_hsp`, `drive_lsp`, `drive_acc`,
   `drive_dec` pour une valeur qui diffère d'un dixième ou plus,
   `bitalino_address` (comparée sans casse) et `software_version`, y compris
@@ -4010,7 +4033,10 @@ en service rouge est envoyée aussi : elle est une preuve.
   imprimer, que le navigateur enregistre en PDF, comme le rapport de séance et
   le carnet de bord, et en exporte le texte signé avec sa signature, vérifiable
   hors ligne avec la clé publique du contrat. Aucune bibliothèque PDF, aucun
-  fichier dans Storage.
+  fichier dans Storage. Qui vérifie un export vérifie la signature de
+  `payload` tel quel, puis, dans le texte signé, que `kind` vaut
+  `commissioning_record` et que `machineId` est la machine attendue : la clé
+  signe aussi le catalogue, la liste d'opérateurs et la configuration.
 
 ### Routes retirées
 

@@ -17,8 +17,11 @@ import { CATALOG_SIGNING_KEY_ENV } from "./lib/programmes";
 import { OPERATOR_CODE } from "./lib/consoleAccess";
 import {
   COMMISSIONING_KIND,
+  CLOCK_SKEW_MS,
   COMMISSIONING_REFUSALS,
   DRIVE_FIELDS,
+  MAX_DATE_MS,
+  REQUIRED_CONTROLS,
   commissioningPayload,
   findingsOf,
   parseCommissioningReport,
@@ -61,7 +64,7 @@ function report(operator: string, attester = operator): CommissioningReport {
     },
     stoSource: "drive_input",
     controls: [
-      { id: "drive_link", state: "ok", detail: "variateur lu il y a 0.4 s" },
+      ...REQUIRED_CONTROLS.map((id) => ({ id, state: "ok", detail: `TEST ${id} vert` })),
       { id: "temperature", state: "warn", detail: "temperature du Pi non mesuree" },
     ],
     drive: { ...SHEET },
@@ -72,8 +75,20 @@ function report(operator: string, attester = operator): CommissioningReport {
   };
 }
 
+/** One control of `r` judged otherwise; the others as they were. */
+function judged(r: CommissioningReport, id: string, state: string, detail: string): CommissioningReport {
+  return { ...r, controls: r.controls.map((c) => (c.id === id ? { id, state, detail } : c)) };
+}
+
+const SHEET_FILE = "storage-of-the-sheet" as Id<"_storage">;
 const REFERENCE: CommissioningReference = {
-  sheet: { version: "v3", signedBy: "TEST signataire", at: Date.UTC(2026, 9, 1), parameters: SHEET },
+  sheet: {
+    storageId: SHEET_FILE,
+    version: "v3",
+    signedBy: "TEST signataire",
+    at: Date.UTC(2026, 9, 1),
+    parameters: SHEET,
+  },
   bitalinoAddress: ADDRESS,
   expectedSoftwareVersion: "pi-0.4.0",
 };
@@ -93,15 +108,68 @@ describe("ANH-115 EX-4 the report, checked to the contract", () => {
       { ...REFERENCE, expectedSoftwareVersion: "pi-9.9.9" },
     ).map((f) => f.id);
     for (const id of ids) {
-      if (!id.startsWith("control:")) expect(SECTION.finding_ids).toContain(id);
+      if (!/^control(_missing)?:/.test(id)) expect(SECTION.finding_ids).toContain(id);
     }
+    expect(ids).toContain("control_missing:drive_limits");
     expect(SECTION.finding_ids).toContain("sto_bridged");
     expect(SECTION.finding_ids).toContain("drive_unread");
   });
 
   it("takes a report of the contract's shape", () => {
-    expect(parseCommissioningReport(report("u"))).toEqual(report("u"));
-    expect(parseCommissioningReport({ ...report("u"), drive: null })?.drive).toBeNull();
+    expect(parseCommissioningReport(report("u"), Date.now())).toEqual(report("u"));
+    expect(parseCommissioningReport({ ...report("u"), drive: null }, Date.now())?.drive).toBeNull();
+  });
+
+  it("holds the dates to a JavaScript date, in their order, the end no later than the server's clock and a minute", () => {
+    const at = (ranAt: number, attested = ranAt) =>
+      parseCommissioningReport(
+        { ...report("u"), ranAt, attestation: { ...report("u").attestation, at: attested } },
+        Date.now(),
+      );
+    expect(SECTION.max_date_ms).toBe(8.64e15);
+    expect(at(0)).not.toBeNull();
+    expect(at(Date.now() + CLOCK_SKEW_MS)).not.toBeNull();
+    expect(at(Date.now() + CLOCK_SKEW_MS + 1)).toBeNull();
+    expect(at(Date.now() - 1, Date.now())).toBeNull();
+    expect(at(MAX_DATE_MS + 1)).toBeNull();
+    expect(parseCommissioningReport({ ...report("u"), ranAt: MAX_DATE_MS }, MAX_DATE_MS)).not.toBeNull();
+    expect(parseCommissioningReport({ ...report("u"), ranAt: MAX_DATE_MS + 1 }, MAX_DATE_MS + 1)).toBeNull();
+  });
+
+  // One of each class in every free text and id: the operator, the attestation's author and
+  // statement, a control's detail, the address and both versions.
+  const hidden: Array<[string, string]> = [
+    ["a C0 control", "\u0007"],
+    ["DEL", "\u007f"],
+    ["a C1 control (NEL)", "\u0085"],
+    ["a bidi override (RLO)", "\u202e"],
+    ["a bidi embedding (LRE)", "\u202a"],
+    ["a bidi isolate (FSI)", "\u2068"],
+    ["the line separator", "\u2028"],
+    ["the paragraph separator", "\u2029"],
+    ["a zero-width space", "\u200b"],
+    ["a zero-width joiner", "\u200d"],
+    ["the word joiner", "\u2060"],
+    ["a byte order mark", "\ufeff"],
+  ];
+  const fields: Array<[string, (r: CommissioningReport, s: string) => unknown]> = [
+    ["the operator", (r, s) => ({ ...r, operator: `u${s}1` })],
+    ["the attestation's author", (r, s) => ({ ...r, attestation: { ...r.attestation, operator: `u${s}1` } })],
+    ["the statement", (r, s) => ({ ...r, attestation: { ...r.attestation, statement: `a${s}b` } })],
+    ["a detail", (r, s) => judged(r, "estop", "ok", `a${s}b`)],
+    ["the address", (r, s) => ({ ...r, bitalinoAddress: `a${s}b` })],
+    ["the software version", (r, s) => ({ ...r, softwareVersion: `pi${s}1` })],
+    ["the medical version", (r, s) => ({ ...r, medicalParametersVersion: `m${s}1` })],
+  ];
+  it.each(hidden.flatMap(([kind, char]) => fields.map(([field, put]) => [kind, field, char, put] as const)))(
+    "refuses %s in %s",
+    (_kind, _field, char, put) => {
+      expect(parseCommissioningReport(put(report("u"), char), Date.now())).toBeNull();
+    },
+  );
+  it("takes text beyond ASCII that hides nothing", () => {
+    const r = judged(report("u"), "estop", "ok", "Pi a 41 °C, attesté à l'écran");
+    expect(parseCommissioningReport(r, Date.now())).not.toBeNull();
   });
 
   const bad: Array<[string, (r: CommissioningReport) => unknown]> = [
@@ -130,7 +198,7 @@ describe("ANH-115 EX-4 the report, checked to the contract", () => {
     ["not an object", () => [1, 2]],
   ];
   it.each(bad)("refuses %s", (_name, change) => {
-    expect(parseCommissioningReport(change(report("u")))).toBeNull();
+    expect(parseCommissioningReport(change(report("u")), Date.now())).toBeNull();
   });
 });
 
@@ -153,15 +221,13 @@ describe("ANH-115 EX-4 the comparison with the registry", () => {
   });
 
   it("says the drive unread, a bridged or a simulated STO, and each red control", () => {
+    const red = judged(report("u"), "estop", "block", "arret d'urgence non atteste");
     const findings = findingsOf(
       {
-        ...report("u"),
+        ...red,
         stoSource: "bridged_declared",
         drive: null,
-        controls: [
-          { id: "estop", state: "block", detail: "arret d'urgence non atteste" },
-          { id: "cloud", state: "warn", detail: "tableau de bord injoignable" },
-        ],
+        controls: [...red.controls, { id: "cloud", state: "warn", detail: "tableau de bord injoignable" }],
       },
       REFERENCE,
     );
@@ -172,6 +238,27 @@ describe("ANH-115 EX-4 the comparison with the registry", () => {
     ]);
     expect(findingsOf({ ...report("u"), stoSource: "sim_ready" }, REFERENCE)).toEqual([
       { id: "sto_source", expected: "drive_input", read: "sim_ready" },
+    ]);
+  });
+
+  it("holds a required control to green, and each one missing; another orange stays conforming", () => {
+    expect(SECTION.required_controls).toEqual([...REQUIRED_CONTROLS]);
+    const orange = judged(report("u"), "clock", "warn", "horloge non verifiable");
+    expect(findingsOf(orange, REFERENCE)).toEqual([
+      { id: "control:clock", expected: "ok", read: "horloge non verifiable" },
+    ]);
+    const without = {
+      ...report("u"),
+      controls: report("u").controls.filter((c) => !["estop", "sto_ready"].includes(c.id)),
+    };
+    expect(findingsOf(without, REFERENCE)).toEqual([
+      { id: "control_missing:estop", expected: "ok", read: "absent du rapport" },
+      { id: "control_missing:sto_ready", expected: "ok", read: "absent du rapport" },
+    ]);
+    // The report's own orange control (temperature) is not required: conforming.
+    expect(findingsOf(judged(report("u"), "software", "warn", "version non jugee"), REFERENCE)).toEqual([]);
+    expect(findingsOf(judged(report("u"), "temperature", "block", "Pi a 80 °C"), REFERENCE)).toEqual([
+      { id: "control:temperature", expected: "ok", read: "Pi a 80 °C" },
     ]);
   });
 
@@ -204,10 +291,18 @@ describe("ANH-115 EX-4 the comparison with the registry", () => {
     const reordered = {
       expectedSoftwareVersion: REFERENCE.expectedSoftwareVersion,
       bitalinoAddress: REFERENCE.bitalinoAddress,
-      sheet: { parameters: { ...SHEET }, at: REFERENCE.sheet.at, signedBy: "TEST signataire", version: "v3" },
+      sheet: {
+        parameters: { ...SHEET },
+        at: REFERENCE.sheet.at,
+        signedBy: "TEST signataire",
+        version: "v3",
+        storageId: SHEET_FILE,
+      },
     };
     expect(sameReference(REFERENCE, reordered)).toBe(true);
     expect(sameReference(REFERENCE, { ...REFERENCE, sheet: { ...REFERENCE.sheet, version: "v4" } })).toBe(false);
+    const other = "another-file" as Id<"_storage">;
+    expect(sameReference(REFERENCE, { ...REFERENCE, sheet: { ...REFERENCE.sheet, storageId: other } })).toBe(false);
   });
 
   it("writes one canonical text, its kind first", () => {
@@ -223,6 +318,7 @@ describe("ANH-115 EX-4 the comparison with the registry", () => {
     expect(Object.keys(parsed)).toEqual(["kind", "machineId", "recordedAt", "verdict", "findings", "reference", "report"]);
     expect(parsed.kind).toBe(COMMISSIONING_KIND);
     expect((parsed.report as { drive: unknown }).drive).toBeNull();
+    expect((parsed.reference as CommissioningReference).sheet.storageId).toBe(SHEET_FILE);
   });
 
   it("holds the sheet's typed values to the keypad's ranges, in tenths, LSP <= HSP <= tFr", () => {
@@ -365,7 +461,14 @@ describe("ANH-115 EX-5 a commissioning recorded", () => {
     const text = JSON.parse(row.payload) as { kind: string; machineId: string; reference: CommissioningReference };
     expect(text.kind).toBe(COMMISSIONING_KIND);
     expect(text.machineId).toBe(w.machine);
-    expect(sameReference(text.reference, REFERENCE)).toBe(true);
+    // The sheet's own file is named: the record says which sheet it was compared with.
+    expect(text.reference.sheet.storageId).toBe(registry?.driveParameterSheet?.storageId);
+    expect(
+      sameReference(text.reference, {
+        ...REFERENCE,
+        sheet: { ...REFERENCE.sheet, storageId: text.reference.sheet.storageId },
+      }),
+    ).toBe(true);
     expect(logbook).toHaveLength(1);
     expect(logbook[0]).toMatchObject({
       summary: "mise en service conforme, fiche variateur v3",
@@ -383,9 +486,8 @@ describe("ANH-115 EX-5 a commissioning recorded", () => {
     const key = await ready(w);
     await enableOperator(w, w.otherManager);
     const run = {
-      ...report(w.manager, w.otherManager),
+      ...judged(report(w.manager, w.otherManager), "sto_ready", "block", "chaine STO pontee (declaree)"),
       stoSource: "bridged_declared",
-      controls: [{ id: "sto_ready", state: "block", detail: "chaine STO pontee (declaree)" }],
     };
     const response = await send(w, key, run);
     expect(response.status).toBe(200);
@@ -413,13 +515,18 @@ describe("ANH-115 EX-5 a commissioning recorded", () => {
   });
 });
 
+/** A 409 `commissioning_refused` in `message`, and still `kept` records, lines and audits. */
+async function refusedWithout(w: World, key: string, body: unknown, message: string, kept: number) {
+  const response = await send(w, key, body);
+  expect(response.status).toBe(409);
+  expect(await response.json()).toEqual({ error: "commissioning_refused", message });
+  const { records, logbook, audit } = await written(w);
+  expect([records.length, logbook.length, audit.length]).toEqual([kept, kept, kept]);
+}
+
 describe("ANH-115 EX-5 what is refused, nothing written", () => {
   async function refusedWith(w: World, key: string, body: unknown, message: string) {
-    const response = await send(w, key, body);
-    expect(response.status).toBe(409);
-    expect(await response.json()).toEqual({ error: "commissioning_refused", message });
-    const { records, logbook, audit } = await written(w);
-    expect([records.length, logbook.length, audit.length]).toEqual([0, 0, 0]);
+    await refusedWithout(w, key, body, message, 0);
   }
 
   it("refuses a machine without a registry, or with a sheet without its values", async () => {
@@ -454,6 +561,31 @@ describe("ANH-115 EX-5 what is refused, nothing written", () => {
     await refusedWith(w, key, report(w.manager, "x"), COMMISSIONING_REFUSALS.attester);
   });
 
+  it("refuses a report sent again, the same end at the console: one record, one line", async () => {
+    const w = await seedWorld(modules);
+    const key = await ready(w);
+    expect((await send(w, key, report(w.manager))).status).toBe(200);
+    await refusedWithout(w, key, report(w.manager), COMMISSIONING_REFUSALS.replayed, 1);
+    const later = { ...report(w.manager), ranAt: report(w.manager).ranAt + 1 };
+    expect((await send(w, key, later)).status).toBe(200);
+  });
+
+  it("answers a report whose dates are out of order, or of the future, 400", async () => {
+    const w = await seedWorld(modules);
+    const key = await ready(w);
+    const r = report(w.manager);
+    for (const body of [
+      { ...r, attestation: { ...r.attestation, at: r.ranAt + 1 } },
+      { ...r, ranAt: Date.now() + 10 * CLOCK_SKEW_MS },
+      { ...r, ranAt: MAX_DATE_MS + 1 },
+    ]) {
+      const response = await send(w, key, body);
+      expect(response.status).toBe(400);
+      expect(((await response.json()) as { error: string }).error).toBe("invalid_request");
+    }
+    expect((await written(w)).records).toHaveLength(0);
+  });
+
   it("refuses a record whose registry changed after it was compared", async () => {
     const w = await seedWorld(modules);
     const record = (reference: CommissioningReference) =>
@@ -461,6 +593,7 @@ describe("ANH-115 EX-5 what is refused, nothing written", () => {
         machineId: w.machine,
         operator: w.manager,
         attestedBy: w.manager,
+        ranAt: Date.now() - 1000,
         reference,
         recordedAt: Date.now(),
         verdict: "conforming",
@@ -470,9 +603,10 @@ describe("ANH-115 EX-5 what is refused, nothing written", () => {
         softwareVersion: "pi-0.4.0",
       });
     // The sheet removed in between, then replaced by another version.
-    expect(await record(REFERENCE)).toEqual({ status: "refused", message: COMMISSIONING_REFUSALS.noSheet });
+    const compared = { ...REFERENCE, sheet: { ...REFERENCE.sheet, storageId: await registryUpload(w) } };
+    expect(await record(compared)).toEqual({ status: "refused", message: COMMISSIONING_REFUSALS.noSheet });
     await ready(w);
-    const outcome = await record({ ...REFERENCE, sheet: { ...REFERENCE.sheet, version: "v2" } });
+    const outcome = await record({ ...compared, sheet: { ...compared.sheet, version: "v2" } });
     expect(outcome).toEqual({ status: "refused", message: COMMISSIONING_REFUSALS.changed });
     const { records, logbook, audit } = await written(w);
     expect([records.length, logbook.length, audit.length]).toEqual([0, 0, 0]);
@@ -488,11 +622,12 @@ describe("ANH-115 EX-5 what is refused, nothing written", () => {
     const big = await send(w, key, "x".repeat(machineApi.max_body_bytes.routes["POST /api/machine/commissioning"] + 1));
     expect(big.status).toBe(413);
     vi.setSystemTime(Date.now() + 60_001);
+    let ends = 0;
     const call = () =>
       w.t.fetch("/api/machine/commissioning", {
         method: "POST",
         headers: { Authorization: `Bearer ${key}`, [CONTRACT_HEADER]: CONTRACT_VERSION },
-        body: JSON.stringify(report(w.manager)),
+        body: JSON.stringify({ ...report(w.manager), ranAt: report(w.manager).ranAt + (ends += 1) }),
       });
     expect((await call()).status).toBe(200);
     expect((await call()).status).toBe(200);
@@ -505,7 +640,7 @@ describe("ANH-115 EX-5 the records, read", () => {
     const w = await seedWorld(modules);
     const key = await ready(w);
     await send(w, key, { ...report(w.manager), drive: null });
-    await send(w, key, report(w.manager));
+    await send(w, key, { ...report(w.manager), ranAt: report(w.manager).ranAt + 1 });
     const listed = await as(w.t, "admin").query(api.machineCommissioning.listCommissionings, { machineId: w.machine });
     expect(listed.map((r) => [r.verdict, r.findings, r.signed])).toEqual([
       ["conforming", 0, false],
@@ -533,7 +668,7 @@ describe("ANH-115 EX-5 the records, read", () => {
   it("names a deleted account by its id only", async () => {
     const w = await seedWorld(modules);
     const key = await ready(w);
-    await send(w, key, report(w.manager));
+    await send(w, key, { ...report(w.manager), ranAt: report(w.manager).ranAt + 1 });
     await w.t.run((ctx) => ctx.db.patch(w.manager, { clerkDeletedAt: Date.now() }));
     const [listed] = await as(w.t, "admin").query(api.machineCommissioning.listCommissionings, { machineId: w.machine });
     const record = await as(w.t, "admin").query(api.machineCommissioning.getCommissioning, { recordId: listed.recordId });

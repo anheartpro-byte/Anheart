@@ -50,7 +50,13 @@ function record(overrides: Partial<CommissioningRecord> = {}): CommissioningReco
     operator: { userId: "user-1" as Id<"users">, firstName: "Alice", lastName: "Martin" },
     attestedBy: { userId: "user-2" as Id<"users"> },
     reference: {
-      sheet: { version: "v3", signedBy: "TEST signataire", at: NOW, parameters: SHEET },
+      sheet: {
+        storageId: "storage-1" as Id<"_storage">,
+        version: "v3",
+        signedBy: "TEST signataire",
+        at: NOW,
+        parameters: SHEET,
+      },
       bitalinoAddress: null,
       expectedSoftwareVersion: "pi-0.4.0",
     },
