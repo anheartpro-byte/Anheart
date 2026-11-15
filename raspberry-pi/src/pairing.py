@@ -30,6 +30,7 @@ import logging
 import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from enum import Enum, unique
 from pathlib import Path
 from typing import Final, assert_never, cast
 
@@ -151,7 +152,8 @@ def parse_paired(text: str) -> Result[PairedLink, str]:  # noqa: PLR0911  # one 
 
     Exactly three lines, one per key of :data:`PAIRED_KEYS`, each ``KEY=value`` with no
     quote, no space and nothing to expand; a key well formed, an https origin, an
-    identifier. The reason never repeats a value: the file holds the machine's key.
+    identifier. The reason is fixed words and line numbers, never a value: the file
+    holds the machine's key.
     """
     lines = text.split("\n")
     if lines[-1] == "":
@@ -165,15 +167,15 @@ def parse_paired(text: str) -> Result[PairedLink, str]:  # noqa: PLR0911  # one 
             return Err(f"ligne {number} illisible")
         key, value = match.group(1), match.group(2)
         if key in values:
-            return Err(f"{key} en double")
+            return Err(f"ligne {number} en double")
         values[key] = value
     if API_KEY.fullmatch(values[KEY_MACHINE_API_KEY]) is None:
-        return Err(f"{KEY_MACHINE_API_KEY} mal formee")
+        return Err("MACHINE_API_KEY mal formee")
     url = values[KEY_CONVEX_URL]
     if https_origin(url) != url:
-        return Err(f"{KEY_CONVEX_URL} : une adresse https sans chemin attendue")
+        return Err("CONVEX_URL : une adresse https sans chemin attendue")
     if RECORD_IDENTIFIER.fullmatch(values[KEY_RECORD_MACHINE_ID]) is None:
-        return Err(f"{KEY_RECORD_MACHINE_ID} mal forme")
+        return Err("RECORD_MACHINE_ID mal forme")
     return Ok(
         PairedLink(
             api_key=values[KEY_MACHINE_API_KEY],
@@ -233,9 +235,19 @@ def _given(env: Mapping[str, str], key: str) -> str | None:
     return None if value in ("", UNASSIGNED) else value
 
 
+@unique
+class LeftOut(Enum):
+    """Why the file is left out whole. The words are fixed here, never a value of the file
+    or of the ``.env``: they are logged, and the file holds the machine's key."""
+
+    ENV_PAIRED = "the .env sets MACHINE_API_KEY"
+    OTHER_MACHINE = "the .env names another RECORD_MACHINE_ID"
+    OTHER_ADDRESS = "the .env sets another CONVEX_URL"
+
+
 def paired_environment(
     env: Mapping[str, str], link: PairedLink | None
-) -> tuple[Mapping[str, str], str | None]:
+) -> tuple[Mapping[str, str], LeftOut | None]:
     """``env`` with the file's three keys, or ``env`` alone and why the file is left out.
 
     The three together or none: a key of one machine is never sent with the identifier
@@ -245,13 +257,13 @@ def paired_environment(
     if link is None:
         return env, None
     if _given(env, KEY_MACHINE_API_KEY) is not None:
-        return env, f"the .env sets {KEY_MACHINE_API_KEY}"
+        return env, LeftOut.ENV_PAIRED
     machine = _given(env, KEY_RECORD_MACHINE_ID)
     if machine is not None and machine != link.machine_id:
-        return env, f"the .env names another {KEY_RECORD_MACHINE_ID}"
+        return env, LeftOut.OTHER_MACHINE
     url = _given(env, KEY_CONVEX_URL)
     if url is not None and https_origin(url) != link.convex_url:
-        return env, f"the .env sets another {KEY_CONVEX_URL}"
+        return env, LeftOut.OTHER_ADDRESS
     return {**env, **link.values()}, None
 
 
@@ -259,7 +271,8 @@ def startup_environment(env: Mapping[str, str], path: Path) -> Mapping[str, str]
     """The environment the console starts on: ``env`` and what a pairing wrote at ``path``.
 
     A file that is not read is said, and the console starts on ``env`` alone: unpaired,
-    unless the ``.env`` gives it a key.
+    unless the ``.env`` gives it a key. What is said is fixed words, an errno's name and
+    line numbers (:func:`read_paired`, :class:`LeftOut`): never a value.
     """
     read = read_paired(path)
     if isinstance(read, Err):
@@ -275,7 +288,7 @@ def startup_environment(env: Mapping[str, str], path: Path) -> Mapping[str, str]
         _logger.warning(
             "pairing: data/%s not used (%s): the console starts on its .env alone",
             MACHINE_ENV_FILE,
-            left_out,
+            left_out.value,
         )
     return merged
 

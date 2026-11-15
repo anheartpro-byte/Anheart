@@ -26,6 +26,7 @@ from src.pairing import (
     MAX_FILE_BYTES,
     NO_ADDRESS,
     PAIRING_BUSY,
+    LeftOut,
     PairedLink,
     PairingDesk,
     PairingRefused,
@@ -57,6 +58,7 @@ KEY: Final[str] = "anh1." + "1" * 32 + "." + "2" * 64
 PREFIX: Final[str] = "anh1.11111111"
 CODE: Final[str] = "7KQ2-M4XP"
 LINK: Final[PairedLink] = PairedLink(KEY, ORIGIN, MACHINE)
+OTHER_KEY: Final[str] = "anh1." + "3" * 32 + "." + "4" * 64
 
 type Handler = Callable[[httpx.Request], httpx.Response]
 
@@ -148,7 +150,7 @@ def test_the_file_holds_the_three_keys_in_order_and_reads_back() -> None:
         ),
         (
             f"MACHINE_API_KEY={KEY}\nMACHINE_API_KEY={KEY}\nCONVEX_URL={ORIGIN}\n",
-            "MACHINE_API_KEY en double",
+            "ligne 2 en double",
         ),
         (
             f"MACHINE_API_KEY=anh1.short\nCONVEX_URL={ORIGIN}\nRECORD_MACHINE_ID={MACHINE}\n",
@@ -304,13 +306,15 @@ def test_the_file_s_three_keys_are_taken_together_where_the_env_agrees(
 @pytest.mark.parametrize(
     ("env", "why"),
     [
-        ({"MACHINE_API_KEY": "anh1." + "3" * 32 + "." + "4" * 64}, "the .env sets MACHINE_API_KEY"),
-        ({"RECORD_MACHINE_ID": "machine999"}, "the .env names another RECORD_MACHINE_ID"),
-        ({"CONVEX_URL": "https://other.convex.site"}, "the .env sets another CONVEX_URL"),
-        ({"CONVEX_URL": "http://localhost:3210"}, "the .env sets another CONVEX_URL"),
+        ({"MACHINE_API_KEY": OTHER_KEY}, LeftOut.ENV_PAIRED),
+        ({"RECORD_MACHINE_ID": "machine999"}, LeftOut.OTHER_MACHINE),
+        ({"CONVEX_URL": "https://other.convex.site"}, LeftOut.OTHER_ADDRESS),
+        ({"CONVEX_URL": "http://localhost:3210"}, LeftOut.OTHER_ADDRESS),
     ],
 )
-def test_the_file_is_left_out_whole_where_the_env_disagrees(env: dict[str, str], why: str) -> None:
+def test_the_file_is_left_out_whole_where_the_env_disagrees(
+    env: dict[str, str], why: LeftOut
+) -> None:
     """Never a key of one machine with the identifier of another, or another address."""
     assert paired_environment({}, None) == ({}, None)
     assert paired_environment(env, LINK) == (env, why)
@@ -330,6 +334,34 @@ def test_the_console_starts_on_the_file_or_says_why_not(
     assert startup_environment({"UI_PORT": "8090"}, path) == {"UI_PORT": "8090"}
     assert "data/machine.env ignored (3 lignes attendues, 1 lues)" in caplog.text
     assert KEY not in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("env", "text"),
+    [
+        ({"MACHINE_API_KEY": OTHER_KEY, "CONVEX_URL": "https://other.convex.site"}, None),
+        ({"RECORD_MACHINE_ID": "machine999"}, None),
+        ({"CONVEX_URL": "https://other.convex.site"}, None),
+        ({}, f"MACHINE_API_KEY={KEY}\nMACHINE_API_KEY={KEY}\nCONVEX_URL={ORIGIN}\n"),
+        ({}, f"MACHINE_API_KEY={KEY}0\nCONVEX_URL={ORIGIN}\nRECORD_MACHINE_ID={MACHINE}\n"),
+        ({}, f"MACHINE_API_KEY={KEY}\nCONVEX_URL={ORIGIN}/x\nRECORD_MACHINE_ID={MACHINE}\n"),
+        ({}, f"MACHINE_API_KEY={KEY}\nCONVEX_URL={ORIGIN}\nRECORD_MACHINE_ID=?{MACHINE}\n"),
+    ],
+)
+def test_no_log_line_holds_a_key_or_an_address(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, env: dict[str, str], text: str | None
+) -> None:
+    """The file left out or ignored is said in fixed words: no key, no address, of the
+    file or of the ``.env``."""
+    path = tmp_path / "machine.env"
+    if text is None:
+        assert write_paired(path, LINK) == Ok(None)
+    else:
+        path.write_text(text)
+    assert startup_environment(env, path) == env
+    assert len(caplog.records) == 1
+    for value in ("anh1.", "deploiement.convex.site", "other.convex.site"):
+        assert value not in caplog.text
 
 
 # --- the call -----------------------------------------------------------------------------
