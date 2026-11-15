@@ -300,8 +300,33 @@ export function RadiiForm({ registry }: { registry: MachineRegistry }) {
   );
 }
 
+/** The drive values typed with a sheet (ANH-115): what a commissioning compares with. */
+const DRIVE_FIELDS = [
+  ["tfrHz", "599"],
+  ["hspHz", "599"],
+  ["lspHz", "599"],
+  ["accS", "999.9"],
+  ["decS", "999.9"],
+] as const;
+type DriveParameters = Record<(typeof DRIVE_FIELDS)[number][0], number>;
+
+/**
+ * The five values typed with a sheet; undefined when none is; null when some
+ * are and not all, or one is not a number. The server holds them to the
+ * keypad's ranges.
+ */
+function driveParametersOf(data: FormData): DriveParameters | undefined | null {
+  const typed = DRIVE_FIELDS.map(([field]) => text(data, field));
+  if (typed.every((value) => value === "")) return undefined;
+  const values = typed.map((value) => (value === "" ? Number.NaN : Number(value)));
+  if (values.some((value) => !Number.isFinite(value))) return null;
+  const [tfrHz, hspHz, lspHz, accS, decS] = values;
+  return { tfrHz, hspHz, lspHz, accS, decS };
+}
+
 export function DriveSheetForm({ registry }: { registry: MachineRegistry }) {
   const t = useTranslations("machineRegistry");
+  const tAll = useTranslations();
   const [file, setFile] = useState<File>();
   const upload = useRegistryUpload();
   const attach = useMutationWithFeedback(
@@ -311,6 +336,18 @@ export function DriveSheetForm({ registry }: { registry: MachineRegistry }) {
     <RegistryForm
       title={t("attachSheet")}
       onSave={async (data, form) => {
+        const parameters = driveParametersOf(data);
+        if (parameters === null) {
+          await runWithFeedback(
+            "[drive sheet values]",
+            async () => {
+              throw new ConvexError({ code: "invalid_drive_parameters" });
+            },
+            undefined,
+            tAll,
+          );
+          return;
+        }
         const storageId = await upload(file);
         if (storageId === null) return;
         const result = await attach(
@@ -320,6 +357,7 @@ export function DriveSheetForm({ registry }: { registry: MachineRegistry }) {
             version: text(data, "sheetVersion"),
             signedBy: text(data, "signedBy"),
             at: day(data, "sheetAt"),
+            parameters,
           },
           { success: t("sheetSaved") },
         );
@@ -352,6 +390,23 @@ export function DriveSheetForm({ registry }: { registry: MachineRegistry }) {
           required
         />
       </div>
+      <fieldset className="space-y-2">
+        <legend className="text-sm font-medium">{t("sheetValues")}</legend>
+        <p className="text-sm text-muted-foreground">{t("sheetValuesHelp")}</p>
+        <div className="grid gap-3 sm:grid-cols-5">
+          {DRIVE_FIELDS.map(([field, max]) => (
+            <Field
+              key={field}
+              label={t(field)}
+              name={field}
+              type="number"
+              min="0"
+              max={max}
+              step="0.1"
+            />
+          ))}
+        </div>
+      </fieldset>
     </RegistryForm>
   );
 }

@@ -396,6 +396,7 @@ Admin et gestionnaire de la machine.
 | **Configuration de la machine** (ANH-141) | État de la configuration, l'avertissement « Configuration appliquée ≠ approuvée », le formulaire de proposition et les révisions (ci-dessous). | admin Anheart (toutes les clés) ; admin d'organisation (nom et lieu seulement) ; machine non supprimée ; aucune carte pour le gestionnaire |
 | **Registre de la machine** | Quatre sections : **Identité**, **Mesures**, **Variateur**, **Validation** ; version remontée et attendue, verdicts des verrous, signalements. | admin Anheart en écriture ; admin d'organisation en lecture seule ; aucun registre pour le gestionnaire |
 | **Appairage de la console** (ANH-115) | Le Pi que nomme le registre, « Code en cours, émis le {date} par {nom}, valable jusqu'au {date}. » ou « Aucun code en cours. » ; boutons **Émettre un code d'appairage** (**Émettre un nouveau code** quand un code est en cours) et **Révoquer le code** (ci-dessous). Sans numéro de série du Pi dans le registre, l'émission est grisée et la carte dit pourquoi. | admin Anheart, admin de l'organisation ; machine non supprimée |
+| **Mises en service** (ANH-115) | Chaque mise en service enregistrée, de la plus récente à la plus ancienne : sa date, **Conforme** ou **Non conforme**, le nombre d'écarts, « non signée » quand aucune clé de signature n'était posée, et **Voir la fiche** (ci-dessous). Une machine au STO ponté ou simulé n'est jamais conforme ; une mise en service ne change pas le niveau de validation. | admin Anheart, admin de l'organisation (la règle de lecture du registre) |
 | **État en direct** | Mode, phase, fréquence cardiaque, vitesse du bras (et moteur, consigne), charge g, action de sécurité, état du variateur ; badge « En direct » / « Données périmées » et « Mis à jour il y a … », recalculés chaque seconde (§6). L'action de sécurité et l'état du variateur sont traduits ; une valeur que le site ne connaît pas s'affiche telle quelle. | lecture |
 | **Programmes** | Programmes synchronisés depuis le Pi (lecture seule) : zone, durée, vitesse max, FC limite. Mention « Manuel : depuis la console de la machine. Sans personne à bord, une séance de banc lestée peut aussi être proposée depuis le site. » pour un admin ou un gestionnaire, « Manuel : uniquement depuis la console de la machine » pour un patient (la séance de banc lestée est réservée au personnel). La carte explique aussi si les programmes auto sont désactivés, si la machine annonce un fichier médical non signé ou si aucune version de référence n'est enregistrée. Depuis ANH-138 (contrat 1.11), elle dit « Programmes de secours » quand la machine n'a jamais reçu de catalogue signé, et liste chaque programme du catalogue que la machine a refusé : « refusé par la machine : » suivi de sa raison ; un programme refusé n'est pas lançable ([programmes.md](programmes.md#publication-vers-les-machines-anh-138)). | lecture |
 | **Droits de lancement** | Patients autorisés, « Accordé par {nom}, {date} », leur FC max ; boutons **Accorder** (choisir un patient) et **Retirer** (avec confirmation). | admin, gestionnaire |
@@ -412,7 +413,7 @@ d'organisation ne reçoit aucun formulaire ni bouton d'édition du registre.
 |---|---|
 | **Identité** | Numéros de série Pi, variateur, moteur et réducteur, adresse BITalino, mise en service, adresse du site, contacts, version logicielle attendue. `updateIdentity` enregistre les champs ; un champ vidé est envoyé avec `null`. `listContactCandidates({machineId})`, réservée à l'admin Anheart, propose uniquement les membres actifs de l'organisation de cette machine, avec leur rôle et sans e-mail. |
 | **Mesures** | Deux rayons en mètres, date et auteur : `recordRadii`. La proposition `ARM_RADIUS_M` / `LEG_TIP_RADIUS_M` reprend les mesures sans valeur par défaut ; la carte **Configuration de la machine** les prend comme valeurs de départ d'une première configuration (ANH-141). |
-| **Variateur** | Fiche courante et historique téléchargeables, version, signataire et date. Dépôt PDF ou JSON de 10 Mio maximum : `generateUploadUrl`, POST du fichier vers Convex Storage avec son `Content-Type`, puis `attachDriveParameterSheet`. Aucune donnée de santé dans ces pièces. |
+| **Variateur** | Fiche courante et historique téléchargeables, version, signataire et date, et les valeurs tapées avec la fiche (« tFr 60,0 Hz, HSP 50,0 Hz, … »), ou « Valeurs non tapées » : aucune mise en service ne s'enregistre contre une telle fiche. Dépôt PDF ou JSON de 10 Mio maximum : `generateUploadUrl`, POST du fichier vers Convex Storage avec son `Content-Type`, puis `attachDriveParameterSheet`, avec depuis ANH-115 les cinq valeurs de la fiche, facultatives (tFr, HSP et LSP en Hz, ACC et dEC en s, au dixième) : les cinq ou aucune, sinon « Valeurs du variateur refusées » avant tout envoi. Le fichier n'est jamais lu : seules les valeurs tapées sont comparées. Aucune donnée de santé dans ces pièces. |
 | **Validation** | Niveau courant, revues avec auteur, date, versions logicielle et médicale, compte rendu joint ; historique des descentes avec motif. `addValidationReview` ne propose que le niveau suivant et exige un compte rendu (même dépôt Storage). Version médicale facultative pour les premiers niveaux, obligatoire pour « Personne à bord ». `lowerValidationLevel` propose uniquement un niveau inférieur et exige un motif de 3 à 500 caractères. |
 
 Les niveaux sont **Aucune validation**, **Au banc**, **Automatique**,
@@ -556,6 +557,21 @@ en notification d'erreur, sans fenêtre. **Révoquer le code** appelle
 `machinePairing.revokePairingCode` (« Code d'appairage révoqué. »). La carte
 rappelle qu'un appairage révoque aussitôt les autres clés de la machine.
 
+**Mises en service (ANH-115).** `MachineCommissioningCard` lit
+`machineCommissioning.listCommissionings` ; **Voir la fiche** ouvre
+`/fr/dashboard/machines/{id}/commissioning/{recordId}`, la fiche à imprimer
+(`machineCommissioning.getCommissioning`) : verdict, écarts (« HSP : attendu
+50.0 Hz, lu 50.1 Hz »), qui l'a lancée et qui a attesté l'arrêt d'urgence, par
+leur nom, avec la phrase attestée mot pour mot, la source STO (un STO ponté
+est dit en rouge), les valeurs de la fiche face à celles relues, chaque
+contrôle de la console, les versions, et si le texte est signé. **Imprimer ou
+enregistrer en PDF** ouvre la fenêtre d'impression du navigateur, comme le
+rapport de séance et le carnet ; **Télécharger le JSON signé** donne
+`{payload, signature}`, le texte tel que le serveur l'a écrit et signé,
+vérifiable hors ligne avec la clé publique du catalogue. Le ticket demandait
+une fiche PDF dans Convex Storage : aucun PDF n'est fabriqué ni stocké
+([convex.md](convex.md#la-mise-en-service-dune-machine-contrat-118-anh-115)).
+
 **Clés de la machine (ANH-165).** La machine se présente au tableau de bord
 avec une clé (`MACHINE_API_KEY` sur le Pi) ; elle peut en avoir plusieurs
 valides à la fois. Chaque ligne montre le préfixe de la clé (`anh1.` et
@@ -620,7 +636,7 @@ machine, y compris sur une machine supprimée.
 
 - **Chaque entrée** : sa date, son type (Intervention, Calibration, Pièce
   remplacée, Note, Incident, Revue de validation, Fiche variateur, Mise à jour
-  logicielle, Configuration appliquée), qui l'a écrite (« écrit par le
+  logicielle, Configuration appliquée, Mise en service), qui l'a écrite (« écrit par le
   serveur » pour les entrées automatiques), sa ligne et ses détails, le lien de
   l'incident qu'elle nomme et sa pièce jointe.
 - **Bandeau rouge « Séances programmées fermées »** quand un défaut variateur

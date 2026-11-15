@@ -75,6 +75,23 @@ export function MachineRegistryCard({
   const authorName = (author: NonNullable<MachineRegistry["updatedBy"]>) =>
     [author.firstName, author.lastName].filter(Boolean).join(" ") ||
     author.userId;
+  const tenth = new Intl.NumberFormat(locale, {
+    minimumFractionDigits: 1,
+    maximumFractionDigits: 1,
+  });
+  // The values typed with the sheet (ANH-115), which a commissioning is compared with.
+  const sheetValues = (
+    parameters: NonNullable<MachineRegistry["driveParameterSheet"]>["parameters"],
+  ) =>
+    parameters === undefined
+      ? t("noSheetParameters")
+      : t("sheetParameters", {
+          tfr: tenth.format(parameters.tfrHz),
+          hsp: tenth.format(parameters.hspHz),
+          lsp: tenth.format(parameters.lspHz),
+          acc: tenth.format(parameters.accS),
+          dec: tenth.format(parameters.decS),
+        });
   const attachment = (url: string | null, label: string) =>
     url === null ? (
       <span className="text-muted-foreground">{t("fileUnavailable")}</span>
@@ -231,6 +248,9 @@ export function MachineRegistryCard({
                   by: authorName(registry.driveParameterSheet.attachedBy),
                   at: when(registry.driveParameterSheet.attachedAt),
                 })}
+              </p>
+              <p className="text-sm">
+                {sheetValues(registry.driveParameterSheet.parameters)}
               </p>
             </div>
           )}
