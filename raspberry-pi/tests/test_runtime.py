@@ -89,6 +89,7 @@ from src.training.runtime import (
     RULE_ENABLE_UNCONFIRMED,
     RULE_TICK_EXCEPTION,
     AlreadyStarted,
+    CoastDownHold,
     DriveFailure,
     DriveInFault,
     DriveParameterRefused,
@@ -1422,6 +1423,7 @@ def test_every_start_refusal_is_handled_somewhere() -> None:
         StoBridgedOnBoard(),
         PreflightRefused("bitalino", "batterie BITalino 20 % < 30 %"),
         RestartPending(),
+        CoastDownHold(Seconds(1.0)),
     )
     assert len({_classify_refusal(case) for case in cases}) == len(cases)
 
@@ -1457,6 +1459,8 @@ def _classify_refusal(refusal: StartRefusal) -> str:  # noqa: PLR0911, PLR0912  
             return "preflight_refused"
         case RestartPending():
             return "restart_pending"
+        case CoastDownHold():
+            return "coast_down_hold"
     raise assert_never(refusal)
 
 

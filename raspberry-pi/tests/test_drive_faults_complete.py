@@ -615,6 +615,10 @@ async def test_every_fault_while_turning_stops_the_arm_and_latches(
     assert all(later <= earlier for earlier, later in pairwise(references)), references
     assert references[-1] == 0
 
+    # A stage dropped at speed holds every reset until the shaft may have stopped (ANH-92).
+    left = panel.runtime.snapshot().coast_hold
+    if left is not None:
+        await run(panel, clock, left + 0.4)
     # The operator's own reset, asked by name. The table decides one thing: whether the
     # console sends it. Sent or refused, it puts no torque back and moves nothing, and the
     # verdict stays latched: only a named acknowledgement and a new start go further.

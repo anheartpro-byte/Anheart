@@ -22,6 +22,7 @@
     "MOTOR_MAX_RPM": 300,
     "ARM_RADIUS_M": 1.5,
     "LEG_TIP_RADIUS_M": null,
+    "COAST_TAU_S": 40.0,
     "PROGRAMS_ENABLED": false,
     "OCCUPANCY_OCCUPIED_ENABLED": false
   },
@@ -40,6 +41,84 @@
       },
       "expected": {
         "verdict": "accepted"
+      }
+    },
+    {
+      "name": "COAST_TAU_S a 5 s, sa borne basse, est accepte",
+      "changes": {
+        "COAST_TAU_S": 5
+      },
+      "expected": {
+        "verdict": "accepted"
+      }
+    },
+    {
+      "name": "COAST_TAU_S a 300 s, sa borne haute, est accepte",
+      "changes": {
+        "COAST_TAU_S": 300
+      },
+      "expected": {
+        "verdict": "accepted"
+      }
+    },
+    {
+      "name": "COAST_TAU_S sous 5 s est refuse",
+      "changes": {
+        "COAST_TAU_S": 4.9
+      },
+      "expected": {
+        "verdict": "refused",
+        "problems": [
+          {
+            "key": "COAST_TAU_S",
+            "detail": "4.9 s hors de [5.0, 300.0]"
+          }
+        ]
+      }
+    },
+    {
+      "name": "COAST_TAU_S au dela de 300 s est refuse",
+      "changes": {
+        "COAST_TAU_S": 301
+      },
+      "expected": {
+        "verdict": "refused",
+        "problems": [
+          {
+            "key": "COAST_TAU_S",
+            "detail": "301.0 s hors de [5.0, 300.0]"
+          }
+        ]
+      }
+    },
+    {
+      "name": "COAST_TAU_S en texte est refuse",
+      "changes": {
+        "COAST_TAU_S": "40"
+      },
+      "expected": {
+        "verdict": "refused",
+        "problems": [
+          {
+            "key": "COAST_TAU_S",
+            "detail": "attendu un nombre fini"
+          }
+        ]
+      }
+    },
+    {
+      "name": "COAST_TAU_S nul est refuse",
+      "changes": {
+        "COAST_TAU_S": null
+      },
+      "expected": {
+        "verdict": "refused",
+        "problems": [
+          {
+            "key": "COAST_TAU_S",
+            "detail": "obligatoire"
+          }
+        ]
       }
     },
     {

@@ -481,7 +481,8 @@ async def test_ex3_acceptance_what_is_asked_after_the_record_closed_is_in_the_lo
         await set_target(http, 5.0)
         await recorded.tick(15.0)
         recorded.rig.simulator.inject_fault(DriveFault.OVERCURRENT)
-        await recorded.tick(180.0)
+        # 300 s: the ending lasts the coast-down hold, ~231 s from 249 motor rpm (ANH-92).
+        await recorded.tick(300.0)
         assert recorded.state() is RuntimeState.ENDING
         record = recorded.only_record()
         assert (record / "checksums.sha256").is_file(), "the phase reached DONE: closed"

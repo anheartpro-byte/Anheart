@@ -777,10 +777,11 @@ def _operator_cases() -> list[FailureCase]:
                 "operator_fault_reset_after_standstill",
                 [
                     {"at_s": 170.0, "do": "drive_fault", "fault": "MOTOR_OVERLOAD"},
-                    {"at_s": 320.0, "do": "acknowledge"},
-                    {"at_s": 325.0, "do": "fault_reset", "expect": "accepted"},
+                    # After the coast-down hold: 40 ln(1344 + 69) s, 290 s (ANH-92).
+                    {"at_s": 470.0, "do": "acknowledge"},
+                    {"at_s": 475.0, "do": "fault_reset", "expect": "accepted"},
                 ],
-                duration_s=360.0,
+                duration_s=510.0,
             ),
             end_reasons=VERDICT,
             rules=("drive_fault",),
@@ -796,10 +797,11 @@ def _operator_cases() -> list[FailureCase]:
                 "operator_fault_reset_forbidden",
                 [
                     {"at_s": 170.0, "do": "drive_fault", "fault": "OVERCURRENT"},
-                    {"at_s": 320.0, "do": "acknowledge"},
-                    {"at_s": 325.0, "do": "fault_reset", "expect": "refused"},
+                    # After the coast-down hold, so OCF itself is what refuses (ANH-92).
+                    {"at_s": 470.0, "do": "acknowledge"},
+                    {"at_s": 475.0, "do": "fault_reset", "expect": "refused"},
                 ],
-                duration_s=360.0,
+                duration_s=510.0,
             ),
             end_reasons=VERDICT,
             rules=("drive_fault",),
@@ -863,14 +865,6 @@ def _operator_cases() -> list[FailureCase]:
     ]
 
 
-#: The plant's run on after an STO opening, long enough for a whole coast from the
-#: nameplate speed (tau_coast ln 1380, 145 s on the provisional constants). RFRD
-#: reads 0 with the stage off, so the console takes the coasting shaft for stopped
-#: and may finish while it turns (docs/securite.md, section 3); the default 60 s
-#: would then judge the exit on a shaft still coasting, without torque.
-STO_COAST_TEARDOWN_S: Final[float] = 150.0
-
-
 def _sto_cases() -> list[FailureCase]:
     result: list[FailureCase] = []
     for kind, phases in (("auto", AUTO_PHASES), ("manual", MANUAL_PHASES)):
@@ -883,9 +877,7 @@ def _sto_cases() -> list[FailureCase]:
                     category=Category.STO,
                     description=f"STO opens during {kind} {phase}; torque is removed and latched.",
                     document=(
-                        _auto(name, actions, at=at, teardown_s=STO_COAST_TEARDOWN_S)
-                        if kind == "auto"
-                        else _manual(name, actions, teardown_s=STO_COAST_TEARDOWN_S)
+                        _auto(name, actions, at=at) if kind == "auto" else _manual(name, actions)
                     ),
                     end_reasons=(
                         frozenset({"operator_stop"})
@@ -959,10 +951,14 @@ def _sto_cases() -> list[FailureCase]:
                         {"at_s": 43, "do": "sto_close"},
                         {"at_s": 44, "do": "start_again", "expect": "refused"},
                         {"at_s": 190, "do": "acknowledge", "expect": "accepted"},
-                        {"at_s": 210, "do": "start_again", "expect": "accepted"},
-                        {"at_s": 211, "do": "manual_target", "output_rpm": 3},
-                        {"at_s": 240, "do": "operator_stop"},
+                        # The coast-down hold refuses the start until it has run out: at
+                        # most 290 s from the opening (ANH-92); acknowledged, still held.
+                        {"at_s": 200, "do": "start_again", "expect": "refused"},
+                        {"at_s": 340, "do": "start_again", "expect": "accepted"},
+                        {"at_s": 341, "do": "manual_target", "output_rpm": 3},
+                        {"at_s": 370, "do": "operator_stop"},
                     ],
+                    duration_s=400.0,
                 ),
                 end_reasons=frozenset({"operator_stop"}),
                 rules=("sto_open",),

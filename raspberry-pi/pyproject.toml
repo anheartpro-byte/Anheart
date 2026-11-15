@@ -269,6 +269,9 @@ include = [
     # through a link, never waiting on a FIFO, never an oversize file read whole.
     "src/kept_file.py",
     "src/operator_sync.py",
+    # The coast-down hold kept across a restart (ANH-92): a console that comes back
+    # while the shaft may still coast refuses a start until it may not.
+    "src/kept_coast_hold.py",
     # The machine's configuration as the dashboard proposes it (ANH-141): the
     # ceilings, the radii and the two locks pass its revalidation.
     "src/machine_config.py",
@@ -358,6 +361,7 @@ safety_chain = [
     "src/console_access.py",
     "src/kept_file.py",
     "src/operator_sync.py",
+    "src/kept_coast_hold.py",
     "src/machine_config.py",
     "src/config_sync.py",
     "src/pairing.py",

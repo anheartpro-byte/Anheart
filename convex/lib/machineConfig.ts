@@ -349,6 +349,14 @@ function consoleProblems(values: Partial<ConfigValues>): ConfigProblem[] {
       `${pythonFloat(leg)} m hors de [ARM_RADIUS_M, ${pythonFloat(maxRadius)}] : la pointe ` +
         "du pied est au moins aussi loin de l'axe que le point de reference",
     );
+  const tau = effective<number>(values, "COAST_TAU_S");
+  const tauLow = bound("COAST_TAU_S", "min");
+  const tauHigh = bound("COAST_TAU_S", "max");
+  if (tau < tauLow || tau > tauHigh)
+    add(
+      "COAST_TAU_S",
+      `${pythonFloat(tau)} s hors de [${pythonFloat(tauLow)}, ${pythonFloat(tauHigh)}]`,
+    );
   const port = effective<number>(values, "UI_PORT");
   if ((CONFIG_KEYS.UI_PORT.not ?? []).includes(port))
     add("UI_PORT", `${port} est le port de scripts/bench_console.py`);

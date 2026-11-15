@@ -206,8 +206,11 @@ def test_sto_acknowledgement_requires_ready_and_does_not_resume_a_session() -> N
         for event in result.trace.events
         if event.kind.value == "verdict_ack"
     )
-    assert all(row.setpoint_motor_rpm == 0 for row in result.trace.rows if 40 <= row.t < 210)
-    assert any(row.setpoint_motor_rpm > 0 for row in result.trace.rows if row.t > 211)
+    assert all(row.setpoint_motor_rpm == 0 for row in result.trace.rows if 40 <= row.t < 340)
+    assert any(row.setpoint_motor_rpm > 0 for row in result.trace.rows if row.t > 341)
+    held = next(request for request in result.requests if 199.0 < request.at < 201.0)
+    assert not held.accepted
+    assert "CoastDownHold" in held.detail
 
 
 def test_sto_judge_detects_broken_safety_evidence() -> None:

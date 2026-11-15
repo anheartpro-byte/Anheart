@@ -950,6 +950,10 @@ async def _faulted_after_a_session() -> Rig:
     await rig.run(20.0)
     rig.drive.inject_fault(DriveFault.MOTOR_OVERLOAD)
     await rig.run(15.0)
+    # The stage dropped at speed: the ending lasts the coast-down hold (ANH-92).
+    left = rig.runtime.coast_hold_remaining(rig.clock.monotonic())
+    assert left is not None
+    await rig.run(left + 0.4)
     assert rig.runtime.phase is Phase.DONE
     assert rig.runtime.applied_rpm == 0
     return rig

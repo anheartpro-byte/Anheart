@@ -102,6 +102,9 @@ TOTAL: Final[float] = 130.0
 COOLDOWN to 70, RECOVERY to 130."""
 
 DEADLINE: Final[float] = TOTAL + 30.0
+
+LONGEST_ENDING: Final[float] = 1000.0
+"""Far past any ending's coast-down hold (289 s at most) and recovery: a loop bound."""
 """Past this the rule fires on ``develop``, session or no session."""
 
 SHORT_LIMIT: Final[Seconds] = Seconds(100.0)
@@ -432,9 +435,11 @@ async def test_a_drive_fault_reset_long_after_its_session_meets_no_other_verdict
     rig = await _programme()
     await rig.run(40.0)
     rig.drive.inject_fault(DriveFault.MOTOR_OVERLOAD)
-    while _since_start(rig) < DEADLINE + 80.0:
+    # And for as long as the ending lasts its coast-down hold (ANH-92), given it whole.
+    while _since_start(rig) < DEADLINE + 80.0 or rig.phase() is not Phase.DONE:
         await rig.step()
         assert _overrun(rig) is None, f"session_overrun fired {_since_start(rig):.1f} s in"
+        assert _since_start(rig) < LONGEST_ENDING
     assert rig.phase() is Phase.DONE
     assert rig.state() is RuntimeState.ENDING, "the faulted drive let its run command go"
     assert _live_rules(rig) == {RULE_DRIVE_FAULT}
@@ -501,9 +506,11 @@ async def test_whatever_ends_a_session_and_whenever_the_rest_latches_nothing_mor
             rig.drive.inject_fault(DriveFault.MOTOR_OVERLOAD)
             stands = RULE_DRIVE_FAULT
     over_by = max(DEADLINE, float(ending.at) + 75.0)
-    while _since_start(rig) < over_by + float(ending.rest):
+    # A drive fault's freewheel also gives the ending its coast-down hold (ANH-92).
+    while _since_start(rig) < over_by + float(ending.rest) or rig.phase() is not Phase.DONE:
         await rig.step()
         assert _overrun(rig) is None, f"session_overrun fired {_since_start(rig):.1f} s in"
+        assert _since_start(rig) < LONGEST_ENDING + float(ending.rest)
     assert rig.phase() is Phase.DONE
     assert _standing_rule(rig) == stands
 

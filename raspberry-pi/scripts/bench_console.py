@@ -151,6 +151,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import contextlib
+import math
 import os
 import queue
 import signal
@@ -178,9 +179,10 @@ from scripts.drive_link import (
     describe_error,
     link_from_args,
 )
-from src.clock import RealClock
+from src.clock import Clock, RealClock
 from src.geometry import CONFIRMED_GEAR_RATIO, MachineGeometry
-from src.local_config import DriveLink
+from src.local_config import DriveLink, coast_tau
+from src.motor.coast import DEFAULT_COAST_TAU, CoastWatch
 from src.motor.drive import (
     BadResponse,
     CommTimeout,
@@ -196,7 +198,7 @@ from src.motor.drive import (
     describe_fault,
 )
 from src.result import Err, Ok, Result
-from src.units import Metres, Monotonic, MotorRpm, OutOfRange, elapsed
+from src.units import Metres, Monotonic, MotorRpm, OutOfRange, Seconds, elapsed
 
 # --- Nameplate: SEW-USOCOME KA37 DRS71S4/AL/DH --------------------------
 # Read off the motor itself, not from a datasheet:
@@ -229,6 +231,26 @@ def _geometry_from_env() -> MachineGeometry | None:
 
 
 GEOMETRY = _geometry_from_env()
+
+
+def _coast_tau_from_env() -> Seconds:
+    """``COAST_TAU_S`` as the console reads it; the default, said, when it is not one it takes."""
+    read = coast_tau(os.environ)
+    match read:
+        case Ok(tau):
+            return tau
+        case Err(problem):
+            print(f"COAST_TAU_S ignore ({problem.detail}): {DEFAULT_COAST_TAU:g} s")
+            return DEFAULT_COAST_TAU
+    raise assert_never(read)
+
+
+#: The coast-down hold's time constant, as the console's (ANH-92): after the output
+#: stage drops on a shaft last read turning, Activer and Acquitter wait it out.
+COAST_TAU = _coast_tau_from_env()
+
+#: The console's standstill threshold (``RuntimeLimits.standstill_rpm``).
+STANDSTILL_RPM = MotorRpm(1)
 
 #: Plausibility bounds derived from the nameplate. A reading outside these did
 #: not come from the drive's sensors, so it is reported as a transport fault
@@ -283,6 +305,8 @@ class Snapshot:
     """Why the drive is not wholly there: the last open or HSP read that failed, kept
     until an open and its HSP read both succeed. Never cleared by a poll."""
     last_action: str = "-"
+    coast_hold_s: float | None = None
+    """How long Activer and Acquitter still wait for a shaft that may coast (ANH-92)."""
     updated_at: float = field(default_factory=lambda: RealClock().monotonic())
 
     def error_rate(self) -> float:
@@ -328,11 +352,14 @@ class BusWorker(threading.Thread):
     handlers run on uvicorn's loop and never see the drive.
     """
 
-    def __init__(self, link: DriveLink, max_rpm: int) -> None:
+    def __init__(self, link: DriveLink, max_rpm: int, clock: Clock | None = None) -> None:
         super().__init__(name="modbus-bus", daemon=True)
         self.link = link
         self.max_rpm = max_rpm
-        self._clock = RealClock()
+        self._clock: Clock = RealClock() if clock is None else clock
+        # The console's coast-down hold, on this tool's own reads (src.motor.coast).
+        self._coast_watch = CoastWatch(tau=COAST_TAU, standstill=STANDSTILL_RPM)
+        self._coast_until: Monotonic | None = None
         self._built: BuiltDrive = build_drive(link, self._clock)
         self._commands: queue.Queue[Command] = queue.Queue()
         self._stop_requested = threading.Event()
@@ -454,8 +481,12 @@ class BusWorker(threading.Thread):
         read = await self._built.drive.read_status()
         match read:
             case Ok(status):
+                self._note_coast(status)
                 if status.state is DriveState.OPERATION_ENABLED:
                     return "variateur deja active (OPERATION_ENABLED)"
+                held = self._coast_refusal()
+                if held is not None:
+                    return held
                 if status.output_rpm != 0:
                     return f"arbre non lu a l'arret: RFRD={status.output_rpm} tr/min"
                 return None
@@ -554,7 +585,7 @@ class BusWorker(threading.Thread):
             + ("CMD=7 ok" if run_failed is None else f"CMD=7 ECHEC: {run_failed}")
         )
 
-    async def _reset_refusal(self) -> str | None:
+    async def _reset_refusal(self) -> str | None:  # noqa: PLR0911  # one per refusal
         """Why a fault reset may not be written now, or ``None``: one status read decides.
 
         The main console's rule (``TrainingRuntime._check_faulted_drive``): the
@@ -566,8 +597,12 @@ class BusWorker(threading.Thread):
         read = await self._built.drive.read_status()
         match read:
             case Ok(status):
+                self._note_coast(status)
                 if status.state is not DriveState.FAULT:
                     return f"aucun defaut a acquitter ({status.state.name})"
+                held = self._coast_refusal()
+                if held is not None:
+                    return held
                 if status.output_rpm != 0:
                     return f"arbre non lu a l'arret: RFRD={status.output_rpm} tr/min"
                 code = status.fault_code
@@ -642,7 +677,35 @@ class BusWorker(threading.Thread):
         self.snap.current_a = None
         self.snap.fault = None
 
+    def _note_coast(self, status: DriveStatus) -> None:
+        """Every read: start the coast-down hold when it shows the stage dropped (ANH-92)."""
+        started = self._coast_watch.note(status, Seconds(CYCLE_S))
+        if started is None:
+            return
+        until = Monotonic(self._clock.monotonic() + started.hold)
+        if self._coast_until is None or until > self._coast_until:
+            self._coast_until = until
+        self.snap.coast_hold_s = self._coast_left()
+
+    def _coast_left(self) -> Seconds | None:
+        """How long the hold still refuses Activer and Acquitter; ``None``: no hold."""
+        until = self._coast_until
+        now = self._clock.monotonic()
+        if until is None or now >= until:
+            return None
+        return elapsed(now, until)
+
+    def _coast_refusal(self) -> str | None:
+        left = self._coast_left()
+        if left is None:
+            return None
+        return (
+            "arbre peut-etre encore en roue libre (etage coupe, RFRD a 0): attendre encore "
+            f"{math.ceil(left)} s"
+        )
+
     def _show(self, status: DriveStatus) -> None:
+        self._note_coast(status)
         self.snap.link_ok = True
         self.snap.last_error = None
         self.snap.status_word = status.status_word
@@ -724,6 +787,7 @@ class BusWorker(threading.Thread):
                         await self._read_hsp()
                 await self._poll()
             self.snap.cycles += 1
+            self.snap.coast_hold_s = self._coast_left()
             self.snap.updated_at = self._clock.monotonic()
             spent = elapsed(started, self._clock.monotonic())
             await asyncio.sleep(max(0.05, CYCLE_S - spent))
@@ -868,6 +932,7 @@ async def api_state() -> JSONResponse:
             "last_error": s.last_error,
             "last_link_error": s.last_link_error,
             "last_action": s.last_action,
+            "coast_hold_s": None if s.coast_hold_s is None else math.ceil(s.coast_hold_s),
             "age_s": round(RealClock().monotonic() - s.updated_at, 2),
             "max_rpm": w.max_rpm,
         }
@@ -987,6 +1052,7 @@ PAGE = """
  <button class=go id=fr disabled>Acquitter d&eacute;faut</button>
 </div>
 <div style="margin-top:16px"><button class=estop id=es>ARR&Ecirc;T D'URGENCE</button></div>
+<p id=coast style="display:none;color:#ffb020;font-weight:bold"></p>
 <p style="color:#8b94a3" id=act>-</p>
 
 <script>
@@ -1026,10 +1092,15 @@ async function tick(){
   set('tq',  s.derived.torque_pct===null?null:s.derived.torque_pct+'%');
   set('flt', s.fault);
   set('eta', s.status_word===null?null:'0x'+s.status_word.toString(16).padStart(4,'0'));
+  // The coast-down hold: RFRD reads 0 with the stage off, the shaft may still coast.
+  const held=s.coast_hold_s!==null;
+  $('coast').style.display=held?'block':'none';
+  $('coast').textContent=held?('ARBRE PEUT-ETRE ENCORE EN ROUE LIBRE : Activer et Acquitter refuses encore '+
+    s.coast_hold_s+' s. Attendre l arret du bras, vu a l oeil.'):'';
   // Not on a drive already enabled or a shaft read turning: the console refuses it itself.
-  $('en').disabled=!(s.armed && s.link_ok && s.enabled===false && s.output_rpm===0);
+  $('en').disabled=!(s.armed && s.link_ok && s.enabled===false && s.output_rpm===0 && !held);
   // Only a fault on a shaft read at rest: the console refuses any other reset itself.
-  $('fr').disabled=!(s.link_ok && s.fault!==null && s.fault!=='aucun' && s.output_rpm===0);
+  $('fr').disabled=!(s.link_ok && s.fault!==null && s.fault!=='aucun' && s.output_rpm===0 && !held);
   set('sp',  s.setpoint_rpm+' tr/min');
   set('lq',  s.link.error_rate_pct+'% err');
   $('maxr').textContent='plafond '+s.max_rpm+' tr/min'; $('sl').max=s.max_rpm;

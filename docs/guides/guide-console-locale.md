@@ -1212,6 +1212,19 @@ sur les pages Seance et Securite seulement ; depuis le 11 octobre 2026 elle n'es
 pas un bras qui s'arrête. Un STOP, lui, fait baisser la vitesse même quand la pastille
 Securite dit `freeze` (§13.5).
 
+**Après une roue libre, ni départ ni reset tant que le bras peut tourner (ANH-92).**
+Quand l'étage de puissance du variateur tombe sur un arbre lu tournant (ouverture du
+STO, défaut en roue libre), RFRD lit 0 alors que le bras tourne encore sur son élan :
+la vitesse mesurée n'est plus la preuve de l'arrêt. Un bandeau rouge le dit en haut
+de toutes les pages, **ARBRE PEUT-ETRE ENCORE EN ROUE LIBRE**, suivi de
+`etage de puissance coupe, RFRD a 0 : depart et reset refuses encore N s. Ne pas approcher du bras avant son arret, vu a l'oeil`,
+N étant le compte à rebours de la console elle-même. Pendant ce temps, un départ est
+refusé (`demarrage refuse : arbre peut-etre encore en roue libre (etage de puissance coupe, RFRD a 0) : attendre encore N s`),
+un reset de défaut aussi, et la séance reste en `cooldown`. Aucun acquittement ne lève
+cette attente : seul le temps. Sa durée vient de `COAST_TAU_S` (40 s par défaut, à
+mesurer au banc) et de la dernière vitesse lue : environ 215 s depuis 3 tr/min au bras.
+Elle est gardée à travers un redémarrage de la console.
+
 **Pendant un gel, un programme fait quand même son retour au calme.** Un gel `freeze`
 tient la vitesse d'un programme pendant `warmup` et `hold`. Quand le programme arrive à
 sa phase `cooldown`, la vitesse commandée se met à baisser, sur la rampe douce des
@@ -2509,7 +2522,7 @@ la console d'abord (voir §3.4 et §14).
 | `1. Activer (LFRD=0, 6→7→15)` | LFRD=0 relu d'abord, puis CMD=6, 7, 15, chaque pas vérifié sur ETA ; rien de plus si LFRD=0 n'est pas confirmé. Rien du tout sur un variateur déjà activé, un arbre que RFRD ne lit pas à 0, ou sans état lu à cet instant (`enable: ECHEC: activation refusee (...)`) : le 6 couperait l'étage de puissance d'un variateur en marche, et le 7 et le 15 remettraient sous tension un arbre qui tourne. La page grise le bouton tant que le variateur se dit activé ou que l'arbre tourne |
 | `2. Arrêt en rampe` | LFRD=0 et CMD=7 (rampe dEC), puis CMD=6 seulement une fois l'arbre lu à l'arrêt (RFRD=0) ; sinon jamais CMD=6, et l'échec est dit |
 | `ARRÊT D'URGENCE` | désarme tout de suite, puis LFRD=0 et CMD=7 (rampe dEC) ; jamais CMD=6 |
-| `Acquitter défaut` | CMD=128 puis CMD=6, et seulement sur un variateur en défaut, arbre lu à l'arrêt (RFRD=0), défaut nommé que la console peut acquitter |
+| `Acquitter défaut` | CMD=128 puis CMD=6, et seulement sur un variateur en défaut, arbre lu à l'arrêt (RFRD=0), défaut nommé que la console peut acquitter, hors de l'attente de roue libre |
 
 `Acquitter défaut` suit la règle de la console : sinon rien n'est écrit et la dernière
 action le dit, `fault_reset: ECHEC: reset refuse (...)`, avec la raison (aucun défaut,
@@ -2525,6 +2538,19 @@ défaut et RFRD à 0 ; le refus de l'outil reste la barrière. Limite, la même 
 console : en défaut l'étage de puissance est coupé et RFRD est la fréquence de sortie,
 qui lit 0 même sur un arbre qui tourne encore sur son élan. « Arbre lu à l'arrêt » veut
 dire RFRD à 0 ; l'opérateur regarde l'arbre.
+
+**L'attente de roue libre (ANH-92).** Comme la console, l'outil retient la dernière
+vitesse lue étage de puissance en marche : dès qu'une lecture montre l'étage coupé
+après elle, `1. Activer` et `Acquitter défaut` sont refusés pendant `COAST_TAU_S` ×
+ln(v), v étant cette vitesse plus une période de lecture de la rampe la plus rapide
+(172,5 tr/min moteur, l'outil lit toutes les 0,5 s), bornée par la plaque. La dernière
+action le dit, `ECHEC: activation refusee (arbre peut-etre encore en roue libre (etage
+coupe, RFRD a 0): attendre encore N s)`, la page affiche le compte à rebours et grise les
+deux boutons. Avec la valeur par défaut, 40 s, depuis 3 tr/min au bras (149 tr/min
+moteur) : environ 231 s. `COAST_TAU_S` est lu dans l'environnement de l'outil, comme la
+console le lit ; une valeur hors de [5, 300] s est ignorée, dite, et remplacée par 40 s.
+L'outil ne garde pas cette attente à travers un redémarrage : après l'avoir relancé,
+attendre l'arrêt du bras, vu à l'œil.
 
 **Quand le variateur n'est pas là.** Le bandeau en haut de la page de l'outil dit
 pourquoi : `LIAISON MODBUS PERDUE.` quand plus rien ne se lit, ou `Variateur pas

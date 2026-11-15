@@ -124,7 +124,7 @@ async def until_the_session_is_over(scene: Scene) -> None:
     stopped (docs/securite.md, section 3). So the ending's RECOVERY runs on
     after the stop instead of passing during a coast the console saw.
     """
-    for _ in range(1000):
+    for _ in range(2500):  # the coast-down hold first, up to 289 s (ANH-92)
         if state_of(scene) is RuntimeState.FINISHED:
             return
         await scene.step()

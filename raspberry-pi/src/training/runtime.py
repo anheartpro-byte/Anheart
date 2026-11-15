@@ -173,6 +173,13 @@ from typing import Final, assert_never, final
 
 from src.clock import Clock
 from src.geometry import MachineGeometry
+from src.motor.coast import (
+    DEFAULT_COAST_TAU,
+    MAX_COAST_TAU,
+    MIN_COAST_TAU,
+    CoastWatch,
+    hold_cap,
+)
 from src.motor.drive import (
     DEFAULT_MAX_MOTOR_HZ,
     LFT_FAULT_CODES,
@@ -570,6 +577,10 @@ class RuntimeLimits:
     increase is only a slower climb.
     """
 
+    coast_tau: Seconds = DEFAULT_COAST_TAU
+    """``COAST_TAU_S``: the coast time constant the coast-down hold is computed on
+    (:func:`~src.motor.coast.coast_hold`)."""
+
     disable_attempts: int = 5
     """Consecutive refused disable sequences before :meth:`TrainingRuntime._settle` escalates.
 
@@ -595,6 +606,11 @@ class RuntimeLimits:
             )
         if self.disable_attempts < 1:
             raise ValueError(f"disable_attempts must be at least 1, got {self.disable_attempts}")
+        if not MIN_COAST_TAU <= self.coast_tau <= MAX_COAST_TAU:
+            raise ValueError(
+                f"coast_tau must be within [{MIN_COAST_TAU}, {MAX_COAST_TAU}] s, got "
+                f"{self.coast_tau}"
+            )
         if self.start_hysteresis_rpm < 0:
             raise ValueError(
                 f"start_hysteresis_rpm must not be negative, got {self.start_hysteresis_rpm}"
@@ -731,6 +747,18 @@ class RestartPending:
     is armed on the values it is leaving, whoever asks and from wherever."""
 
 
+@dataclass(frozen=True, slots=True)
+class CoastDownHold:
+    """The output stage dropped on a shaft last read turning: it may still coast (ANH-92).
+
+    RFRD reads 0 with the stage off, so nothing shows the coast. Every start waits
+    ``remaining`` more seconds of the hold (:func:`~src.motor.coast.coast_hold`). No
+    acknowledgement lifts it: only time does.
+    """
+
+    remaining: Seconds
+
+
 type StartRefusal = (
     AlreadyStarted
     | NotAttested
@@ -746,6 +774,7 @@ type StartRefusal = (
     | StoBridgedOnBoard
     | PreflightRefused
     | RestartPending
+    | CoastDownHold
 )
 """Every way :meth:`TrainingRuntime.start` can refuse. Closed; match it nested."""
 
@@ -1220,6 +1249,14 @@ class ShaftStillTurning:
 
 
 @dataclass(frozen=True, slots=True)
+class CoastDownHeld:
+    """The coast-down hold stands (:class:`CoastDownHold`): a faulted drive's RFRD reads 0
+    however fast the shaft still coasts, so no reset until ``remaining`` has run out."""
+
+    remaining: Seconds
+
+
+@dataclass(frozen=True, slots=True)
 class ResetForbidden:
     """The fault is not one the console may reset: power the drive down and inspect it.
 
@@ -1244,6 +1281,7 @@ type FaultResetRefusal = (
     ResetWhileCommanded
     | ResetBehindVerdict
     | NoFaultToReset
+    | CoastDownHeld
     | ShaftStillTurning
     | ResetForbidden
     | ResetUndelivered
@@ -1280,6 +1318,8 @@ class TrainingRuntime:
         "_arming_gate",
         "_attendant_last_seen",
         "_clock",
+        "_coast_until",
+        "_coast_watch",
         "_controller",
         "_counters",
         "_decision",
@@ -1575,6 +1615,11 @@ class TrainingRuntime:
         # at each such tick's end, cleared by _judge_sto only.
         self._sto_withheld_at: Monotonic | None = None
         self._latched: SafetyVerdict | None = None
+        # The coast-down hold (ANH-92): which reads showed the stage on, and its end.
+        self._coast_watch: CoastWatch = CoastWatch(
+            tau=self._limits.coast_tau, standstill=self._limits.standstill_rpm
+        )
+        self._coast_until: Monotonic | None = None
         # What this module's own latch held when GO_SILENT took its place, for
         # the screen alone: written by _latch, read by the `silenced` property.
         self._silenced: SafetyVerdict | None = None
@@ -1801,6 +1846,38 @@ class TrainingRuntime:
     def restart_hold(self) -> RestartPending | None:
         """Why every arming is refused now for a restart; ``None`` when none is waiting."""
         return RestartPending() if self._restart_held else None
+
+    @property
+    def coast_hold_until(self) -> Monotonic | None:
+        """When the coast-down hold ends; ``None`` when none was ever started. For the
+        console to keep it across a restart (``LocalPanel``)."""
+        return self._coast_until
+
+    def coast_hold_remaining(self, now: Monotonic) -> Seconds | None:
+        """How long the coast-down hold still refuses starts and resets; ``None``: none."""
+        until = self._coast_until
+        if until is None or now >= until:
+            return None
+        return elapsed(now, until)
+
+    def hold_coast(self, now: Monotonic, hold: Seconds, why: str) -> None:
+        """Hold every start and fault reset for ``hold``, capped, never shortening one.
+
+        Called by :meth:`_note_stage`, and by the console at boot with the hold the
+        previous process left (``LocalPanel``).
+        """
+        capped = min(hold, hold_cap(self._limits.coast_tau, self._limits.standstill_rpm))
+        until = Monotonic(now + capped)
+        if self._coast_until is not None and self._coast_until >= until:
+            return
+        self._coast_until = until
+        _logger.warning("coast-down hold: %s; starts and resets refused for %.0f s", why, capped)
+
+    def _note_stage(self, now: Monotonic, status: DriveStatus, period: Seconds) -> None:
+        """Every read: start the coast-down hold when it shows the stage dropped (ANH-92)."""
+        started = self._coast_watch.note(status, period)
+        if started is not None:
+            self.hold_coast(now, started.hold, started.why)
 
     @property
     def standing(self) -> SafetyVerdict | None:
@@ -2261,6 +2338,10 @@ class TrainingRuntime:
         state = self.state
         if self._shutdown is not None or self._silent:
             return Err(ResetUndelivered("this runtime no longer writes to the drive"))
+        # First: the shaft may coast, whatever the phase, and only time says when it may not.
+        held = self.coast_hold_remaining(now)
+        if held is not None:
+            return Err(CoastDownHeld(held))
         commanded = self._phase is not Phase.DONE or self._applied_rpm != 0
         if state is RuntimeState.RUNNING or commanded:
             return Err(ResetWhileCommanded(state=state, phase=self._phase))
@@ -2297,7 +2378,9 @@ class TrainingRuntime:
                 describe_drive_error(written.error).detail,
             )
 
-    def _refuse_arming(self, occupancy: Occupancy) -> StartRefusal | None:
+    def _refuse_arming(  # noqa: PLR0911  # one return per gate
+        self, occupancy: Occupancy
+    ) -> StartRefusal | None:
         """What refuses ANY start, programme or manual, before the drive is touched.
 
         A runtime that has FINISHED may be armed again - that is what puts the
@@ -2321,6 +2404,10 @@ class TrainingRuntime:
         sto = check_sto_for_start(self._sto.latest(self._clock.monotonic()), occupancy)
         if sto is not None:
             return sto
+        # Before the state: an ending lasts the hold (_ending_phase), and the hold is why.
+        held = self.coast_hold_remaining(self._clock.monotonic())
+        if held is not None:
+            return CoastDownHold(held)
         if state not in (RuntimeState.IDLE, RuntimeState.FINISHED):
             return AlreadyStarted(state)
         # Last, so the operator is first told what only they can clear.
@@ -2542,6 +2629,7 @@ class TrainingRuntime:
         self._note_success(Exchange.READ)
         self._last_status = status.status
         self._last_status_at = now
+        self._note_stage(now, status.status, self._supervisor.limits.control_period)
         return Ok(status.status)
 
     async def _arm(
@@ -2997,6 +3085,7 @@ class TrainingRuntime:
         self._note_success(Exchange.READ)
         self._last_status = status.value
         self._last_status_at = now
+        self._note_stage(now, status.value, self._supervisor.limits.control_period)
         state = status.value.state
         if state is not DriveState.SWITCH_ON_DISABLED:
             self._disable_follows_fault = state is DriveState.FAULT
@@ -3065,6 +3154,7 @@ class TrainingRuntime:
         )
         self._idle_status = status.status
         self._idle_status_at = now
+        self._note_stage(now, status.status, IDLE_POLL_PERIOD)
         return Ok(status.status)
 
     def _inspection_failed(self, now: Monotonic, inspection: OpenFailed | StatusFailed) -> None:
@@ -3254,8 +3344,11 @@ class TrainingRuntime:
         """
         recovery_from = self._recovery_from
         if recovery_from is None:
-            settled = self._applied_rpm == 0 and self._at_standstill(now)
-            if not settled and elapsed(ending.at, now) <= self._cooldown_s():
+            # A coast-down hold is no confirmed standstill, and outlasts the deadline: it
+            # is bounded by its own cap (src.motor.coast.hold_cap).
+            held = self.coast_hold_remaining(now) is not None
+            settled = self._applied_rpm == 0 and self._at_standstill(now) and not held
+            if not settled and (held or elapsed(ending.at, now) <= self._cooldown_s()):
                 return Phase.COOLDOWN
             self._recovery_from = now
             return Phase.RECOVERY
@@ -3445,9 +3538,13 @@ class TrainingRuntime:
         if descent is None:
             descent = self._expected_descent(ending.setpoint)
             self._ending_descent = descent
+        # COOLDOWN lasts the coast-down hold (_ending_phase): the ending is given it, as
+        # long as the shaft may still coast, and never more than the hold's cap.
+        until = self._coast_until
+        coasting = Seconds(0.0) if until is None else elapsed(ending.at, until)
         return EndingInProgress(
             opened=self._session_elapsed(ending.at),
-            descent=descent,
+            descent=Seconds(max(descent, coasting)),
             recovery=self._recovery_s(),
         )
 
@@ -4861,6 +4958,7 @@ class TrainingRuntime:
             mode=self.mode,
             manual=self._manual_view(),
             sto=self._sto.latest(now),
+            coast_hold=self.coast_hold_remaining(now),
         )
 
     def _manual_view(self) -> ManualView | None:

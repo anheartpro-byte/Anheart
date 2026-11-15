@@ -961,7 +961,8 @@ async def test_ex2_acceptance_a_drive_fault_injected_in_a_simulated_session_is_i
         await set_target(http, 5.0)
         await recorded.tick(15.0)
         recorded.rig.simulator.inject_fault(DriveFault.OVERCURRENT)
-        await recorded.tick(180.0)
+        # 300 s: the ending lasts the coast-down hold, ~231 s from 249 motor rpm (ANH-92).
+        await recorded.tick(300.0)
         assert recorded.state() is RuntimeState.ENDING, "the fault is latched, nobody reset it"
     recording = recorded.recording()
     assert recording.warnings == (), "closed and whole, frames included in its checksums"

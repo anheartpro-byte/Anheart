@@ -49,6 +49,7 @@ from src.local_config import (
     DEFAULT_RECORD_RETENTION_DAYS,
     KEY_ARM_RADIUS_M,
     KEY_BITALINO_ADDRESS,
+    KEY_COAST_TAU_S,
     KEY_ECG_SOURCE,
     KEY_GEAR_RATIO,
     KEY_LEG_TIP_RADIUS_M,
@@ -75,6 +76,7 @@ from src.local_config import (
 )
 from src.medical import MedicalStatus
 from src.motor.atv320 import DEFAULT_BAUDRATE, DEFAULT_SLAVE_ADDRESS, DEFAULT_TIMEOUT
+from src.motor.coast import DEFAULT_COAST_TAU
 from src.motor.ftdi_link import SCHNEIDER_CABLE_URL, Parity
 from src.result import Err, Ok, Result
 from src.sensors.base import SensorKind
@@ -286,6 +288,13 @@ KEYS: Final[Mapping[str, KeySpec]] = {
         env=KEY_LEG_TIP_RADIUS_M,
         nullable=True,
         default=None,
+    ),
+    KEY_COAST_TAU_S: KeySpec(
+        family=Family.SAFETY,
+        kind=ValueType.NUMBER,
+        env=KEY_COAST_TAU_S,
+        nullable=False,
+        default=float(DEFAULT_COAST_TAU),
     ),
     KEY_PROGRAMS_ENABLED: KeySpec(
         family=Family.SAFETY,
@@ -585,6 +594,7 @@ def effective_values(config: LocalConfig) -> dict[str, ConfigValue]:
         KEY_MOTOR_MAX_RPM: int(config.motor_max_rpm),
         KEY_ARM_RADIUS_M: float(config.geometry.radius),
         KEY_LEG_TIP_RADIUS_M: None if leg is None else float(leg),
+        KEY_COAST_TAU_S: float(config.coast_tau),
         KEY_PROGRAMS_ENABLED: config.programs_enabled,
         KEY_OCCUPIED_ENABLED: config.occupied_enabled,
     }

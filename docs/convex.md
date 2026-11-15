@@ -2796,7 +2796,7 @@ revalide pas ([raspberry-pi.md, 12](raspberry-pi.md#12-la-configuration-env)).
 | `recordApplied` (interne) | Ce que la machine dit d'une révision (`POST /api/machine/config/applied`). Une révision appliquée est une entrée `config_change` du [carnet de bord](#machine_logbook--carnet-de-bord-des-machines-anh-149) (ANH-149). |
 
 Les règles des clés de sûreté (`MOTOR_BACKEND`, `MOTOR_MAX_RPM`,
-`ARM_RADIUS_M`, `LEG_TIP_RADIUS_M`, `PROGRAMS_ENABLED`,
+`ARM_RADIUS_M`, `LEG_TIP_RADIUS_M`, `COAST_TAU_S`, `PROGRAMS_ENABLED`,
 `OCCUPANCY_OCCUPIED_ENABLED`) se jugent toujours par rapport à la révision
 **appliquée**, celle que la machine fait tourner : une révision approuvée et
 pas encore appliquée ne compte pas. Une machine sans révision appliquée (une

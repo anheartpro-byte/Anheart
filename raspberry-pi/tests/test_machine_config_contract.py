@@ -22,6 +22,7 @@ from src.local_config import (
 )
 from src.machine_config import CLOUD_ENV_KEYS, KEYS, TYPE_WORDS, ValueType
 from src.motor.atv320 import MODBUS_SLAVE_MIN, SCHNEIDER_POINT_TO_POINT_ADDRESS
+from src.motor.coast import MAX_COAST_TAU, MIN_COAST_TAU
 from src.motor.drive import REGISTER_OFFSET_MAX, REGISTER_OFFSET_MIN
 from src.training.plan import NAMEPLATE_MOTOR_RPM
 from src.web.deps import MAX_TCP_PORT, MIN_TCP_PORT
@@ -82,6 +83,8 @@ def test_the_bounds_are_those_the_console_enforces() -> None:
     assert _shared("ARM_RADIUS_M", "max") == MAX_ARM_RADIUS_M
     assert _shared("LEG_TIP_RADIUS_M", "max") == MAX_ARM_RADIUS_M
     assert _shared("LEG_TIP_RADIUS_M", "min_key") == "ARM_RADIUS_M"
+    assert _shared("COAST_TAU_S", "min") == MIN_COAST_TAU
+    assert _shared("COAST_TAU_S", "max") == MAX_COAST_TAU
     assert _shared("RECORD_LOCAL_RETENTION_DAYS", "min") == 0
     assert _shared("RECORD_LOCAL_RETENTION_DAYS", "max") == MAX_RECORD_RETENTION_DAYS
     assert _shared("UI_PORT", "min") == MIN_TCP_PORT

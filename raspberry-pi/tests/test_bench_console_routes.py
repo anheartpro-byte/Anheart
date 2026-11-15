@@ -37,6 +37,7 @@ from src.result import Ok
 from src.units import Metres, Seconds
 from tests.test_atv320 import (
     ETA_FAULT,
+    ETA_OPERATION_ENABLED,
     ETA_SWITCH_ON_DISABLED,
     ETA_SWITCHED_ON,
     LFT_OVERCURRENT,
@@ -877,3 +878,64 @@ async def test_a_fault_reset_half_done_says_which_half(
     assert shown == f"fault_reset: {said}"
     await rig.polled()
     assert _commands(rig.since(mark), rig.regs.cmd) == words
+
+
+# =========================================================================
+# The coast-down hold: Activer and Acquitter wait for a shaft that may coast (ANH-92)
+# =========================================================================
+
+#: A time constant small enough for the test to see the hold run out (~3.3 s from
+#: 600 rpm and one cycle of ramp); the bench's own is COAST_TAU_S, 40 s by default.
+QUICK_TAU: Final[Seconds] = Seconds(0.5)
+
+
+async def coast_hold_shown(rig: Bench) -> object:
+    """What the page reads of the hold: whole seconds, or ``None``."""
+    state = cast(dict[str, object], (await rig.page.get("/api/state")).json())
+    return state["coast_hold_s"]
+
+
+async def test_after_the_stage_drops_on_a_turning_shaft_enable_and_reset_wait_out_the_hold(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(bench, "COAST_TAU", QUICK_TAU)
+    async with started(monkeypatch) as rig:
+        armed = await rig.press("/api/arm", {"motor_uncoupled": True})
+        assert armed.status_code == HTTPStatus.OK
+        # Turning under torque, then the stage drops: RFRD 0, the shaft may still coast.
+        rig.bus.registers[rig.regs.eta] = ETA_OPERATION_ENABLED
+        rig.bus.registers[rig.regs.rfrd] = TURNING_RPM
+        await rig.polled()
+        rig.bus.registers[rig.regs.eta] = ETA_SWITCH_ON_DISABLED
+        rig.bus.registers[rig.regs.rfrd] = 0
+        await rig.polled()
+        hold = await coast_hold_shown(rig)
+        assert isinstance(hold, int)
+        assert 1 <= hold <= math.ceil(0.5 * math.log(TURNING_RPM + 345.0 * 0.5))
+        mark = rig.mark()
+        await rig.press("/api/enable")
+        shown = await rig.result("enable")
+        assert "activation refusee (arbre peut-etre encore en roue libre" in shown, shown
+        rig.bus.registers[rig.regs.eta] = ETA_FAULT
+        rig.bus.registers[rig.regs.lft] = LFT_MODBUS_LOSS
+        await rig.press("/api/fault-reset")
+        shown = await rig.result("fault_reset")
+        assert "reset refuse (arbre peut-etre encore en roue libre" in shown, shown
+        assert rig.since(mark) == [], "not even LFRD"
+        # Once the hold is over, the reset goes through, as it always did.
+        deadline = time.monotonic() + WAIT_S
+        while await coast_hold_shown(rig) is not None:
+            assert time.monotonic() < deadline, "the hold never ran out"
+            await asyncio.sleep(0.1)
+        rig.worker.snap.last_action = "-"  # the refused reset's result is not this one's
+        await rig.press("/api/fault-reset")
+        assert await rig.result("fault_reset") == "fault_reset: ok"
+
+
+async def test_a_stop_at_standstill_before_the_stage_drops_holds_nothing(rig: Bench) -> None:
+    """The tool's own stop: LFRD = 0, RFRD read 0 with the stage on, only then 7 and 6."""
+    await rig.armed_and_enabled()
+    rig.bus.registers[rig.regs.eta] = ETA_SWITCHED_ON
+    await rig.polled()
+    await rig.polled()
+    assert await coast_hold_shown(rig) is None

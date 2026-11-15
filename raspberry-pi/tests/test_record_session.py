@@ -972,7 +972,8 @@ async def test_a_drive_fault_is_an_event_with_its_mnemonic_and_its_code(tmp_path
         await set_target(session, 5.0)
         await recorded.tick(15.0)
         recorded.rig.simulator.inject_fault(DriveFault.OVERCURRENT)
-        await recorded.tick(180.0)
+        # 300 s: the ending lasts the coast-down hold, ~231 s from 249 motor rpm (ANH-92).
+        await recorded.tick(300.0)
         # Nobody reset the fault: the runtime is still ENDING, and stays so.
         assert recorded.state() is RuntimeState.ENDING
         rows_at_close = len(recorded.recording().rows)

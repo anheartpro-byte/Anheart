@@ -388,12 +388,12 @@ async def test_a_faulted_drive_lets_the_reads_go_on_then_acknowledgement_and_res
         await source.poll()
         assert source.attempts == before + 1
     assert coasted > 10  # a coast, read all the way down
-    # Stopped and faulted, the run command held: the ending waits for the reset alone.
-    # Unless the chain opened first: that stop ended at the tick that saw the stage off,
-    # RFRD reading 0 (docs/securite.md, section 3), and removed the run command then.
-    held = other != "sto_open"
-    assert (state_now(runtime) is RuntimeState.ENDING) is held
-    assert enabled_now(runtime) is held
+    # Stopped and faulted: the ending lasts the coast-down hold the stage dropping at speed
+    # started (ANH-92). The run command is held, the reset waits for it, unless the chain
+    # opened first: that stop ended at the tick that saw the stage off, RFRD reading 0
+    # (docs/securite.md, section 3), and removed the run command then.
+    assert state_now(runtime) is RuntimeState.ENDING
+    assert enabled_now(runtime) is (other != "sto_open")
     status = runtime.drive_status
     assert status is not None
     assert status.state is DriveState.FAULT
@@ -407,6 +407,9 @@ async def test_a_faulted_drive_lets_the_reads_go_on_then_acknowledgement_and_res
     await tick(5)
     assert source.attempts > attempts
     assert source.latest(rig.clock.monotonic()).state is StoState.READY
+    left = runtime.snapshot().coast_hold
+    assert left is not None, "the stage dropped at speed: no reset before the hold is over"
+    await tick(round(left / 0.2) + 2)
     assert isinstance(panel.surface.acknowledge(OPERATOR, estop_released=True), Ok)
     assert isinstance(panel.surface.submit_fault_reset(operator=OPERATOR), Ok)
     await tick(10)  # the reset, then its SHUTDOWN once settled

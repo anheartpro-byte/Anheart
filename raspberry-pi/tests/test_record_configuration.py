@@ -66,8 +66,9 @@ def test_document_hash_stays_identical_and_excludes_secrets_identities_and_healt
         config, RUNTIME_LIMITS, safety, default_motion_limits(), SoftwareVersion("reference")
     )
     assert hashlib.sha256(content).hexdigest() == stamp.config_hash
-    # Changed once on purpose by ANH-92, which added `sto_source` to the document.
-    assert stamp.config_hash == "e8f63a2674d3ae910901d9d2a36bf5554306bb364011efc216fab6f9061e436b"
+    # Changed on purpose by ANH-92, which added `sto_source` to the document, then the
+    # runtime's `coast_tau` (COAST_TAU_S, the coast-down hold).
+    assert stamp.config_hash == "28e008fb3e2ff7377720e9adb6652cdca32525dbaef2a7f49982ab878b475a23"
     assert sentinel.encode() not in content
     for forbidden in (
         b"subject",

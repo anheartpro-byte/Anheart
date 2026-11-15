@@ -390,6 +390,7 @@
       "MOTOR_MAX_RPM": "Motor ceiling (rpm)",
       "ARM_RADIUS_M": "Rider radius (m)",
       "LEG_TIP_RADIUS_M": "Foot tip radius (m)",
+      "COAST_TAU_S": "Coast time constant (s)",
       "PROGRAMS_ENABLED": "Programmed sessions",
       "OCCUPANCY_OCCUPIED_ENABLED": "Person on board"
     },

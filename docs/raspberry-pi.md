@@ -3797,6 +3797,7 @@ ce fichier, tout vient du `.env`, comme ci-dessous.
 | `ARM_RADIUS_M` | **aucun (obligatoire, sans défaut)** | rayon mesuré de l'axe à l'occupant ; tout g affiché en dépend | ]0, 5] m |
 | `LEG_TIP_RADIUS_M` | aucun | point du passager le plus éloigné ; la limite de dérivée de g y est jugée | [`ARM_RADIUS_M`, 5] m ; vide = jugée à `ARM_RADIUS_M` (sous-estime la charge aux pieds ; la CAO borne à 2,43 m) |
 | `GEAR_RATIO` | `49.79` | rapport du réducteur (confirmé au banc) | > 0 |
+| `COAST_TAU_S` | `40` | constante de temps de la roue libre de l'arbre : après une coupure de l'étage de puissance sur un arbre lu tournant, départ et reset de défaut attendent `COAST_TAU_S` × ln(v) ([securite.md, section 2](securite.md#2-ce-que-le-logiciel-garantit)) ; 40 s est prudent, à mesurer au banc ([9.6](securite.md#96-essai-au-banc--procédure-non-faite)) | [5, 300] s ; clé de sûreté de la configuration de la machine |
 | `UI_HOST` | `127.0.0.1` | adresse d'écoute de la page | hors boucle locale : `DEVICE_TOKEN` **et** le certificat (`UI_TLS_CERT`, `UI_TLS_KEY`) obligatoires ([12.5](#125-la-page-en-tls-hors-de-la-boucle-locale)) |
 | `UI_PORT` | **`8080`** | port de la page | ≠ 8123 (port de `scripts/bench_console.py`) ; `.env.example` utilise aussi 8080 |
 | `DEVICE_TOKEN` | aucun | jeton de l'appareil `local` de la console (ANH-152), à côté des tablettes de la liste signée ([8.9](#89-la-liste-des-opérateurs-signée-anh-152)) | ≥ 16 caractères si exigé ; `UI_TOKEN`, son ancien nom, est lu quand il est absent ; les deux différents : refus de démarrer |
@@ -4173,7 +4174,7 @@ familles :
 | Famille | Clés | Appliquée |
 |---|---|---|
 | exploitation | `name`, `location`, `SENSORS`, `MOTOR_PORT`, `MOTOR_SLAVE_ID`, `MODBUS_BAUDRATE`, `MODBUS_PARITY`, `MODBUS_TIMEOUT_S`, `MOTOR_REG_OFFSET`, `ECG_SOURCE`, `BITALINO_ADDRESS`, `PRESENCE_SOURCE`, `UI_PORT`, `GEAR_RATIO`, `RECORD_LOCAL_RETENTION_DAYS` | au repos, d'elle même, par un redémarrage contrôlé |
-| sûreté | `MOTOR_BACKEND`, `MOTOR_MAX_RPM`, `ARM_RADIUS_M`, `LEG_TIP_RADIUS_M`, `PROGRAMS_ENABLED`, `OCCUPANCY_OCCUPIED_ENABLED` | au repos, quand un opérateur connecté à la console le confirme, puis par un redémarrage contrôlé |
+| sûreté | `MOTOR_BACKEND`, `MOTOR_MAX_RPM`, `ARM_RADIUS_M`, `LEG_TIP_RADIUS_M`, `COAST_TAU_S`, `PROGRAMS_ENABLED`, `OCCUPANCY_OCCUPIED_ENABLED` | au repos, quand un opérateur connecté à la console le confirme, puis par un redémarrage contrôlé |
 
 **Ce qui reste dans le `.env`.** Les `local_keys` du contrat, chacune avec sa
 raison : `MACHINE_API_KEY` et `CONVEX_URL` (le lien), `UI_HOST`,
