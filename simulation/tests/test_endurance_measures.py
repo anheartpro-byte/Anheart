@@ -29,6 +29,7 @@ from simulation.endurance_measures import (
     DataFolder,
     DataState,
     Footprint,
+    Gaps,
     Histogram,
     Kind,
     Mode,
@@ -45,10 +46,12 @@ from simulation.endurance_measures import (
     check_rss,
     check_sessions,
     check_tick,
+    check_tick_gap,
     darwin_memory,
     document,
     footprint,
     judge,
+    judged,
     markdown,
     observed,
     open_descriptors,
@@ -61,6 +64,7 @@ from simulation.endurance_measures import (
     warm_up,
     write_report,
 )
+from simulation.harness import PANEL_SAFETY
 from simulation.tests.conftest import document as parsed
 from simulation.tests.conftest import obj, seq
 from src.record.cursor import BASELINE_NAME, CURSOR_SUFFIX
@@ -359,8 +363,13 @@ def test_ex1_a_reading_holds_the_four_measures(tmp_path: Path) -> None:
     record(root, OPEN, blocks=3, closed=False)
     tick = Quantiles(count=5, p50=1.0, p99=2.0, highest=3.0)
 
-    reading = Sampler(DataFolder(root)).take(42.0, tick)
+    sampler = Sampler(DataFolder(root))
+    reading = sampler.take(42.0, tick)
+    # Counted at every reading, not once for the run: a descriptor opened since is seen.
+    with (tmp_path / "held").open("w", encoding="ascii"):
+        held = sampler.take(43.0, None)
 
+    assert held.descriptors == reading.descriptors + 1
     assert reading.at == 42.0
     assert reading.rss > 10 * MIB
     assert reading.descriptors >= 3
@@ -505,6 +514,24 @@ def test_ex2_memory_that_grows_by_more_than_a_tenth_after_the_first_hour_fails()
     assert "trop peu" in within.measured, "a run too short to judge is not a run that passes"
 
 
+def test_ex2_memory_is_held_to_ten_per_cent_exactly() -> None:
+    """At 10 % from the first reading after the warm-up it passes, at 11 % it fails."""
+    flat = tuple(replace(sample, rss=100 * MIB) for sample in steady().samples)
+
+    def peak(rss_mib: int) -> Check:
+        top = tuple(
+            replace(sample, rss=rss_mib * MIB) if index == len(flat) // 2 else sample
+            for index, sample in enumerate(flat)
+        )
+        return check_rss(replace(steady(), samples=top))
+
+    assert peak(110).status is Status.PASS
+    assert peak(90).status is Status.PASS
+    assert peak(111).status is Status.FAIL
+    assert peak(89).status is Status.FAIL
+    assert "écart maximal 11.0%" in peak(111).measured
+
+
 def test_ex2_a_tick_whose_99th_centile_reaches_150_ms_fails() -> None:
     run = steady()
 
@@ -523,14 +550,236 @@ def test_ex2_a_descriptor_that_leaks_fails_and_descriptors_that_come_and_go_do_n
         replace(sample, descriptors=12 + index // 10) for index, sample in enumerate(run.samples)
     )
 
+    fine = check_descriptors(run)
     leak = check_descriptors(replace(run, samples=leaking))
     few = check_descriptors(replace(run, samples=run.samples[:6]))
 
-    assert check_descriptors(run).status is Status.PASS
+    assert fine.status is Status.PASS
+    assert fine.measured == (
+        "12 au début, au moins 12 sur la fin (5 relevés depuis 23 h 00) ; au plus 15, 15 à la fin"
+    )
     assert leak.status is Status.FAIL
-    assert "au plus 16 puis 21" in leak.measured
+    # The low before the end is above its lowest tenth: 7 readings at 12, then 13.
+    assert "13 au début, au moins 21 sur la fin" in leak.measured
     assert few.status is Status.FAIL
     assert "trop peu" in few.measured
+
+
+def counted(run: Run, descriptors: Callable[[float], int]) -> Run:
+    """``run`` with, at each reading, the descriptors ``descriptors`` gives for its instant."""
+    return replace(
+        run,
+        samples=tuple(
+            replace(sample, descriptors=descriptors(sample.at)) for sample in run.samples
+        ),
+    )
+
+
+def leaking_from(start: float, every: float) -> Callable[[float], int]:
+    """Twelve descriptors open, and one more leaked every ``every`` seconds from ``start`` on."""
+    return lambda at: 12 if at < start else 13 + int((at - start) // every)
+
+
+TWO_HOURS = replace(steady(2.0), samples=tuple(reading(30.0 * (n + 1)) for n in range(240)))
+"""The shape of the two real-time hours on the Pi: a reading every 30 s."""
+
+
+def test_ex2_a_leak_that_starts_late_in_the_day_fails_unless_it_starts_in_its_last_hour() -> None:
+    """The nightly day: a session every ~1900 s, one descriptor leaked by each."""
+    day = steady()
+
+    for start in (13 * 3600.0, 22 * 3600.0 + 45 * 60):
+        late = check_descriptors(counted(day, leaking_from(start, 1900.0)))
+        assert late.status is Status.FAIL, f"leak from {start} s"
+    blind = check_descriptors(counted(day, leaking_from(23 * 3600.0 + 15 * 60, 1900.0)))
+
+    assert blind.status is Status.PASS, "the documented blind window: the last hour"
+    assert "(5 relevés depuis 23 h 00)" in blind.measured
+
+
+def test_ex2_a_leak_that_starts_late_in_two_hours_fails_unless_in_their_last_quarter_hour() -> None:
+    """The two real-time hours on the Pi: a cycle every ~11 minutes, one descriptor each."""
+    for start in (91 * 60.0, 104 * 60.0):
+        late = check_descriptors(counted(TWO_HOURS, leaking_from(start, 660.0)))
+        assert late.status is Status.FAIL, f"leak from minute {start / 60:.0f}"
+    blind = check_descriptors(counted(TWO_HOURS, leaking_from(106 * 60.0, 660.0)))
+
+    assert blind.status is Status.PASS, "the documented blind window: the last 15 minutes"
+    assert "(31 relevés depuis 1 h 45)" in blind.measured
+
+
+NIGHT = replace(steady(), samples=tuple(reading(300.0 * (n + 1)) for n in range(288)))
+"""The shape of the nightly day: a reading every 300 s."""
+
+
+def kept_once_from(start: float) -> Callable[[float], int]:
+    """Twelve descriptors open, and one more kept for good from ``start`` on: a one-off leak."""
+    return lambda at: 13 if at >= start else 12
+
+
+def test_ex2_a_one_off_leak_sets_the_low_itself_only_in_its_documented_window() -> None:
+    """A descriptor kept once for good is missed only within the lowest tenth of the
+    readings before the end; one that recurs is caught wherever it starts (above)."""
+    for shape, missed, caught in (
+        (NIGHT, 3.1 * 3600, 3.25 * 3600),
+        (TWO_HOURS, 64.5 * 60, 65 * 60),
+    ):
+        assert check_descriptors(counted(shape, kept_once_from(missed))).status is Status.PASS
+        assert check_descriptors(counted(shape, kept_once_from(caught))).status is Status.FAIL
+
+
+def test_ex2_a_descriptor_open_or_closed_for_one_reading_fails_nothing() -> None:
+    flat = counted(steady(), lambda _at: 12)
+    start = len(flat.samples) - len(judged(flat))
+
+    def one(index: int, descriptors: int) -> Check:
+        return check_descriptors(
+            replace(
+                flat,
+                samples=tuple(
+                    replace(sample, descriptors=descriptors) if number == index else sample
+                    for number, sample in enumerate(flat.samples)
+                ),
+            )
+        )
+
+    for index in (start + 3, 50, len(flat.samples) - 3, len(flat.samples) - 1):
+        for descriptors in (40, 11):
+            verdict = one(index, descriptors)
+            assert verdict.status is Status.PASS, (index, descriptors, verdict.measured)
+    # Before the end, a tenth of the readings (8 of 88 here) may be caught with one closed.
+    before = range(start, len(flat.samples) - 5)
+    for lows, status in ((2, Status.PASS), (8, Status.PASS), (9, Status.FAIL)):
+        closed = {before[n * 9] for n in range(lows)}
+        dipped = replace(
+            flat,
+            samples=tuple(
+                replace(sample, descriptors=11) if number in closed else sample
+                for number, sample in enumerate(flat.samples)
+            ),
+        )
+        assert check_descriptors(dipped).status is status, lows
+    # The documented price of the lowest of the end: one reading there caught with a
+    # descriptor closed hides a leak of one descriptor.
+    leaked = counted(flat, lambda at: 13 if at >= 13 * 3600.0 else 12)
+    hidden = replace(
+        leaked,
+        samples=tuple(
+            replace(sample, descriptors=12) if number == len(flat.samples) - 2 else sample
+            for number, sample in enumerate(leaked.samples)
+        ),
+    )
+    assert check_descriptors(leaked).status is Status.FAIL
+    assert check_descriptors(hidden).status is Status.PASS
+    # Five readings judged, the last quarter holds one: the end is still two of them, and
+    # the low of the three before it their middle one. One reading caught high at the end
+    # and one caught low before it fail nothing.
+    short = replace(
+        steady(1.0),
+        samples=(
+            reading(600.0),
+            reading(1000.0, descriptors=11),
+            reading(1100.0),
+            reading(1200.0),
+            reading(1300.0),
+            reading(2000.0, descriptors=40),
+        ),
+    )
+    assert check_descriptors(short).status is Status.PASS
+
+
+def test_ex2_four_readings_after_the_warm_up_are_too_few_for_the_descriptors() -> None:
+    """With two readings before the end, their second lowest would be their highest: a
+    leak would pass. Four readings are refused instead, and five keep three before it."""
+    for counts in ((12, 40, 13, 13), (12, 13, 13, 13)):
+        four = replace(
+            steady(1.0),
+            samples=tuple(
+                reading(1000.0 + 100.0 * n, descriptors=count) for n, count in enumerate(counts)
+            ),
+        )
+        verdict = check_descriptors(four)
+        assert verdict.status is Status.FAIL, counts
+        assert verdict.measured == "4 relevés après la chauffe : trop peu"
+    # Five, the last three close together: three still come before the end, whose middle
+    # one shows the leak that the higher of two would hide.
+    clustered = replace(
+        steady(1.0),
+        samples=tuple(
+            reading(at, descriptors=count)
+            for at, count in ((1000.0, 12), (1100.0, 40), (1900.0, 12), (1950.0, 13), (2000.0, 13))
+        ),
+    )
+    assert check_descriptors(clustered).status is Status.FAIL
+
+
+STALL_MS = PANEL_SAFETY.loop_stall_freeze_gap * 1000.0
+"""The gap at which the console's ``loop_stall`` rule freezes the arm, in ms."""
+
+GAPS = Gaps(
+    bound=STALL_MS,
+    exact=Quantiles(count=36_000, p50=201.0, p99=229.0, highest=517.0),
+    seen=86_400.0,
+    span=86_400.0,
+)
+"""A real-time run in good health, as the page saw its ticks."""
+
+
+def test_ex2_in_real_time_a_stall_fails_tick_gap_and_names_its_cause() -> None:
+    run = replace(steady(), mode=Mode.REAL_TIME, gaps=GAPS)
+    exact = GAPS.exact
+    assert exact is not None
+    over_merges = Quantiles(count=3, p50=420.0, p99=633.6, highest=633.6)
+
+    fine = check_tick_gap(run)
+    merged = check_tick_gap(replace(run, gaps=replace(GAPS, merged=over_merges)))
+    reached = check_tick_gap(
+        replace(run, gaps=replace(GAPS, exact=replace(exact, highest=STALL_MS)))
+    )
+    latched = check_tick_gap(replace(run, gaps=replace(GAPS, verdict="took 1.00 s between ticks")))
+    unread = check_tick_gap(replace(run, gaps=replace(GAPS, exact=None)))
+    only_merged = check_tick_gap(replace(run, gaps=replace(GAPS, exact=None, merged=over_merges)))
+    partial = check_tick_gap(replace(run, gaps=replace(GAPS, seen=0.89 * 86_400)))
+    # The run's seconds start before the console's first tick: on a loaded host, later.
+    late_start = check_tick_gap(replace(run, covered=100_000.0))
+
+    assert fine is not None
+    assert fine.status is Status.PASS
+    assert fine.threshold == (
+        "aucun verdict loop_stall de la console ; écart entre deux tics consécutifs < 600 ms ; "
+        "tics relevés sur 90% du temps où la console a tourné au moins"
+    )
+    assert late_start is not None
+    assert late_start.status is Status.PASS, "the reference is the time the console ticked"
+    assert (
+        fine.measured == "p50 201.0 ms, p99 229.0 ms, maximum 517.0 ms sur 36000 écarts consécutifs"
+    )
+    # A gap over snapshots the hub merged adds two real ones: it is said, not judged a stall.
+    assert merged is not None
+    assert merged.status is Status.PASS
+    assert "3 écarts sur des instantanés fusionnés par le hub (au plus 633.6 ms)" in merged.measured
+    # A page that only ever read merged snapshots: the console's verdict decides alone.
+    assert only_merged is not None
+    assert only_merged.status is Status.PASS
+    for verdict, cause in (
+        (reached, "un écart de 600.0 ms entre deux tics consécutifs"),
+        (latched, "la console a levé loop_stall : took 1.00 s between ticks"),
+        (unread, "aucun écart entre deux tics relevé"),
+        (partial, "tics relevés sur 76896 s des 86400 s où la console a tourné"),
+    ):
+        assert verdict is not None
+        assert verdict.status is Status.FAIL
+        assert verdict.measured.startswith(cause)
+    assert check_tick_gap(steady()) is None, "on the manual clock every gap is 200 ms"
+    assert [check.name for check in judge(run)] == [
+        "rss",
+        "tick",
+        "tick_gap",
+        "descriptors",
+        "data",
+        "rotation",
+        "sessions",
+    ]
 
 
 def test_ex2_the_data_folder_is_held_to_what_the_arming_gate_plans_for() -> None:
@@ -647,7 +896,8 @@ def test_ex2_a_session_that_ends_otherwise_or_never_reaches_the_dashboard_fails(
 
 
 def test_ex3_the_report_keeps_every_reading_and_says_what_was_not_active(tmp_path: Path) -> None:
-    run = replace(steady(), period=Quantiles(count=10, p50=200.0, p99=212.0, highest=260.0))
+    exact = Quantiles(count=10, p50=200.0, p99=212.0, highest=260.0)
+    run = replace(steady(), gaps=Gaps(bound=STALL_MS, exact=exact, seen=86_400.0, span=86_400.0))
     checks = judge(run)
 
     data, summary = write_report(run, checks, tmp_path / "out")
@@ -663,6 +913,7 @@ def test_ex3_the_report_keeps_every_reading_and_says_what_was_not_active(tmp_pat
     assert [obj(check)["name"] for check in seq(report["checks"])] == [
         "rss",
         "tick",
+        "tick_gap",
         "descriptors",
         "data",
         "rotation",
@@ -672,6 +923,13 @@ def test_ex3_the_report_keeps_every_reading_and_says_what_was_not_active(tmp_pat
     assert obj(seq(report["samples"])[0])["allocated_blocks"] is None
     assert obj(report["tick_ms"]) == {"count": 432_000, "p50": 0.9, "p99": 4.5, "max": 80.0}
     assert obj(report["tick_period_ms"])["p99"] == 212.0
+    assert obj(report["tick_gaps"]) == {
+        "bound_ms": 600.0,
+        "merged_ms": None,
+        "seen_s": 86_400.0,
+        "span_s": 86_400.0,
+        "loop_stall_verdict": None,
+    }
     assert obj(report["data"])["bounded_by_rotation"] is True
     assert obj(obj(report["data"])["per_recorded_hour"])["entries"] == 18048
     assert obj(report["sync"])["heartbeats"] == 8640

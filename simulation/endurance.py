@@ -37,7 +37,12 @@ of its HTTP transport: **no Convex deployment is ever contacted**, whatever
     console's own tasks, its web server on a free loopback port, its journal
     thread, its DSP on worker threads. The tick is timed from outside the
     loop: from the instant a tick reads to the moment its snapshot reaches a
-    subscriber of the telemetry hub, which is slightly more than the tick.
+    subscriber of the telemetry hub, which is slightly more than the tick. A
+    stall is judged on the console's own ``loop_stall`` verdict, and on the
+    gaps between two consecutive snapshots against that rule's bound
+    (:class:`~simulation.endurance_measures.Gaps`). What neither sees: a loop
+    that stops ticking less than 3 s before the run's stop and never ticks
+    again (past 3 s, the console's own exit fails).
 
 ``judge``
     Applies the same memory and descriptor thresholds to readings taken from
@@ -58,15 +63,16 @@ import sys
 import tempfile
 import time
 from abc import abstractmethod
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum, unique
+from functools import partial
 from http import HTTPStatus
 from pathlib import Path
 from typing import Final, Protocol
 
 import httpx
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, ValidationError
 from tests.access_support import CODE, OPERATOR_ID, held_list
 from tests.fake_record_dashboard import RecordingDashboard
 from tests.roster_support import RIDER_ID
@@ -74,6 +80,7 @@ from tests.roster_support import RIDER_ID
 from simulation.endurance_measures import (
     DataFolder,
     Footprint,
+    Gaps,
     Histogram,
     Kind,
     Mode,
@@ -102,9 +109,11 @@ from src.record.journal import Journal
 from src.result import Err
 from src.telemetry import TelemetryClient
 from src.training.runtime import EndReason, RuntimeState
-from src.training.types import TelemetrySnapshot
+from src.training.safety import RULE_LOOP_STALL
+from src.training.types import SafetyVerdict, TelemetrySnapshot
 from src.units import Monotonic, Seconds, UnixMillis
 from src.web.app import create_app
+from src.web.routes import REQUEST_WAITING
 from src.web.schemas import ProfileListRow
 
 OUT_DIR: Final[Path] = Path(__file__).resolve().parent / "out" / "endurance"
@@ -188,6 +197,11 @@ CLOSING_LIMIT: Final[int] = 120
 POINTS_MISSING: Final[int] = 5
 """1 Hz points a session may lack on the dashboard against the seconds the scenario timed."""
 
+BUSY_RETRIES: Final[int] = 3
+"""Times a command is sent again, a second of the console's life apart, when the console
+refused it because it still held another (one request at a time): a loop starved on a
+loaded host takes the first late, and is not a console in bad health."""
+
 READY_ATTEMPTS: Final[int] = 100
 READY_WAIT: Final[float] = 0.1
 """The console's page is asked this many times, this far apart, before the run starts."""
@@ -253,6 +267,23 @@ NOTE_OBSERVED: Final[str] = (
 
 class AnomalyError(Exception):
     """The scenario met something it does not expect of a console in good health."""
+
+
+class BusyError(AnomalyError):
+    """The console refused a command because it still held another, one request at a time."""
+
+
+_BODY: Final[TypeAdapter[dict[str, object]]] = TypeAdapter(dict[str, object])
+
+
+def waiting(answered: httpx.Response) -> bool:
+    """Whether the console refused because another request still holds its mailbox."""
+    if answered.status_code != HTTPStatus.CONFLICT:
+        return False
+    try:
+        return _BODY.validate_json(answered.content).get("code") == REQUEST_WAITING
+    except ValidationError:
+        return False
 
 
 @unique
@@ -379,6 +410,11 @@ class Screen:
         self.refusal: str | None = None
         """The last thing the console refused, in its own words."""
 
+    @property
+    def coalesced(self) -> int:
+        """Snapshots the hub replaced before this page read them, so far."""
+        return self._client.stats.coalesced
+
     async def read(self) -> TelemetrySnapshot | None:
         """Read up to the next snapshot and return it; ``None`` when the hub evicted this page."""
         while True:
@@ -426,7 +462,8 @@ class Operator:
         except httpx.TransportError as error:
             raise AnomalyError(f"POST {path}: the console did not answer ({error!r})") from error
         if answered.is_error:
-            raise AnomalyError(f"POST {path}: HTTP {answered.status_code} {answered.text[:300]}")
+            refused = BusyError if waiting(answered) else AnomalyError
+            raise refused(f"POST {path}: HTTP {answered.status_code} {answered.text[:300]}")
 
     async def _profiles_digest(self) -> str:
         """The digest of the programme list, read as the page reads it before a start."""
@@ -568,7 +605,19 @@ class RealWorld:
     loop would delay the very tick this run times.
     """
 
-    __slots__ = ("_clock", "_console", "_due", "_sampler", "_screen", "_window", "periods", "whole")
+    __slots__ = (
+        "_clock",
+        "_console",
+        "_due",
+        "_sampler",
+        "_screen",
+        "_window",
+        "first",
+        "last",
+        "merged",
+        "periods",
+        "whole",
+    )
 
     def __init__(self, console: Console, clock: RealClock) -> None:
         self._console: Console = console
@@ -581,16 +630,29 @@ class RealWorld:
         """Every control tick the page was shown."""
 
         self.periods: Histogram = Histogram()
-        """The time between two of them."""
+        """The time between two of them, when the hub merged no snapshot in between."""
+
+        self.merged: Histogram = Histogram()
+        """The time between two of them over snapshots the hub merged: several real gaps."""
+
+        self.first: Monotonic | None = None
+        self.last: Monotonic | None = None
+        """The first and the last tick the page was shown."""
 
     @property
     def screen(self) -> Screen:
         """The page that reads the hub."""
         return self._screen
 
+    @property
+    def seen(self) -> float:
+        """Seconds from the first tick the page was shown to the last."""
+        first, last = self.first, self.last
+        return 0.0 if first is None or last is None else last - first
+
     async def meter(self) -> None:
         """Time every tick from the snapshot it publishes, until the page is evicted."""
-        previous: Monotonic | None = None
+        merged = self._screen.coalesced
         while True:
             snapshot = await self._screen.read()
             if snapshot is None:
@@ -598,9 +660,14 @@ class RealWorld:
             spent = (self._clock.monotonic() - snapshot.at) * 1000.0
             self._window.add(spent)
             self.whole.add(spent)
-            if previous is not None:
-                self.periods.add((snapshot.at - previous) * 1000.0)
-            previous = snapshot.at
+            coalesced = self._screen.coalesced
+            if self.last is None:
+                self.first = snapshot.at
+            else:
+                gaps = self.merged if coalesced > merged else self.periods
+                gaps.add((snapshot.at - self.last) * 1000.0)
+            merged = coalesced
+            self.last = snapshot.at
 
     async def second(self) -> None:
         """Wait for the next whole second of the run: the seconds counted do not drift."""
@@ -696,7 +763,7 @@ class Day:
         """Run the day. Returns what stopped it short, or ``None`` when nothing did."""
         try:
             await self._operator.ready()
-            await self._operator.attest()
+            await self._command(self._operator.attest)
             while not self.over():
                 await self._manual()
                 await self._rest(before_programme=True)
@@ -727,6 +794,19 @@ class Day:
                 return
             await self._second()
 
+    async def _command(self, send: Callable[[], Awaitable[None]]) -> None:
+        """Send an operator's command; refused while the console held another, it is sent
+        again a second of the console's life later, :data:`BUSY_RETRIES` times at most.
+        The last refusal stops the run in its own words."""
+        for _ in range(BUSY_RETRIES):
+            try:
+                await send()
+            except BusyError:
+                await self._second()
+            else:
+                return
+        await send()
+
     def _state(self) -> RuntimeState:
         """Read afresh: a checker would otherwise keep a narrowing across an ``await``."""
         return self._console.panel.runtime.state
@@ -751,7 +831,7 @@ class Day:
             if self._state() is RuntimeState.FINISHED:
                 return stopped
             if cut and not stopped and self.over():
-                await self._operator.stop("fin de l'essai")
+                await self._command(lambda: self._operator.stop("fin de l'essai"))
                 stopped = True
             await self._second()
         raise AnomalyError(
@@ -760,20 +840,20 @@ class Day:
 
     async def _manual(self) -> None:
         started = self.elapsed
-        await self._operator.start_manual()
+        await self._command(self._operator.start_manual)
         await self._started("manual session")
         for output_rpm in MANUAL_TARGETS:
             if self.over():
                 break
-            await self._operator.target(output_rpm)
+            await self._command(partial(self._operator.target, output_rpm))
             await self._wait(self._plan.manual // len(MANUAL_TARGETS))
-        await self._operator.stop("fin de la séance manuelle")
+        await self._command(lambda: self._operator.stop("fin de la séance manuelle"))
         await self._finished(FINISH_LIMIT, cut=False)
         await self._note_end(Kind.MANUAL, started, EndReason.OPERATOR_STOP)
 
     async def _programme(self) -> None:
         started = self.elapsed
-        await self._operator.start_programme(self._plan.programme)
+        await self._command(lambda: self._operator.start_programme(self._plan.programme))
         await self._started("programmed session")
         cut = await self._finished(PROGRAMME_LIMIT, cut=True)
         await self._note_end(
@@ -905,6 +985,17 @@ class Day:
 # =========================================================================
 
 
+def stall_among(held: Sequence[SafetyVerdict | None]) -> str | None:
+    """The console's own ``loop_stall`` verdict among those its supervisor holds, in its words.
+
+    ``held``: its latched floor, and what ``GO_SILENT`` replaced there (``silenced``).
+    """
+    for verdict in held:
+        if verdict is not None and verdict.rule == RULE_LOOP_STALL:
+            return verdict.detail
+    return None
+
+
 def free_port() -> int:
     """A loopback port the system says is free."""
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
@@ -993,14 +1084,39 @@ async def real_time(seconds: int, out: Path, plan: Plan, *, keep_data: bool = Fa
             anomaly = await day.attempt()
         sync = day.sync()
     finally:
+        # What the supervisor latched over the run, read before the console's exit acts.
+        supervisor = panel.runtime.supervisor
+        floor, silenced = supervisor.floor, supervisor.silenced
+        last_tick = panel.runtime.snapshot().at
         # The console's own exit: it stops the drive, closes the record, ends its tasks.
         stop.set()
         code = await served
+        unwatched = meter.done()
         meter.cancel()
         await asyncio.gather(meter, return_exceptions=True)
     data = console.folder.measure()
     leave(work, keep=keep_data)
+    gaps = Gaps(
+        bound=panel.runtime.supervisor.limits.loop_stall_freeze_gap * 1000.0,
+        exact=world.periods.summary(),
+        merged=world.merged.summary(),
+        seen=world.seen,
+        span=0.0 if world.first is None else last_tick - world.first,
+        verdict=stall_among((floor, silenced)),
+    )
     left = None if code == 0 else f"the console left with exit code {code}"
+    blind = (
+        "the tick meter stopped before the console did: its page was evicted" if unwatched else None
+    )
+    # A run in good health ends with nothing latched, and a verdict of another rule can
+    # hide a stall from tick_gap. A loop_stall left latched is tick_gap's own: it fails
+    # there, by name, once.
+    held = (
+        None
+        if floor is None or floor.rule == RULE_LOOP_STALL
+        else f"the console ends the run with a latched safety verdict ({floor.rule}): "
+        f"{floor.detail}"
+    )
     return Run(
         mode=Mode.REAL_TIME,
         requested=float(seconds),
@@ -1009,11 +1125,11 @@ async def real_time(seconds: int, out: Path, plan: Plan, *, keep_data: bool = Fa
         cpu=time.process_time() - spent,
         samples=tuple(day.samples),
         tick=world.whole.summary(),
-        period=world.periods.summary(),
+        gaps=gaps,
         sessions=tuple(day.sessions),
         sync=sync,
         data=data,
-        anomaly=anomaly or left,
+        anomaly="; ".join(cause for cause in (anomaly, left, blind, held) if cause) or None,
         notes=(*NOTES, NOTE_REAL_TICK),
     )
 

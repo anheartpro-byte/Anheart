@@ -1277,6 +1277,8 @@ du tableau de bord sont copiés à part.
    git archive --format=tar HEAD \
        simulation/__init__.py simulation/endurance.py simulation/endurance_measures.py \
        raspberry-pi/tests/__init__.py raspberry-pi/tests/fake_dashboard.py \
+       raspberry-pi/tests/fake_record_dashboard.py raspberry-pi/tests/roster_support.py \
+       raspberry-pi/tests/access_support.py \
      | ssh <utilisateur>@<pi> 'mkdir -p anheart-endurance && tar -xf - -C anheart-endurance'
    ```
 
@@ -1309,6 +1311,83 @@ du tableau de bord sont copiés à part.
    jour ; le journal examine les purges toutes les six heures, donc les deux
    heures prouvent les confirmations, et le scénario de 24 h prouve la purge.
 
+   **Ce que garantit un code de sortie 0.** Pendant les deux heures :
+
+   * `tick_gap` : **aucun gel de la boucle**. Le superviseur de la console ne
+     tient aucun verdict `loop_stall` à la fin de l'essai : sa règle juge
+     chaque écart réel entre deux de ses tics contre son propre seuil (600 ms,
+     trois périodes de 200 ms, lu dans le superviseur et non recopié) et le
+     verdict reste levé jusqu'à un acquittement que l'essai ne fait jamais. En
+     contrôle indépendant, aucun écart entre deux instantanés consécutifs reçus
+     par l'abonné du hub n'atteint ce seuil. La règle de la console ne se lève
+     qu'une fois le seuil dépassé, ce contrôle échoue dès qu'il est atteint,
+     comme demandé ; les deux ne diffèrent que pour un écart d'exactement
+     600 ms. Le hub fond parfois deux instantanés en un (il ne sert une page
+     qu'une fois toutes les 0,15 s) : l'écart lu par-dessus additionne alors
+     deux écarts réels, il est compté à part et n'est pas jugé comme un gel, le
+     verdict de la console faisant foi pour lui. Enfin les tics reçus couvrent
+     au moins 90 % du temps où la console a tourné, du premier tic vu à son
+     dernier tic. Une page évincée en cours de route est une anomalie qui fait
+     échouer `sessions`, et `tick_gap` aussi quand elle l'a été avant les
+     derniers 10 % de ce temps. Un `FAIL` nomme sa cause :
+     verdict de la console, écart consécutif, aucun écart relevé, ou relevé
+     incomplet. Le superviseur ne garde que le plus sévère de ses verdicts
+     levés (et, derrière un `GO_SILENT`, celui qu'il a remplacé, lu aussi) :
+     un verdict plus sévère levé après un gel, ou aussi sévère levé avant lui,
+     cache le gel au verdict lu par `tick_gap` (l'écart lu le voit encore
+     s'il est consécutif), mais **tout verdict d'une autre règle encore levé
+     à la fin de l'essai** est une anomalie qui fait échouer `sessions`, et
+     l'essai (un `loop_stall` encore levé fait déjà échouer `tick_gap`) ;
+   * `tick` : 99e centile de la durée du tic sous 150 ms ;
+   * `rss` : mémoire à 10 % près de son premier relevé après la première heure ;
+   * `descriptors` : aucune fuite qui commence avant le dernier quart d'heure.
+     Le relevé le plus bas des quinze dernières minutes (le dernier quart de
+     l'heure jugée) ne dépasse pas le bas de ce qui précède, depuis la fin de
+     la première heure : le relevé qui suit son dixième le plus bas. Un
+     descripteur qui fuit n'est jamais refermé et relève tous les relevés
+     suivants. Des relevés pris avec un descripteur ouvert un instant (un bloc
+     en cours d'écriture, une requête) ne font pas échouer l'essai, tant qu'un
+     relevé de la fin est propre ; avant la fin, un dixième des relevés peut
+     avoir été pris avec un descripteur refermé un instant ;
+   * `data`, `rotation`, `sessions` : dossier de données borné, enregistrements
+     confirmés, chaque séance finie comme prévu et livrée, heartbeats avec
+     santé ;
+   * la console est sortie par son propre arrêt avec le code 0 : aucune de ses
+     tâches n'a échoué et sa boucle n'a jamais passé plus de 3 s sans finir un
+     tic.
+
+   Ce qu'il ne garantit pas :
+
+   * une fuite de descripteurs qui ne commence que dans les **quinze dernières
+     minutes** n'est pas vue ; une fuite qui commence et cesse pendant la
+     première heure non plus (elle n'est pas jugée), ni un descripteur gardé
+     une seule fois pour toutes dans les **quatre minutes et demie** qui
+     suivent la première heure (il fixe alors lui-même le bas de référence).
+     Une fuite qui se répète, une par séance par exemple, est vue où qu'elle
+     commence avant le dernier quart d'heure ;
+   * un seul relevé des quinze dernières minutes pris avec un descripteur
+     refermé un instant cache une fuite d'un descripteur. C'est le prix du
+     relevé le plus bas de la fin, qui tolère tous les relevés pris avec un
+     descripteur de plus, le seul bruit vu jusqu'ici (les comptes sont restés
+     plats dans tous les essais) ;
+   * une boucle qui cesse de tourner **moins de 3 s** avant l'arrêt de l'essai
+     et ne tourne plus ensuite : aucun tic ne vient alors mesurer l'écart, ni
+     pour la règle de la console ni pour l'abonné. Passé 3 s, la sortie de la
+     console échoue d'elle-même ;
+   * aucun seuil ne juge une **dérive lente** du tic qui resterait sous 150 ms
+     et sous 600 ms. Comparer le 99e centile de la dernière heure à celui de la
+     première a été écarté : ces centiles valent quelques millisecondes, la
+     charge de la machine les fait varier du simple au double sans que la
+     console change, et aucune marge ne viendrait du ticket. Une dérive qui
+     compte pour la personne à bord finit sur l'une des deux bornes, qui sont
+     jugées ; la colonne « Tic p50 / p99 » des relevés permet de lire la
+     tendance.
+
+   **Seul cet essai juge un gel.** Les 24 heures simulées de la nuit tournent
+   sur une horloge simulée où chaque écart entre deux tics vaut 200 ms par
+   construction : `tick_gap` n'y est pas jugé, et une nuit verte ne dit rien
+   d'un gel.
+
 4. **Relever.** Le résumé est affiché à la fin et écrit dans
    `~/anheart-endurance/out/endurance.md` (le détail dans `endurance.json`, ce
    que la console a dit dans `console.log`). L'image ne tourne plus sous root :
@@ -1324,16 +1403,23 @@ du tableau de bord sont copiés à part.
    de la [section 6](#6-installer-un-vrai-raspberry-pi), étape 5.
 
 À noter dans le ticket : le modèle du Pi, la version de l'image, le tableau des
-seuils, la ligne « Écart entre deux tics », le code de sortie.
+seuils (dont `tick_gap`), la ligne « Écart entre deux tics », le code de sortie.
 
 Pour mesurer aussi ce que **coûte** un tic sur le Pi, sans attendre deux
 heures : la même commande avec `simulated --hours 1` à la place de
 `real-time --minutes 120` joue une heure simulée, chaque tic chronométré.
 
 Cette commande n'a été lancée ni sur un Pi ni dans l'image : sur le poste de
-développement, la même commande Python a tourné hors Docker, avec ces cinq
-fichiers seulement à côté de la console
+développement, la même commande Python a tourné hors Docker
 ([framework-de-test.md, section 17.6](framework-de-test.md#176-mesures-relevées)).
+Le scénario importe aussi `fake_record_dashboard.py` et `roster_support.py`,
+absents de la première version de l'étape 1, et depuis ANH-152
+`access_support.py`, l'opérateur se connectant à la console par son code. Avec
+les huit fichiers de l'étape 1 seulement à côté de `src/` et `config/` de la
+console, il s'importe : vérifié hors Docker le 14 novembre 2026, sur une copie
+faite exactement selon la liste, au-dessus de develop d612484. Sans
+`access_support.py`, l'import échoue (`ModuleNotFoundError`) : la liste de
+sept fichiers vérifiée le 13 novembre ne suffit plus depuis ANH-152.
 
 ### 9.2 Une journée au banc, capsule vide
 
@@ -1366,7 +1452,11 @@ fait de l'extérieur, en lecture seule, depuis une seconde session SSH.
 
 2. **Pendant la journée** : les séances du protocole de banc, sans rien changer
    à la façon de travailler. Noter l'heure de début, le nombre de séances, et
-   tout message inattendu de la console.
+   tout message inattendu de la console. Un départ refusé faute de place
+   (`demarrage refuse : espace disque insuffisant` ou `plus assez de fichiers
+   libres`) se traite comme le dit
+   [console-locale.md, section 16](console-locale.md#16-lenregistrement-de-séance-boîte-noire-locale),
+   et se note avec son heure et les deux `df` du moment.
 
 3. **En fin de journée**, arrêter la boucle (Ctrl-C), puis relever la
    régularité du tic dans les enregistrements du jour. La console ne publie pas
@@ -1385,7 +1475,14 @@ fait de l'extérieur, en lecture seule, depuis une seconde session SSH.
 
 4. **Juger le relevé**, sur le poste de développement, avec les seuils de
    l'essai simulé (mémoire stable à 10 % près après la première heure, aucun
-   descripteur qui fuit) :
+   descripteur qui fuit : le relevé le plus bas de la fin de la journée, son
+   dernier quart après la première heure et une heure au plus, ne dépasse pas
+   le bas de ce qui précède, le relevé qui suit son dixième le plus bas ; une
+   fuite qui ne commence que dans cette fin n'est pas vue, ni une fuite d'un
+   descripteur si un relevé de la fin a été pris avec un descripteur refermé
+   un instant, ni un descripteur gardé une seule fois dans les 35 minutes qui
+   suivent la première heure d'une journée de 8 h ; une fuite qui se répète
+   est vue) :
 
    ```sh
    scp <utilisateur>@<pi>:endurance-banc.csv .
