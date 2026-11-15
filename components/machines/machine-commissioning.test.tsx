@@ -189,6 +189,16 @@ describe("ANH-115 the commissioning record, to print and export", () => {
     print.mockRestore();
   });
 
+  it("shows a date no JavaScript date holds as not set, instead of throwing", async () => {
+    answer(
+      api.machineCommissioning.getCommissioning,
+      record({ report: { ...record().report, ranAt: 8.64e15 + 1, attestedAt: Number.NaN } }),
+    );
+    await page();
+    expect(screen.getByText(`Contrôles terminés à la console le ${t.missingValue}`)).toBeTruthy();
+    expect(screen.getByText(/Arrêt d'urgence attesté par user-2, le non renseignée/)).toBeTruthy();
+  });
+
   it("says when the record is not readable, or of another machine", async () => {
     answer(api.machineCommissioning.getCommissioning, undefined);
     const view = await page();

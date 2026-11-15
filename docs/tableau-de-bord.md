@@ -568,7 +568,10 @@ contrôle de la console, les versions, et si le texte est signé. **Imprimer ou
 enregistrer en PDF** ouvre la fenêtre d'impression du navigateur, comme le
 rapport de séance et le carnet ; **Télécharger le JSON signé** donne
 `{payload, signature}`, le texte tel que le serveur l'a écrit et signé,
-vérifiable hors ligne avec la clé publique du catalogue. Le ticket demandait
+vérifiable hors ligne avec la clé publique du catalogue : vérifier la
+signature de `payload` tel quel, puis que `kind` vaut `commissioning_record`
+et que `machineId` est la machine. Une date que la console a écrite et
+qu'aucune date ne tient est dite « non renseignée ». Le ticket demandait
 une fiche PDF dans Convex Storage : aucun PDF n'est fabriqué ni stocké
 ([convex.md](convex.md#la-mise-en-service-dune-machine-contrat-118-anh-115)).
 

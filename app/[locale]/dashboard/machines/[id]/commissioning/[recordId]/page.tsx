@@ -3,7 +3,7 @@
 import { use } from "react";
 import { useQuery } from "convex/react";
 import { useLocale, useTranslations } from "next-intl";
-import { format } from "date-fns";
+import { format, isValid } from "date-fns";
 import { enUS, fr } from "date-fns/locale";
 import { ArrowLeft, Download, Printer } from "lucide-react";
 import { api } from "@/convex/_generated/api";
@@ -79,7 +79,10 @@ export default function CommissioningPrintPage({
       </div>
     );
   const dateLocale = locale === "fr" ? fr : enUS;
-  const when = (at: number) => format(at, "PPp", { locale: dateLocale });
+  // A date the console wrote is shown only when a date holds it (`max_date_ms`).
+  const dated = (at: number, pattern: string) =>
+    isValid(new Date(at)) ? format(at, pattern, { locale: dateLocale }) : t("missingValue");
+  const when = (at: number) => dated(at, "PPp");
   const tenth = new Intl.NumberFormat(locale, {
     minimumFractionDigits: 1,
     maximumFractionDigits: 1,
@@ -174,7 +177,7 @@ export default function CommissioningPrintPage({
             {t("sheet", {
               version: reference.sheet.version,
               by: reference.sheet.signedBy,
-              at: format(reference.sheet.at, "PP", { locale: dateLocale }),
+              at: dated(reference.sheet.at, "PP"),
             })}
           </p>
           <table className="w-full text-left text-sm">
