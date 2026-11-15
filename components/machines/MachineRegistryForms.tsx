@@ -21,6 +21,11 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import {
+  DRIVE_FIELDS,
+  SHEET_BOUNDS,
+  type DriveParameters,
+} from "@/convex/lib/commissioning";
 import type { MachineRegistry } from "./MachineRegistryCard";
 
 const VALIDATION_LEVELS = ["none", "bench", "auto", "occupied"] as const;
@@ -300,15 +305,6 @@ export function RadiiForm({ registry }: { registry: MachineRegistry }) {
   );
 }
 
-/** The drive values typed with a sheet (ANH-115): what a commissioning compares with. */
-const DRIVE_FIELDS = [
-  ["tfrHz", "599"],
-  ["hspHz", "599"],
-  ["lspHz", "599"],
-  ["accS", "999.9"],
-  ["decS", "999.9"],
-] as const;
-type DriveParameters = Record<(typeof DRIVE_FIELDS)[number][0], number>;
 
 /**
  * The five values typed with a sheet; undefined when none is; null when some
@@ -316,7 +312,7 @@ type DriveParameters = Record<(typeof DRIVE_FIELDS)[number][0], number>;
  * keypad's ranges.
  */
 function driveParametersOf(data: FormData): DriveParameters | undefined | null {
-  const typed = DRIVE_FIELDS.map(([field]) => text(data, field));
+  const typed = DRIVE_FIELDS.map((field) => text(data, field));
   if (typed.every((value) => value === "")) return undefined;
   const values = typed.map((value) => (value === "" ? Number.NaN : Number(value)));
   if (values.some((value) => !Number.isFinite(value))) return null;
@@ -394,14 +390,14 @@ export function DriveSheetForm({ registry }: { registry: MachineRegistry }) {
         <legend className="text-sm font-medium">{t("sheetValues")}</legend>
         <p className="text-sm text-muted-foreground">{t("sheetValuesHelp")}</p>
         <div className="grid gap-3 sm:grid-cols-5">
-          {DRIVE_FIELDS.map(([field, max]) => (
+          {DRIVE_FIELDS.map((field) => (
             <Field
               key={field}
               label={t(field)}
               name={field}
               type="number"
-              min="0"
-              max={max}
+              min={SHEET_BOUNDS[field].min}
+              max={SHEET_BOUNDS[field].max}
               step="0.1"
             />
           ))}

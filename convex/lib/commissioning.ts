@@ -29,6 +29,10 @@ export const COMMISSIONING_KIND = SECTION.kind;
 export const DRIVE_FIELDS = ["tfrHz", "hspHz", "lspHz", "accS", "decS"] as const;
 export type DriveField = (typeof DRIVE_FIELDS)[number];
 
+/** The keypad's range of each value typed with a sheet (`sheet_bounds`), for the server and the site's form. */
+export const SHEET_BOUNDS: Readonly<Record<DriveField, { min: number; max: number }>> =
+  SECTION.sheet_bounds;
+
 export const driveParametersValidator = v.object({
   tfrHz: v.number(),
   hspHz: v.number(),
@@ -90,7 +94,7 @@ export function tenthsOf(value: number): number | null {
 export function sheetParametersRefusal(parameters: DriveParameters): DriveField | null {
   for (const field of DRIVE_FIELDS) {
     const value = parameters[field];
-    const bound = SECTION.sheet_bounds[field];
+    const bound = SHEET_BOUNDS[field];
     if (tenthsOf(value) === null || value < bound.min || value > bound.max) return field;
   }
   if (parameters.hspHz > parameters.tfrHz) return "hspHz";

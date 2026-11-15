@@ -6,6 +6,7 @@ import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import fr from "@/messages/fr.json";
 import en from "@/messages/en.json";
+import machineApi from "@/contracts/machine-api.json";
 import {
   answer,
   feedbackShown,
@@ -741,6 +742,11 @@ describe("ANH-115 the drive sheet's typed values", () => {
     uploadAnswer();
     const view = await card();
     const scope = sheetFields();
+    // Each input holds the contract's keypad range, the server's own (`sheet_bounds`).
+    for (const [field, bound] of Object.entries(machineApi.machine_commissioning.sheet_bounds)) {
+      const input = scope.getByLabelText(t[field as keyof typeof values]) as HTMLInputElement;
+      expect([input.min, input.max, input.step]).toEqual([String(bound.min), String(bound.max), "0.1"]);
+    }
     for (const [field, value] of Object.entries(values))
       fill(scope, t[field as keyof typeof values], value);
     await view.user.upload(scope.getByLabelText(t.sheetFile), pdf());
