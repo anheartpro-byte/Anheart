@@ -2,7 +2,7 @@
 
 from collections.abc import Mapping
 from enum import StrEnum
-from typing import Annotated, Literal, Self, assert_never
+from typing import Annotated, Final, Literal, Self, assert_never
 
 from pydantic import BeforeValidator, ConfigDict, Field, PlainSerializer, model_validator
 from pydantic.dataclasses import dataclass
@@ -30,7 +30,7 @@ from src.motor.observation import (
     SdkException,
     WrongFunction,
 )
-from src.motor.sto import StoSourceKind
+from src.motor.sto import StoSourceKind, StoState
 from src.record.rows import JsonValue
 from src.training.types import MAX_BALLAST_KG
 from src.units import Monotonic, MotorRpm, OutOfRange, RawRegister, Seconds
@@ -49,6 +49,32 @@ class EventKind(StrEnum):
     PREFLIGHT = "preflight"
     WARNING = "warning"
     END = "end"
+    STO = "sto"
+    """The safety chain as the console read it changed: :func:`sto_detail` (A1-20). One
+    at the first tick, then one per change of state or source, never one per read."""
+
+
+_STO_STATES: Final[Mapping[str, StoState]] = {state.value: state for state in StoState}
+_STO_SOURCES: Final[Mapping[str, StoSourceKind]] = {kind.value: kind for kind in StoSourceKind}
+
+
+def sto_detail(state: StoState, source: StoSourceKind) -> str:
+    """The detail of a ``sto`` event: the state, then the source in parentheses.
+
+    ``ready (drive_input)``; closed, so that nothing else can travel in it
+    (the import keeps it only in exactly this form).
+    """
+    return f"{state.value} ({source.value})"
+
+
+def read_sto_detail(detail: str) -> tuple[StoState, StoSourceKind] | None:
+    """The state and source a ``sto`` event names, or ``None`` if it is not exactly that."""
+    state_text, opened, rest = detail.partition(" (")
+    state = _STO_STATES.get(state_text)
+    source = _STO_SOURCES.get(rest.removesuffix(")")) if rest.endswith(")") else None
+    if not opened or state is None or source is None:
+        return None
+    return state, source
 
 
 @dataclass(frozen=True, slots=True, kw_only=True, config=CONFIG)
