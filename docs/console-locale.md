@@ -3169,8 +3169,13 @@ Refusée avant toute lecture, avec la raison sous le bouton : une déjà en
 cours ; une console pas encore jointe à un tableau de bord du contrat 1.18 ;
 aucune attestation de l'arrêt d'urgence depuis le démarrage (`arret
 d'urgence non atteste depuis le demarrage de la console : donner
-l'attestation, page Securite`) ; une console qui n'est pas au repos (le
-contrôle « Variateur ni en defaut ni en marche »). Une mise en service qui
+l'attestation, page Securite`) ; une horloge de la console pas encore à
+l'heure, ou une attestation donnée avant qu'elle le soit (le tableau de bord
+ne prend aucune date d'avant le 1er janvier 2026 : un Pi n'a pas d'horloge à
+lui, et la sienne est quelconque avant son service de temps ; `arret
+d'urgence atteste quand l'horloge de la console n'etait pas a l'heure :
+redonner l'attestation, page Securite`) ; une console qui n'est pas au repos
+(le contrôle « Variateur ni en defaut ni en marche »). Une mise en service qui
 quitte le repos en cours de route s'interrompt, et rien n'est envoyé (`mise
 en service interrompue, rien n'est envoye : ...`). Un refus du tableau de
 bord est dit tel qu'il l'écrit (`refusee par le tableau de bord : Aucune
@@ -3179,8 +3184,10 @@ enregistrée.
 
 Le rapport tient dans les 16 Kio de la route : quand les raisons sont
 longues, chacune est raccourcie de même, de moitié à chaque fois, jusqu'à ce
-qu'il tienne. Ses textes ne portent aucun caractère que le tableau de bord
-refuse (contrôle, direction, largeur nulle) : chacun devient une espace.
+qu'il tienne. Ses textes ne portent aucun caractère des catégories Unicode
+que le tableau de bord refuse (Cc, Cf, Zl, Zp : contrôles, marques de
+direction, largeur nulle, trait d'union conditionnel, séparateurs) : chacun
+devient une espace.
 
 Ce qui reste : la carte ne garde que la dernière mise en service de cette
 exécution de la console ; l'enregistrement est celui du tableau de bord. Les

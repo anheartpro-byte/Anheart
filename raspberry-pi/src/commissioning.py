@@ -29,7 +29,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import re
+import unicodedata
 from abc import abstractmethod
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
@@ -113,6 +113,18 @@ UNDER_WAY: Final[str] = "une mise en service est deja en cours"
 NOT_LINKED: Final[str] = (
     "mise en service impossible : tableau de bord pas encore joint, ou anterieur au contrat "
     "1.18 (il ne l'enregistrerait pas)"
+)
+MIN_DATE_MS: Final[UnixMillis] = UnixMillis(1_767_225_600_000)
+"""The earliest date the dashboard takes in a report (``min_date_ms``), 2026-01-01 UTC. A Pi
+has no clock of its own: before its time service sets it, its wall clock is anything."""
+
+CLOCK_UNSET: Final[str] = (
+    "horloge de la console pas a l'heure : attendre son service de temps (page Pre-vol, "
+    "controle Horloge)"
+)
+ATTESTED_UNSET: Final[str] = (
+    "arret d'urgence atteste quand l'horloge de la console n'etait pas a l'heure : redonner "
+    "l'attestation, page Securite"
 )
 UNATTESTED: Final[str] = (
     "arret d'urgence non atteste depuis le demarrage de la console : donner l'attestation, "
@@ -239,18 +251,18 @@ class Facts:
     config_hash: str | None
 
 
-FORBIDDEN_CHARS: Final[re.Pattern[str]] = re.compile(
-    r"[\x00-\x1f\x7f-\x9f\u200b-\u200d\u2028\u2029\u202a-\u202e\u2060\u2066-\u2069\ufeff]"
-)
-"""What the dashboard refuses in any text of a report: C0, DEL and C1 controls, the
-bidirectional overrides and isolates, the line and paragraph separators, the zero-width
-characters. Each becomes a space here."""
+FORBIDDEN_CATEGORIES: Final[frozenset[str]] = frozenset({"Cc", "Cf", "Zl", "Zp"})
+"""The Unicode categories the dashboard refuses in any text of a report
+(``forbidden_categories``): the controls, the format characters (direction marks, overrides
+and isolates, zero-width characters, the soft hyphen, the invisible operators, the tags), the
+line and paragraph separators. Each becomes a space here."""
 
 
 def _text(value: str, limit: int) -> str:
-    """``value`` as the contract takes text: none of :data:`FORBIDDEN_CHARS`, no space at
-    either end, at most ``limit`` characters, never empty."""
-    return FORBIDDEN_CHARS.sub(" ", value).strip()[:limit].strip() or "-"
+    """``value`` as the contract takes text: none of :data:`FORBIDDEN_CATEGORIES`, no space
+    at either end, at most ``limit`` characters, never empty."""
+    shown = "".join(" " if unicodedata.category(c) in FORBIDDEN_CATEGORIES else c for c in value)
+    return shown.strip()[:limit].strip() or "-"
 
 
 def _short(value: str | None) -> str | None:
@@ -483,7 +495,9 @@ class CommissioningDesk:
             return found.error.reason
         return self._setup.coasting()
 
-    def _ready(self) -> Result[tuple[EstopAttestation, DashboardLink], str]:
+    def _ready(  # noqa: PLR0911  # one return per refusal
+        self,
+    ) -> Result[tuple[EstopAttestation, DashboardLink], str]:
         """The attestation a commissioning would carry now and where it goes, or why none
         can start."""
         link = self._link
@@ -494,6 +508,11 @@ class CommissioningDesk:
         attestation = self._setup.attestation()
         if attestation is None:
             return Err(UNATTESTED)
+        # The dashboard refuses a date before its floor: none is sent that it would refuse.
+        if self._setup.clock.unix_millis() < MIN_DATE_MS:
+            return Err(CLOCK_UNSET)
+        if attestation.wall_clock < MIN_DATE_MS:
+            return Err(ATTESTED_UNSET)
         away = self._away()
         if away is not None:
             return Err(f"console pas au repos : {away}")

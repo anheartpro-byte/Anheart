@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import unicodedata
 from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path
@@ -21,15 +22,18 @@ import pytest
 from src.clock import ManualClock
 from src.cloud_sync import CloudError, Document, Refused, Unreachable
 from src.commissioning import (
+    ATTESTED_UNSET,
+    CLOCK_UNSET,
     COMMISSIONING_CONTROLS,
     COMMISSIONING_PATH,
     COMMISSIONING_SINCE,
-    FORBIDDEN_CHARS,
+    FORBIDDEN_CATEGORIES,
     MAX_BODY_BYTES,
     MAX_DETAIL_CHARS,
     MAX_FINDINGS,
     MAX_STATEMENT_CHARS,
     MAX_TEXT_CHARS,
+    MIN_DATE_MS,
     NOT_LINKED,
     RAISED,
     RUN_WAIT,
@@ -172,12 +176,27 @@ def test_a_commissioning_carries_every_control_the_dashboard_requires() -> None:
     assert all(pattern.fullmatch(control_id) for control_id in sent)
 
 
+def test_the_required_controls_are_exactly_the_red_ones_of_a_commissioning() -> None:
+    """``required_controls`` of the shared file is exactly what a commissioning holds red when
+    it does not hold: the pre-flight's controls red at its bench, :data:`RAISED` included,
+    and the three of its own. Each is sent once, so the dashboard finds each one."""
+    required = cast("list[str]", SECTION["required_controls"])
+    own = ("sto_source", "sto_ready", "drive_limits")
+    red = [c.id for c in COMMISSIONING_CONTROLS if c.bench is Severity.BLOCK]
+    assert sorted(required) == sorted([*red, *own])
+    assert len(set(required)) == len(required)
+    sent = [c.id for c in COMMISSIONING_CONTROLS] + list(own)
+    assert all(sent.count(control_id) == 1 for control_id in required)
+    assert set(required) >= RAISED
+
+
 def test_the_bounds_are_the_shared_files() -> None:
     assert ContractVersion(cast("str", SECTION["since"])) == COMMISSIONING_SINCE
     assert f"POST {COMMISSIONING_PATH}" == SECTION["route"]
     assert SECTION["max_detail_chars"] == MAX_DETAIL_CHARS
     assert SECTION["max_statement_chars"] == MAX_STATEMENT_CHARS
     assert SECTION["max_text_chars"] == MAX_TEXT_CHARS
+    assert SECTION["min_date_ms"] == MIN_DATE_MS
     sizes = cast("Mapping[str, int]", CONTRACT["max_body_bytes"]["routes"])
     assert sizes[f"POST {COMMISSIONING_PATH}"] == MAX_BODY_BYTES
     assert "commissioning_refused" in CONTRACT["error_codes"]
@@ -292,7 +311,12 @@ def test_the_report_is_the_contract_s_fields_in_its_names() -> None:
 
 
 def test_texts_are_as_the_contract_takes_them() -> None:
-    hidden = "\x07\x7f\x85\u202e\u202a\u2068\u2028\u2029\u200b\u200d\u2060\ufeff"
+    hidden = (
+        "\x07\x7f\x85\u202e\u202a\u2068"
+        "\u2028\u2029\u200b\u200d\u2060\ufeff"
+        "\u200e\u200f\u061c\xad\u2061\u2062"
+        "\u2063\u2064\u180e\ufff9\U000e0001\U000e0041"
+    )
     body = _body(
         (
             _result("estop", ControlState.OK, f"  a{hidden}b  "),
@@ -307,9 +331,14 @@ def test_texts_are_as_the_contract_takes_them() -> None:
     assert body["bitalinoAddress"] is None
     assert body["medicalParametersVersion"] is None
     assert body["drive"] is None
+    assert set(cast("list[str]", SECTION["forbidden_categories"])) == FORBIDDEN_CATEGORIES
     for char in hidden:
-        assert FORBIDDEN_CHARS.fullmatch(char) is not None
-    assert FORBIDDEN_CHARS.search("Pi a 41 °C, attesté à l'écran") is None
+        assert unicodedata.category(char) in FORBIDDEN_CATEGORIES
+    # Text beyond ASCII that hides nothing is kept as it is, a grapheme joiner and a Hangul
+    # filler included: they reorder nothing.
+    kept = "Pi a 41 °C, attesté à l'écran \u034f\u3164"
+    sent = _body((_result("estop", ControlState.OK, kept),))
+    assert cast("list[dict[str, str]]", sent["controls"])[0]["detail"] == kept
 
 
 def test_a_report_keeps_whole_details_when_they_fit() -> None:
@@ -478,8 +507,14 @@ class Monitor:
 class Rig:
     """A desk on a manual clock, its drive, its link and its pre-flight run by the test."""
 
-    def __init__(self, *, polls: int = 2, announced: str | None = "1.18") -> None:
-        self.clock = ManualClock(Monotonic(1000.0), UnixMillis(1_800_000_000_000))
+    def __init__(
+        self,
+        *,
+        polls: int = 2,
+        announced: str | None = "1.18",
+        wall: UnixMillis = UnixMillis(1_800_000_000_000),
+    ) -> None:
+        self.clock = ManualClock(Monotonic(1000.0), wall)
         self.monitor = Monitor(_green(), polls)
         self.attestation: EstopAttestation | None = ATTESTATION
         self.coasting: str | None = None
@@ -549,6 +584,18 @@ def test_no_attestation_or_no_rest_or_a_coast_starts_none() -> None:
     assert rig.desk.view().refusal == "console pas au repos : roue libre en cours"
     assert asyncio.run(rig.desk.run("user-1")) == Err("console pas au repos : roue libre en cours")
     assert rig.monitor.reruns == 0
+    assert rig.sent == []
+
+
+def test_a_clock_not_set_or_an_attestation_given_before_it_was_starts_none() -> None:
+    rig = Rig(wall=UnixMillis(0)).bind()
+    assert rig.desk.view().refusal == CLOCK_UNSET
+    rig = Rig().bind()
+    rig.attestation = replace(ATTESTATION, wall_clock=UnixMillis(MIN_DATE_MS - 1))
+    assert rig.desk.view().refusal == ATTESTED_UNSET
+    assert asyncio.run(rig.desk.run("user-1")) == Err(ATTESTED_UNSET)
+    rig.attestation = replace(ATTESTATION, wall_clock=MIN_DATE_MS)
+    assert rig.desk.view().refusal is None
     assert rig.sent == []
 
 

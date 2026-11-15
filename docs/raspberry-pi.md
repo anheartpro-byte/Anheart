@@ -4397,8 +4397,11 @@ Pre-vol ([console-locale.md, section 17](console-locale.md#17-page--pre-vol--anh
   bord qui a annoncé 1.18 ou plus dans son dernier battement de cœur. Le
   rapport, encodé comme le transport l'encode (`json.dumps`), tient dans
   `MAX_BODY_BYTES` : les raisons sont raccourcies de même, de moitié à chaque
-  fois, jusqu'à ce qu'il tienne ; tout caractère que le tableau de bord refuse
-  y devient une espace (`FORBIDDEN_CHARS`).
+  fois, jusqu'à ce qu'il tienne ; tout caractère des catégories Unicode que
+  le tableau de bord refuse (Cc, Cf, Zl, Zp) y devient une espace
+  (`FORBIDDEN_CATEGORIES`). Aucune mise en service ne part d'une console dont
+  l'horloge, ou l'attestation, est d'avant le 1er janvier 2026
+  (`MIN_DATE_MS`) : le tableau de bord la refuserait.
 
 ---
 
