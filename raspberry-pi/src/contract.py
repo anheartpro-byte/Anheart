@@ -264,10 +264,10 @@ UNKNOWN_SOFTWARE_VERSION: Final[SoftwareVersion] = SoftwareVersion("pi-unknown")
 """Reported when ``VERSION`` is missing or unreadable: never a guess."""
 
 VERSION_PATH: Final[Path] = Path(__file__).resolve().parent.parent / "VERSION"
+"""``raspberry-pi/VERSION`` in a checkout, ``/app/VERSION`` in the image."""
 
 VERSION_FILE_MAX_BYTES: Final[int] = 1024
 """A version is one short line: a larger file is not this build's ``VERSION``."""
-"""``raspberry-pi/VERSION`` in a checkout, ``/app/VERSION`` in the image."""
 
 UNKNOWN_THEIRS: Final[str] = "inconnu"
 """What the console shows for a server version it could not read."""
