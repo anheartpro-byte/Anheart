@@ -9,6 +9,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import os
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -705,6 +706,20 @@ def test_an_unreadable_file_is_refused(tmp_path: Path) -> None:
     loaded = load_applied(tmp_path, None, MACHINE)
     assert isinstance(loaded, Err)
     assert loaded.error.startswith("illisible")
+
+
+def test_a_kept_configuration_through_a_link_or_a_fifo_is_refused(tmp_path: Path) -> None:
+    """Read with no link followed and no wait on a FIFO (``read_kept``)."""
+    real = tmp_path / "real.json"
+    real.write_text("{}", encoding="utf-8")
+    link = tmp_path / "link.json"
+    link.symlink_to(real)
+    fifo = tmp_path / "fifo.json"
+    os.mkfifo(fifo)
+    for path in (link, fifo):
+        loaded = load_applied(path, None, MACHINE)
+        assert isinstance(loaded, Err)
+        assert loaded.error.startswith("illisible")
 
 
 async def test_a_file_with_no_revision_or_bad_values_is_refused(tmp_path: Path) -> None:

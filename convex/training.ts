@@ -756,7 +756,11 @@ export const ARMING_REFUSALS = {
   // Auto launches only (ANH-145, contract 1.10), checked after the
   // organisation: a bench launch puts nobody on board.
   incident_open:
-    "an incident of the machine closed its programmed sessions when it armed the launch: a high-severity incident open or analysed, or a drive fault waiting for its intervention",
+    "a high-severity incident of the machine was open when it armed the launch",
+  // Auto launches only (ANH-149, contract 1.16), checked after the incidents:
+  // a drive fault the console cannot reset waits for its intervention.
+  drive_intervention_required:
+    "a drive fault of the machine was waiting for its intervention in the logbook when it armed the launch",
   // Auto launches only (contract 1.12), checked last and by the start alone:
   // the machine says what it holds when it confirms (`programmeChanged`).
   programme_changed:
@@ -997,7 +1001,9 @@ async function benchLauncherStillAllowed(
  * other session may still hold its machine (`machine_busy`). Nothing of a
  * rider, a fitness, an age, a heart rate or the medical parameters is read,
  * nor the incidents. Any other launch, after 3, is refused while a high
- * incident of its machine is open or analysed (`incident_open`, ANH-145).
+ * incident of its machine is open or analysed (`incident_open`, ANH-145),
+ * then while a drive fault of it waits for its intervention
+ * (`drive_intervention_required`, ANH-149).
  */
 async function armingRefusal(
   ctx: QueryCtx | MutationCtx,
@@ -1021,10 +1027,9 @@ async function armingRefusal(
   }
   if ((await openHighIncidents(ctx, machine._id)) > 0)
     return refusalFor("incident_open");
-  // ANH-149: a drive fault the console cannot reset, not resolved. Said
-  // `incident_open` until contract 1.16 gives it a code of its own.
+  // ANH-149: a drive fault the console cannot reset, not resolved.
   if ((await driveInterventionsDue(ctx, machine._id)).length > 0)
-    return refusalFor("incident_open");
+    return refusalFor("drive_intervention_required");
   const rider = await riderStillAllowed(ctx, session, machine);
   if (rider === null) return refusalFor("right_revoked_before_start");
   const fitnessRefusal = await riderLaunchRefusal(

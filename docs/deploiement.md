@@ -201,7 +201,7 @@ npx convex run machineLogbook:backfillInterventionDue '{}'
 À relancer après tout changement de `contracts/drive-faults.json`
 ([convex.md](convex.md#machine_logbook--carnet-de-bord-des-machines-anh-149)).
 
-**Effet du déploiement.** Toute machine qui a un défaut variateur `manual_reset_only` enregistré avant ANH-149, même clos, a ses lancements automatiques fermés dès ce déploiement, jusqu'à ce qu'un admin Anheart écrive dans le carnet une intervention qui le nomme : aucune intervention ne peut dater d'avant le carnet. Une séance de banc reste possible.
+**Effet du déploiement.** Toute machine qui a un défaut variateur `manual_reset_only` enregistré avant ANH-149, même clos, a ses lancements automatiques fermés dès ce déploiement, jusqu'à ce qu'un admin Anheart écrive dans le carnet une intervention qui le nomme : aucune intervention ne peut dater d'avant le carnet. Une fois l'image du Pi 1.16 installée, sa console refuse aussi tout départ avec une personne à bord, séance manuelle occupée comprise, jusqu'à cette intervention. Une séance de banc reste possible.
 
 ### 3.2 Vérifier un déploiement sans navigateur
 

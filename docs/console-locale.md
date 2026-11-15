@@ -17,8 +17,11 @@ plus une seconde avec une vitesse mesurée positive aux deux extrémités.
 La batterie BITalino, l'état thermique du variateur et le dernier préflight
 restent inconnus tant que leurs producteurs ne les fournissent pas.
 `incidents_open_high` reprend le dernier poll compatible qui fournit un entier
-positif ou nul; sans ce champ il reste inconnu. Le nombre d'enregistrements en
-attente ne baisse qu'après confirmation de dépôt, pas après l'envoi de télémétrie.
+positif ou nul; une réponse sans ce champ, ou d'une valeur illisible, garde le
+dernier, que la console garde aussi sur le disque (`data/incidents_open_high.json`,
+ANH-149) ; jamais lu, il reste inconnu. Le pré-vol lit de même
+`drive_interventions_due` (contrat 1.16), qui ne part pas dans le heartbeat.
+Le nombre d'enregistrements en attente ne baisse qu'après confirmation de dépôt, pas après l'envoi de télémétrie.
 La carte distante affiche ces inconnues et l'ancienneté du rapport explicitement.
 
 La console locale est la page web servie par le Pi lui-même (`python -m src.local_panel`).
@@ -2499,6 +2502,7 @@ quand il ne la propose plus (carte « Depart distant » ci-dessus).
 | `pratiquant deja dans une autre seance en attente ou en cours : une seule a la fois (rider_busy)` | le pratiquant est déjà tenu par une autre séance |
 | `machine deja tenue par une autre seance en attente ou en cours : une seule a la fois (machine_busy)` | séance de banc lestée lancée du site (contrat 1.9) : une autre séance tient encore la machine |
 | `incident grave ouvert sur cette machine : seances programmees fermees jusqu'a sa cloture (incident_open)` | programme lancé du site (contrat 1.10, ANH-145) : un incident de gravité haute de la machine est ouvert ou analysé, jusqu'à sa clôture par un admin Anheart |
+| `defaut variateur non rearmable sur cette machine : seances programmees fermees jusqu'a la cloture de l'incident et son intervention au carnet de bord (drive_intervention_required)` | programme lancé du site (contrat 1.16, ANH-149) : un défaut variateur que la console ne réarme pas attend son intervention, jusqu'à la clôture de l'incident et une entrée `intervention` qui le nomme au carnet de bord ; une console antérieure à 1.16 montre à sa place la phrase générique `depart distant refuse (HTTP 409, drive_intervention_required)` |
 | `attestation requise : capsule lestee, aucune personne a bord, personne dans le rayon du bras` | confirmation d'une séance de banc lestée sans la case d'attestation cochée (409 `bench_unattested`) ; rien n'est envoyé |
 | `depart distant refuse (HTTP <n>, <code>)` (ou `depart distant refuse (HTTP <n>)` sans code) | autre refus de `training/start`; le texte reçu du tableau de bord n'est pas repris |
 | `depart distant non confirme : confirmation indisponible` | lien retenu, par exemple réseau, clé, délai, 429 ou 5xx ; aucun départ n'est armé |
@@ -2979,6 +2983,11 @@ batterie basse, un BITalino absent ou une horloge non fiable ne retiennent pas
 un départ de banc : ce sont des avertissements au banc (décision du pilote du
 29 octobre 2026). Un incident grave ouvert non plus (ANH-145) : il retient
 tout départ avec une personne à bord, et n'est qu'un avertissement au banc.
+Un défaut variateur en attente d'intervention de même (ANH-149) : il retient
+`Demarrer la seance` et un `Demarrer MANUEL` avec une personne à bord, plus
+strictement que le tableau de bord, qui ne ferme que les séances programmées :
+un variateur qui demande un réarmement manuel est inspecté avant que quelqu'un
+monte, et la séance de banc sert à l'essayer après l'intervention.
 
 Le bouton de confirmation de la carte « Depart distant » suit la même règle :
 pour une séance de banc lestée lancée du site, la colonne Banc ; pour un programme,
@@ -3100,10 +3109,29 @@ interruption après la reprise de l'acquisition. Une batterie lue il y a plus de
   enregistrement d'une exécution précédente dont la fin n'est pas encore reçue,
   ou une fin reçue sans poll depuis (`fin d'une seance terminee sur un arret
   recue par le tableau de bord, compte des incidents pas encore relu`). Hors
-  ligne, il le reste jusqu'au retour du lien. Une séance que le tableau de
+  ligne, il le reste jusqu'au retour du lien. Depuis ANH-149, le dernier
+  compte lu est gardé sur le disque : après un redémarrage, un compte non nul
+  reste rouge avec une personne à bord, et la raison dit `(compte annonce
+  avant le redemarrage, le ... UTC, pas encore relu)` ; un 0 d'avant le
+  redémarrage est orange avec la même mention, jusqu'au poll suivant. Une séance que le tableau de
   bord ne recevra jamais le retient, même après un redémarrage, jusqu'à
   l'acquittement de l'opérateur
   (ci-dessus).
+- Les défauts variateur en attente d'intervention (ANH-149) : orange « non
+  annoncees » tant que le serveur n'en annonce pas le compte (serveur
+  antérieur au contrat 1.16, aucun poll reçu, console non reliée) ; dès
+  qu'il en annonce un, rouge avec une personne à bord, programme comme
+  séance manuelle occupée, et orange au banc, avec la raison : `1 defaut(s)
+  variateur non rearmable(s) en attente d'intervention : aucune personne a
+  bord avant l'intervention au carnet de bord et la cloture de l'incident`.
+  Il redevient vert au poll qui suit l'intervention et la clôture. Hors
+  ligne, ou face à un serveur qui ne dit plus de compte, le dernier compte
+  lu reste, redémarrage compris (`data/drive_interventions_due.json`) :
+  après un redémarrage, la raison le dit, `(compte annonce avant le
+  redemarrage, le 2026-11-14 21:10 UTC, pas encore relu)`, jusqu'au poll
+  suivant ; un 0 d'avant le redémarrage est orange avec la même mention.
+  Un fichier illisible laisse le contrôle orange, « non annoncees », et le
+  journal de la console le dit.
 - La batterie : la conversion de la lecture brute en pourcentage est une
   hypothèse à vérifier au banc sur le vrai BITalino
   ([raspberry-pi.md, 4.2](raspberry-pi.md#le-pré-vol-anh-142)).

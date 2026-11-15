@@ -11,6 +11,7 @@
 import { v } from "convex/values";
 import {
   internalMutation,
+  internalQuery,
   mutation,
   query,
   type MutationCtx,
@@ -272,6 +273,17 @@ export const addEntry = mutation({
     });
     return entryId;
   },
+});
+
+/**
+ * What a machine's poll announces since contract 1.16 (`drive_interventions_due`):
+ * its drive faults waiting for their intervention, which its console reads.
+ */
+export const interventionsDueCount = internalQuery({
+  args: { machineId: v.id("machines") },
+  returns: v.number(),
+  handler: async (ctx, args) =>
+    (await driveInterventionsDue(ctx, args.machineId)).length,
 });
 
 /** Incidents judged per run of the backfill, at most. */

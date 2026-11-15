@@ -287,6 +287,18 @@ const auditOf = (w: World, targetId: string) =>
       .map((entry) => ({ action: entry.action, fields: entry.details?.fields, version: entry.details?.version })),
   );
 
+const configChanges = (w: World) =>
+  w.t.run(async (ctx) =>
+    (
+      await ctx.db
+        .query("machine_logbook")
+        .withIndex("by_machine_and_kind_and_at", (q) =>
+          q.eq("machineId", w.machine).eq("kind", "config_change"),
+        )
+        .collect()
+    ).map(({ summary, refs, by, organizationId }) => ({ summary, refs, by, organizationId })),
+  );
+
 /** A first revision, approved by a second Anheart admin: what the machine is sent. */
 async function approvedFirst(w: World, values: ConfigValues = BASE) {
   await addSecondAdmin(w);
@@ -559,6 +571,15 @@ describe("ANH-141 EX-4 EX-6 the machine's side", () => {
       expect((await machineFetch(w, key, "/api/machine/config/applied", body)).status).toBe(400);
     expect(await applyOnMachine(w, key, 1, hash)).toBe("applied");
     expect(await applyOnMachine(w, key, 1, hash)).toBe("unchanged");
+    // ANH-149: one entry of the logbook, by the server, not one per repetition.
+    expect(await configChanges(w)).toEqual([
+      {
+        summary: "configuration révision 1 appliquée",
+        refs: { configRevision: 1 },
+        by: undefined,
+        organizationId: w.orgA,
+      },
+    ]);
     expect(await rowOf(w, first.configId)).toMatchObject({ status: "applied", appliedHash: hash });
     expect(await status()).toBe("mismatch");
 
@@ -605,6 +626,7 @@ describe("ANH-141 EX-4 EX-6 the machine's side", () => {
     const again = await machineFetch(w, key, "/api/machine/config/applied", { revision: 1, hash, refusal: "encore" });
     expect(await again.json()).toMatchObject({ status: "unchanged" });
     expect((await auditOf(w, first.configId)).map((entry) => entry.action)).toContain("machine_config.refused");
+    expect(await configChanges(w)).toEqual([]);
   });
 });
 

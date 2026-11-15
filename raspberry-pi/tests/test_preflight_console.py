@@ -12,7 +12,7 @@ import asyncio
 import json
 import logging
 from collections.abc import Callable, Mapping
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from http import HTTPStatus
 from pathlib import Path
 from typing import Final, cast
@@ -22,7 +22,7 @@ import pytest
 
 from src import local_panel
 from src.clock import ManualClock
-from src.cloud_sync import CloudSync
+from src.cloud_sync import DRIVE_INTERVENTIONS_FILE, INCIDENTS_FILE, CloudSync
 from src.contract import CONTRACT_VERSION, SERVER_VERSION_FIELD
 from src.health import HealthWatch
 from src.health_system import Celsius, SystemHealth
@@ -46,25 +46,31 @@ from src.record_uplink import (
 )
 from src.result import Err, Ok, Result
 from src.sim.bitalino import SimulatedBitalinoClient
+from src.training.plan import JsonValue
 from src.training.preflight import (
     BATTERY_WAIT,
     CONTROLS,
+    ControlResult,
     ControlState,
     PreflightMonitor,
     PreflightRefused,
     judge,
 )
+from src.training.runtime import RuntimeState, Subject
 from src.training.types import Occupancy
-from src.units import Monotonic, Percent, Seconds, UnixMillis
+from src.units import Monotonic, MotorRpm, Percent, Seconds, UnixMillis
 from src.web.app import create_app
 from src.web.preflight_routes import PreflightRow
 from tests.access_support import OPERATOR_ID, signed_http
 from tests.test_cloud_sync import (
+    DOWN,
     LAUNCH,
     OPERATOR,
     POLL_PATH,
     START,
     Dashboard,
+    Linked,
+    Reply,
     config_of,
     launch_answer,
     linked,
@@ -75,6 +81,10 @@ from tests.test_contract import shared
 from tests.test_local_panel import BASE_ENV, SERIAL_ENV, FakeEcgClient, config_from, ecg_link
 from tests.test_preflight import _green  # pyright: ignore[reportPrivateUsage]  # one fixture
 from tests.test_remote_bench_launch import BENCH
+from tests.test_runtime import (
+    _profile,  # pyright: ignore[reportPrivateUsage]  # the shared rig builders
+    _program,  # pyright: ignore[reportPrivateUsage]
+)
 from tests.wall_clock_support import ScriptedClock
 
 TICK: Final[Seconds] = Seconds(0.2)
@@ -508,6 +518,259 @@ async def test_a_serious_incident_read_on_the_poll_refuses_a_person_on_board_and
     manual = rig_.panel.runtime.manual
     assert manual is not None
     assert manual.occupancy is Occupancy.BENCH
+    await rig_.panel.close()
+
+
+DRIVE_INTERVENTION_REFUSAL: Final[str] = (
+    "pre-vol : 1 defaut(s) variateur non rearmable(s) en attente d'intervention : aucune "
+    "personne a bord avant l'intervention au carnet de bord et la cloture de l'incident"
+)
+
+
+def _interventions(session: Mapping[str, object] | None, due: object) -> Reply:
+    """A poll answer of this contract: no serious incident, ``due`` drive interventions."""
+    return ok(
+        {
+            "session": cast("JsonValue", session),
+            SERVER_VERSION_FIELD: CONTRACT_VERSION,
+            "incidents_open_high": 0,
+            "drive_interventions_due": cast("JsonValue", due),
+        }
+    )
+
+
+def _interventions_state(monitor: PreflightMonitor, occupancy: Occupancy) -> ControlState:
+    report = judge(CONTROLS, monitor.inputs(), occupancy)
+    return next(r.state for r in report.results if r.id == "drive_interventions")
+
+
+async def test_a_drive_intervention_due_refuses_every_start_with_a_person_on_board(
+    tmp_path: Path,
+) -> None:
+    """ANH-149 EX-4: a programme and an occupied manual session alike, stricter than the
+    dashboard, which closes programmed sessions only; the bench is warned and arms."""
+    rig_ = linked(tmp_path, preflight=True)
+    rig_.dashboard.answer(POLL_PATH, _interventions(None, 1))
+    await rig_.run(13.0)
+    monitor = rig_.panel.preflight
+    assert monitor is not None
+    on_board = monitor.refusal(Occupancy.OCCUPIED)
+    assert on_board is not None
+    assert on_board.control == "drive_interventions"
+    assert on_board.detail == DRIVE_INTERVENTION_REFUSAL
+    runtime = rig_.panel.runtime
+    programme = await runtime.start(
+        _program(_profile()), Subject(subject_id="rider-1", operator=OPERATOR)
+    )
+    assert isinstance(programme, Err)
+    assert programme.error == on_board
+    occupied = await runtime.start_manual(Occupancy.OCCUPIED, OPERATOR, MotorRpm(300))
+    assert isinstance(occupied, Err)
+    assert occupied.error == on_board
+    assert _interventions_state(monitor, Occupancy.BENCH) is ControlState.WARN
+    assert monitor.refusal(Occupancy.BENCH) is None
+    submitted = rig_.panel.surface.submit_start_manual(occupancy=Occupancy.BENCH, operator=OPERATOR)
+    assert isinstance(submitted, Ok)
+    await rig_.run(0.4)
+    manual = runtime.manual
+    assert manual is not None
+    assert manual.occupancy is Occupancy.BENCH
+    await rig_.panel.close()
+
+
+@pytest.mark.parametrize(
+    ("due", "state"),
+    [
+        pytest.param(0, ControlState.OK, id="none-due"),
+        pytest.param(None, ControlState.WARN, id="not-announced"),
+    ],
+)
+async def test_no_drive_intervention_due_or_none_announced_refuses_nobody(
+    tmp_path: Path, due: object, state: ControlState
+) -> None:
+    """ANH-149: a count of 0 lets a person on board; one not announced (a 1.15 dashboard, an
+    unreadable value) is orange, as the incidents' count is."""
+    rig_ = linked(tmp_path, preflight=True)
+    rig_.dashboard.answer(POLL_PATH, _interventions(None, due))
+    await rig_.run(13.0)
+    monitor = rig_.panel.preflight
+    assert monitor is not None
+    for occupancy in Occupancy:
+        assert _interventions_state(monitor, occupancy) is state
+    refused = monitor.refusal(Occupancy.OCCUPIED)
+    assert refused is None or refused.control != "drive_interventions"
+    await rig_.panel.close()
+
+
+KEPT_BEFORE: Final[str] = (
+    " (compte annonce avant le redemarrage, le 2023-11-14 22:13 UTC, pas encore relu)"
+)
+
+
+@dataclass(frozen=True, slots=True)
+class Kept:
+    """One of the counts the poll announces and the console keeps across a restart."""
+
+    control: str
+    field: str
+    file: str
+    refusal: str
+    """The refusal at a count of 1, as read this run."""
+
+    none: str
+    """What the control says at 0."""
+
+    before: str
+    """A dashboard contract that carries no such count."""
+
+
+KEPT: Final[tuple[object, ...]] = (
+    pytest.param(
+        Kept(
+            "drive_interventions",
+            "drive_interventions_due",
+            DRIVE_INTERVENTIONS_FILE,
+            DRIVE_INTERVENTION_REFUSAL,
+            "aucun defaut variateur en attente d'intervention",
+            "1.15",
+        ),
+        id="drive-interventions",
+    ),
+    pytest.param(
+        Kept(
+            "incidents",
+            "incidents_open_high",
+            INCIDENTS_FILE,
+            "pre-vol : 1 incident(s) grave(s) ouvert(s) sur cette machine : aucune personne a "
+            "bord avant leur cloture par un admin Anheart",
+            "aucun incident grave ouvert",
+            "1.9",
+        ),
+        id="incidents",
+    ),
+)
+
+
+def _counts(kept: Kept, due: JsonValue) -> Reply:
+    """A poll answer of this contract: ``due`` for ``kept``, 0 for the other count."""
+    document: dict[str, JsonValue] = {
+        "session": None,
+        SERVER_VERSION_FIELD: CONTRACT_VERSION,
+        "incidents_open_high": 0,
+        "drive_interventions_due": 0,
+    }
+    document[kept.field] = due
+    return ok(document)
+
+
+def _state(monitor: PreflightMonitor, control: str, occupancy: Occupancy) -> ControlResult:
+    report = judge(CONTROLS, monitor.inputs(), occupancy)
+    return next(r for r in report.results if r.id == control)
+
+
+async def _power_cycle(tmp_path: Path, kept: Kept, due: int) -> Linked:
+    """A console that read ``due`` from its dashboard, then started again with none."""
+    first = linked(tmp_path, preflight=True)
+    first.dashboard.answer(POLL_PATH, _counts(kept, due))
+    await first.run(13.0)
+    await first.panel.close()
+    again = linked(tmp_path, preflight=True)
+    again.dashboard.answer(POLL_PATH, DOWN)
+    await again.run(13.0)
+    return again
+
+
+@pytest.mark.parametrize("kept", KEPT)
+async def test_a_count_kept_across_a_power_cycle_holds_a_person_on_board_until_a_poll_says_0(
+    tmp_path: Path, kept: Kept
+) -> None:
+    """ANH-149: the likely sequence. A drive fault the console cannot reset (or a serious
+    incident), the machine switched off and on again: the count read before holds,
+    offline and through answers that carry none it can read, until the dashboard says 0."""
+    rig_ = await _power_cycle(tmp_path, kept, 1)
+    monitor = rig_.panel.preflight
+    assert monitor is not None
+    on_board = monitor.refusal(Occupancy.OCCUPIED)
+    assert on_board is not None
+    assert on_board.control == kept.control
+    assert on_board.detail == kept.refusal + KEPT_BEFORE
+    occupied = await rig_.panel.runtime.start_manual(Occupancy.OCCUPIED, OPERATOR, MotorRpm(300))
+    assert isinstance(occupied, Err)
+    assert occupied.error == on_board
+    assert _state(monitor, kept.control, Occupancy.BENCH).state is ControlState.WARN
+    assert monitor.refusal(Occupancy.BENCH) is None
+    # A dashboard rolled back to before the count, or a value it cannot read: nothing lifts.
+    for answer in (
+        ok({SERVER_VERSION_FIELD: kept.before, "session": None}),
+        _counts(kept, "1"),
+    ):
+        rig_.dashboard.answer(POLL_PATH, answer)
+        await rig_.run(4.0)
+        still = monitor.refusal(Occupancy.OCCUPIED)
+        assert still is not None
+        assert still.control == kept.control
+    rig_.dashboard.answer(POLL_PATH, _counts(kept, 0))
+    await rig_.run(4.0)
+    lifted = _state(monitor, kept.control, Occupancy.OCCUPIED)
+    assert lifted.state is ControlState.OK
+    assert lifted.detail == kept.none
+    refused = monitor.refusal(Occupancy.OCCUPIED)
+    assert refused is None or refused.control != kept.control
+    await rig_.panel.close()
+
+
+@pytest.mark.parametrize("kept", KEPT)
+async def test_a_0_kept_across_a_power_cycle_is_orange_with_its_date(
+    tmp_path: Path, kept: Kept
+) -> None:
+    rig_ = await _power_cycle(tmp_path, kept, 0)
+    monitor = rig_.panel.preflight
+    assert monitor is not None
+    result = _state(monitor, kept.control, Occupancy.OCCUPIED)
+    assert result.state is ControlState.WARN
+    assert result.detail == kept.none + KEPT_BEFORE
+    await rig_.panel.close()
+
+
+@pytest.mark.parametrize("kept", KEPT)
+@pytest.mark.parametrize("content", [None, b"{not json"], ids=["no-file", "corrupt"])
+async def test_a_count_never_kept_or_unreadable_is_orange(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, kept: Kept, content: bytes | None
+) -> None:
+    """ANH-149: never known, it is unknown, as before; a file that does not parse is
+    unknown too, and said in the log: never taken for 0."""
+    if content is not None:
+        (tmp_path / kept.file).write_bytes(content)
+    with caplog.at_level(logging.WARNING, logger="src.cloud_sync"):
+        rig_ = linked(tmp_path, preflight=True)
+    rig_.dashboard.answer(POLL_PATH, DOWN)
+    await rig_.run(13.0)
+    monitor = rig_.panel.preflight
+    assert monitor is not None
+    for occupancy in Occupancy:
+        assert _state(monitor, kept.control, occupancy).state is ControlState.WARN
+    said = f"{kept.file} is not a count this console wrote" in caplog.text
+    assert said is (content is not None)
+    await rig_.panel.close()
+
+
+async def test_a_launch_from_the_site_is_refused_before_its_start_while_an_intervention_is_due(
+    tmp_path: Path,
+) -> None:
+    """ANH-149: the console refuses it itself, before confirming it to the dashboard."""
+    rig_ = linked(tmp_path, preflight=True)
+    rig_.dashboard.answer(POLL_PATH, _interventions(dict(LAUNCH), 1))
+    await rig_.run(13.0)
+    cloud = rig_.panel.cloud
+    assert cloud is not None
+    assert isinstance(cloud.confirm_remote_launch("remote-1", OPERATOR), Ok)
+    await rig_.run(2.0)
+    assert rig_.panel.runtime.state is RuntimeState.IDLE
+    assert rig_.dashboard.to(START) == []
+    (end,) = rig_.dashboard.to(END)
+    assert end["sessionId"] == "remote-1"
+    assert end["failed"] is True
+    assert end["reason"] == f"refusee par la machine : {DRIVE_INTERVENTION_REFUSAL}"
     await rig_.panel.close()
 
 

@@ -36,6 +36,7 @@ import {
   type CurrentUser,
 } from "./lib/auth";
 import { refusal } from "./lib/errors";
+import { writeLogbook } from "./lib/logbook";
 import {
   canonicalConfig,
   changedKeys,
@@ -552,7 +553,8 @@ export const signedConfig = internalQuery({
  * revision of this machine, or another hash; `not_approved`: a revision never
  * approved on the site (a draft, or one rejected before any approval). A
  * revision said applied again, or refused once it is no longer approved,
- * changes nothing.
+ * changes nothing. An applied revision is a `config_change` entry of the
+ * machine's logbook (ANH-149).
  */
 export const recordApplied = internalMutation({
   args: {
@@ -600,6 +602,15 @@ export const recordApplied = internalMutation({
     if (row.status === "applied") return "unchanged";
     await ctx.db.patch(row._id, { status: "applied", appliedAt: now, appliedHash: args.hash });
     await audit(ctx, { ...origin, action: "machine_config.applied" });
+    await writeLogbook(
+      ctx,
+      { _id: args.machineId, organizationId: row.organizationId },
+      {
+        kind: "config_change",
+        summary: `configuration révision ${row.revision} appliquée`,
+        refs: { configRevision: row.revision },
+      },
+    );
     return "applied";
   },
 });

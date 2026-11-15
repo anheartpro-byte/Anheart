@@ -1649,6 +1649,7 @@ describe("what a machine reports through its routes", () => {
         profilesDigest: null,
       },
       incidents_open_high: 0,
+      drive_interventions_due: 0,
       server_contract_version: CONTRACT_VERSION,
     });
   });

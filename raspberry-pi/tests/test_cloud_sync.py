@@ -23,6 +23,7 @@ import asyncio
 import json
 import logging
 import re
+import stat
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from itertools import pairwise
@@ -36,8 +37,10 @@ from src.clock import ManualClock
 from src.cloud_sync import (
     ARMING_REFUSAL_WORDS,
     DASHBOARD_OPERATOR,
+    DRIVE_INTERVENTIONS_FILE,
     FINAL_CODES,
     HEARTBEAT_PERIOD,
+    INCIDENTS_FILE,
     LAUNCH_GIVEN_UP,
     LAUNCH_TIMEOUT,
     POLL_PERIOD,
@@ -48,7 +51,9 @@ from src.cloud_sync import (
     CloudSync,
     CloudTransport,
     Document,
+    HeldCount,
     HttpxTransport,
+    KeptCount,
     Refused,
     SessionKind,
     StartedSession,
@@ -315,6 +320,7 @@ def rig(
     with_roster: bool = True,
     sto_source: str = "sim_ready",
     preflight: bool = False,
+    counts_dir: Path | None = None,
 ) -> Rig:
     """A real simulated panel's surface and store, with a stub runtime and a scripted link."""
     clock = ManualClock(Monotonic(10.0), UnixMillis(1_700_000_000_000))
@@ -346,6 +352,7 @@ def rig(
         preflight_start=panel.preflight_remote_start,
         records=records,
         roster=panel.roster if with_roster else None,
+        counts_dir=counts_dir,
     )
     return Rig(
         clock=clock,
@@ -2371,6 +2378,211 @@ async def test_an_unreadable_count_after_a_stop_holds_until_a_readable_one(
     r.runtime.state = RuntimeState.RUNNING
     assert await r.sync.acknowledge_lost_stops(noted.append) == Err(SESSION_RUNS)
     assert noted == [], "nothing decided, nothing for the logbook"
+
+
+def interventions_due(sync: CloudSync) -> int | None:
+    """Read afresh: a checker keeps a property's narrowing across an ``await``."""
+    held = sync.drive_interventions
+    return None if held is None else held.count
+
+
+def due_answer(due: JsonValue, version: str = CONTRACT_VERSION) -> Reply:
+    """A poll answer of ``version`` with nothing waiting, ``due`` drive interventions."""
+    return ok({SERVER_VERSION_FIELD: version, "session": None, "drive_interventions_due": due})
+
+
+@pytest.mark.parametrize("unreadable", ["1", -1, True, 1.5, None])
+async def test_the_drive_interventions_due_are_read_on_the_poll_and_kept_while_it_fails(
+    tmp_path: Path, unreadable: JsonValue
+) -> None:
+    """ANH-149, contract 1.16: the last count read stands while no poll is answered, and
+    while the answers carry none it can read (a dashboard rolled back below 1.16): only a
+    count read lifts it. Never read, it is none."""
+    entry = cast("Mapping[str, object]", shared()["drive_interventions"])
+    assert entry["field"] == "drive_interventions_due"
+    r = rig(tmp_path)
+    assert interventions_due(r.sync) is None
+    r.dashboard.answer(POLL_PATH, due_answer(2))
+    await r.step()
+    assert interventions_due(r.sync) == 2
+    for reply, why in (
+        (DOWN, "no answer"),
+        (launch_answer(None, version="2.0"), "an answer of another major says nothing"),
+    ):
+        asked = len(r.dashboard.to(POLL_PATH))
+        r.dashboard.answer(POLL_PATH, reply)
+        await r.step(float(POLL_PERIOD))
+        assert len(r.dashboard.to(POLL_PATH)) > asked, "asked again"
+        assert interventions_due(r.sync) == 2, why
+    r.dashboard.answer(POLL_PATH, due_answer(0))
+    await r.step(float(POLL_PERIOD))
+    assert interventions_due(r.sync) == 0
+    r.dashboard.answer(POLL_PATH, due_answer(1))
+    await r.step(float(POLL_PERIOD))
+    assert interventions_due(r.sync) == 1
+    r.dashboard.answer(POLL_PATH, due_answer(unreadable))
+    await r.step(float(POLL_PERIOD))
+    assert interventions_due(r.sync) == 1, "an unreadable count lifts nothing"
+    # A 1.15 dashboard does not send it: it lifts nothing either.
+    r.dashboard.answer(POLL_PATH, ok({SERVER_VERSION_FIELD: "1.15", "session": None}))
+    await r.step(float(POLL_PERIOD))
+    assert interventions_due(r.sync) == 1
+    r.dashboard.answer(POLL_PATH, due_answer(0))
+    await r.step(float(POLL_PERIOD))
+    assert interventions_due(r.sync) == 0
+
+
+ANNOUNCED: Final[UnixMillis] = UnixMillis(1_700_000_000_000)
+
+
+def held(kept: KeptCount) -> HeldCount | None:
+    """Read afresh: a checker keeps a property's narrowing across an ``await``."""
+    return kept.held
+
+
+async def test_a_kept_count_is_read_back_after_a_restart_as_one_from_before_it(
+    tmp_path: Path,
+) -> None:
+    """ANH-149: written at each change, private, and read back at the next start."""
+    path = tmp_path / DRIVE_INTERVENTIONS_FILE
+    kept = KeptCount(path)
+    assert held(kept) is None
+    assert not path.exists()
+    await kept.read(None, ANNOUNCED)
+    assert held(kept) is None, "never read: none"
+    assert not path.exists()
+    await kept.read(1, ANNOUNCED)
+    assert held(kept) == HeldCount(1, ANNOUNCED)
+    assert json.loads(path.read_text(encoding="utf-8")) == {
+        "schema_version": 1,
+        "count": 1,
+        "read_at": ANNOUNCED,
+    }
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    later = UnixMillis(ANNOUNCED + 60_000)
+    await kept.read(None, later)
+    assert held(kept) == HeldCount(1, ANNOUNCED), "an answer with no count keeps it"
+    again = KeptCount(path)
+    assert held(again) == HeldCount(1, ANNOUNCED, restored=True)
+    await again.read(1, later)
+    assert held(again) == HeldCount(1, ANNOUNCED), "said again: no longer from before"
+    await again.read(0, later)
+    assert held(again) == HeldCount(0, later)
+    assert KeptCount(path).held == HeldCount(0, later, restored=True)
+    assert KeptCount(None).held is None
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        b"",
+        b"{",
+        b"null",
+        b"[1]",
+        b'{"schema_version": 1, "count": -1, "read_at": 0}',
+        b'{"schema_version": 1, "count": "1", "read_at": 0}',
+        b'{"schema_version": 1, "count": true, "read_at": 0}',
+        b'{"schema_version": 1, "count": 1.5, "read_at": 0}',
+        b'{"schema_version": 1, "count": 1, "read_at": -5}',
+        b'{"schema_version": 2, "count": 1, "read_at": 0}',
+        b'{"schema_version": 1, "count": 1, "read_at": 0, "more": 1}',
+        b'{"schema_version": 1, "count": 1}',
+    ],
+)
+def test_a_kept_count_that_does_not_parse_is_unknown_never_0_and_said(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, content: bytes
+) -> None:
+    path = tmp_path / DRIVE_INTERVENTIONS_FILE
+    path.write_bytes(content)
+    with caplog.at_level(logging.WARNING, logger="src.cloud_sync"):
+        assert KeptCount(path).held is None
+    assert f"{DRIVE_INTERVENTIONS_FILE} is not a count this console wrote" in caplog.text
+
+
+async def test_a_kept_count_that_cannot_be_read_or_written_is_said(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A directory where the file should be, a file where its directory should be."""
+    unreadable = tmp_path / DRIVE_INTERVENTIONS_FILE
+    unreadable.mkdir()
+    blocked = tmp_path / "data"
+    blocked.write_text("not a directory", encoding="utf-8")
+    with caplog.at_level(logging.WARNING, logger="src.cloud_sync"):
+        assert KeptCount(unreadable).held is None
+        kept = KeptCount(blocked / DRIVE_INTERVENTIONS_FILE)
+        await kept.read(2, ANNOUNCED)
+    assert f"{DRIVE_INTERVENTIONS_FILE} unreadable" in caplog.text
+    assert kept.held == HeldCount(2, ANNOUNCED), "held for this run all the same"
+    assert f"{DRIVE_INTERVENTIONS_FILE} not written" in caplog.text
+
+
+def incidents_count(sync: CloudSync) -> int | None:
+    """Read afresh: a checker keeps a property's narrowing across an ``await``."""
+    return sync.incidents_open_high
+
+
+@pytest.mark.parametrize("unreadable", ["1", -1, True, 1.5, None])
+async def test_the_incidents_count_is_lifted_only_by_a_count_read(
+    tmp_path: Path, unreadable: JsonValue
+) -> None:
+    """ANH-149: as the drive interventions' count, an answer that carries none it can read
+    (a dashboard rolled back below 1.10, a value it cannot read) keeps the last one."""
+    r = rig(tmp_path)
+
+    def answer(count: JsonValue) -> Reply:
+        return ok(
+            {SERVER_VERSION_FIELD: CONTRACT_VERSION, "session": None, "incidents_open_high": count}
+        )
+
+    r.dashboard.answer(POLL_PATH, answer(2))
+    await r.step()
+    assert incidents_count(r.sync) == 2
+    r.dashboard.answer(POLL_PATH, answer(unreadable))
+    await r.step(float(POLL_PERIOD))
+    assert incidents_count(r.sync) == 2
+    r.dashboard.answer(POLL_PATH, ok({SERVER_VERSION_FIELD: "1.9", "session": None}))
+    await r.step(float(POLL_PERIOD))
+    assert incidents_count(r.sync) == 2
+    r.dashboard.answer(POLL_PATH, answer(0))
+    await r.step(float(POLL_PERIOD))
+    assert incidents_count(r.sync) == 0
+
+
+async def test_an_incidents_count_kept_from_before_the_start_is_not_one_asked_after_a_stop(
+    tmp_path: Path,
+) -> None:
+    """ANH-149: a count read back at startup was asked before any end this run sent: the
+    hold of a session ended on a stop is lifted by a count read since, as before."""
+    (tmp_path / INCIDENTS_FILE).write_text(
+        '{"schema_version": 1, "count": 0, "read_at": 1700000000000}', encoding="utf-8"
+    )
+    r = rig(tmp_path, counts_dir=tmp_path)
+    assert r.sync.incidents == HeldCount(0, ANNOUNCED, restored=True)
+    r.dashboard.answer("/api/machine/training/local", ok({"sessionId": "cloud-1"}))
+    r.dashboard.answer("/api/machine/training/status", status_answer())
+    r.runtime.state = RuntimeState.RUNNING
+    r.sync.session_started(manual(r.clock))
+    for _ in range(3):
+        await r.step()
+    r.runtime.state = RuntimeState.FINISHED
+    r.runtime.end_reason = EndReason.EMERGENCY_STOP
+    await r.step()
+    assert r.dashboard.to(ENDED)[-1]["reason"] == "emergency_stop"
+    assert unreported(r.sync) == STOP_NOT_COUNTED
+    # The unscripted poll carries no count: the count kept and the hold both stand.
+    await r.step(float(POLL_PERIOD))
+    assert incidents_count(r.sync) == 0
+    assert unreported(r.sync) == STOP_NOT_COUNTED
+    r.dashboard.answer(
+        POLL_PATH,
+        ok({SERVER_VERSION_FIELD: CONTRACT_VERSION, "session": None, "incidents_open_high": 1}),
+    )
+    await r.step(float(POLL_PERIOD))
+    assert unreported(r.sync) is None
+    assert r.sync.incidents == HeldCount(1, r.clock.unix_millis())
+    assert KeptCount(tmp_path / INCIDENTS_FILE).held == HeldCount(
+        1, r.clock.unix_millis(), restored=True
+    )
 
 
 async def test_an_auto_session_registers_its_programme(tmp_path: Path) -> None:

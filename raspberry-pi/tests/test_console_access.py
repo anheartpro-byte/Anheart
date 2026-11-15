@@ -10,9 +10,12 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import errno
 import functools
 import hashlib
 import json
+import logging
+import os
 import threading
 from collections.abc import Mapping
 from pathlib import Path
@@ -23,12 +26,15 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 from pydantic import TypeAdapter
 
+from src import console_access
 from src.clock import ManualClock
+from src.cloud_sync import MAX_RESPONSE_BYTES
 from src.console_access import (
     CODE_CHANGED,
     CONSOLE_LOCKOUT_FAILURES,
     DEVICE_LOCKOUT_FAILURES,
     HASH_BYTES,
+    KEPT_FILE_MAX_BYTES,
     LIST_KIND,
     LOCAL_DEVICE,
     LOCKOUT_FAILURES,
@@ -60,6 +66,7 @@ from src.console_access import (
     device_actor,
     load_failures,
     load_list,
+    read_kept,
     read_list,
     replace_file,
     signed_text,
@@ -385,6 +392,88 @@ def test_lockout_counts_are_read_back_or_counted_again(tmp_path: Path) -> None:
     assert load_failures(path) == StoredLockout(failures={"a": 3}, devices={"t": 4}, console=7)
     path.write_text("not json", encoding="utf-8")
     assert load_failures(path) == NO_FAILURES
+
+
+def test_a_replaced_file_is_flushed_then_its_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A rename survives a power cut once its directory is flushed: the old file never
+    comes back. Not where directories cannot be flushed (``DIRECTORY_SYNC``)."""
+    flushed: list[Path] = []
+    monkeypatch.setattr(console_access, "fsync_path", flushed.append)
+    path = tmp_path / "data" / "kept.json"
+    assert replace_file(path, b"{}") == Ok(None)
+    assert flushed == [path.with_name(".kept.json.tmp"), path.parent]
+    assert path.read_bytes() == b"{}"
+    flushed.clear()
+    monkeypatch.setattr(console_access, "DIRECTORY_SYNC", False)
+    assert replace_file(path, b"[]") == Ok(None)
+    assert flushed == [path.with_name(".kept.json.tmp")]
+
+
+def test_a_directory_not_flushed_after_the_rename_is_said_and_the_file_kept(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The file is in place: the caller is told so (a configuration then restarts on
+    it), and the log names the error, never the path."""
+    path = tmp_path / "data" / "kept.json"
+
+    def flush(target: Path) -> None:
+        if target == path.parent:
+            raise OSError(errno.EIO, "directory flush refused")
+
+    monkeypatch.setattr(console_access, "fsync_path", flush)
+    with caplog.at_level(logging.WARNING, logger="src.console_access"):
+        assert replace_file(path, b"{}") == Ok(None)
+    assert path.read_bytes() == b"{}"
+    assert "kept file replaced, its directory not flushed: OSError:EIO" in caplog.text
+    assert str(tmp_path) not in caplog.text
+
+
+def test_a_kept_file_is_read_only_when_it_is_a_small_regular_file(tmp_path: Path) -> None:
+    """Never through a link, never waiting on a FIFO, never a file read whole when it is
+    over its bound."""
+    path = tmp_path / "kept.json"
+    with pytest.raises(FileNotFoundError):
+        read_kept(path, 8)
+    path.write_bytes(b"12345678")
+    assert read_kept(path, 8) == b"12345678"
+    with pytest.raises(OSError, match="file too large") as large:
+        read_kept(path, 7)
+    assert large.value.errno == errno.EFBIG
+    link = tmp_path / "link.json"
+    link.symlink_to(path)
+    with pytest.raises(OSError, match="symbolic link") as linked:
+        read_kept(link, 8)
+    assert linked.value.errno == errno.ELOOP
+    fifo = tmp_path / "fifo.json"
+    os.mkfifo(fifo)
+    directory = tmp_path / "directory.json"
+    directory.mkdir()
+    for odd in (fifo, directory):
+        with pytest.raises(OSError, match="not a regular file"):
+            read_kept(odd, 8)
+    assert KEPT_FILE_MAX_BYTES == MAX_RESPONSE_BYTES
+
+
+def test_a_kept_list_or_lockout_through_a_link_is_not_read(tmp_path: Path) -> None:
+    signer = Signer()
+    real = tmp_path / "real.json"
+    stored(real, signer.answer(text(list_document())))
+    assert isinstance(load_list(real, signer.public, None), Ok)
+    path = tmp_path / "operators.json"
+    path.symlink_to(real)
+    refused = load_list(path, signer.public, None)
+    assert isinstance(refused, Err)
+    assert refused.error.startswith("liste des operateurs illisible")
+    lockout = tmp_path / "lockout.json"
+    lockout.write_text(
+        '{"schema_version": 1, "failures": {"a": 3}, "devices": {}, "console": 3}',
+        encoding="utf-8",
+    )
+    linked = tmp_path / "operator_lockout.json"
+    linked.symlink_to(lockout)
+    assert load_failures(linked) == NO_FAILURES
 
 
 def test_a_file_the_disk_refuses_is_said_and_leaves_no_temporary(tmp_path: Path) -> None:

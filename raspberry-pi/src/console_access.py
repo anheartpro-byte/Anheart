@@ -54,12 +54,16 @@ from __future__ import annotations
 import asyncio
 import base64
 import contextlib
+import errno
 import hashlib
 import hmac
 import json
 import logging
+import os
 import re
 import secrets
+import stat
+import sys
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from functools import partial
@@ -72,7 +76,7 @@ from pydantic.dataclasses import dataclass as validated
 
 from src.clock import Clock
 from src.medical import verify_signature
-from src.record.writer import create_private, describe_os_error, fsync_path
+from src.record.writer import DIRECTORY_SYNC, create_private, describe_os_error, fsync_path
 from src.result import Err, Ok, Result
 from src.units import Monotonic, Seconds, UnixMillis, elapsed
 
@@ -409,7 +413,10 @@ _STORED_LOCKOUT: Final[TypeAdapter[StoredLockout]] = TypeAdapter(StoredLockout)
 
 
 def replace_file(path: Path, content: bytes) -> Result[None, str]:
-    """Replace ``path``: a private file, flushed, then renamed. Blocking, never raises."""
+    """Replace ``path``: a private file, flushed, renamed, then its directory flushed, so
+    that a power cut after the call cannot bring the old file back. Blocking, never
+    raises. A directory that cannot be flushed once the file is renamed is logged, and
+    the call succeeds: the file is in place, and the next start reads it."""
     temporary = path.with_name(f".{path.name}.tmp")
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -421,7 +428,45 @@ def replace_file(path: Path, content: bytes) -> Result[None, str]:
         with contextlib.suppress(OSError):
             temporary.unlink(missing_ok=True)
         return Err(describe_os_error(error))
+    if DIRECTORY_SYNC:
+        try:
+            fsync_path(path.parent)
+        except OSError as error:
+            _logger.warning(
+                "kept file replaced, its directory not flushed: %s", describe_os_error(error)
+            )
     return Ok(None)
+
+
+KEPT_FILE_MAX_BYTES: Final[int] = 1024 * 1024
+"""The largest file of a signed answer this console keeps: the largest answer it reads
+(:data:`src.cloud_sync.MAX_RESPONSE_BYTES`), which the file is made from."""
+
+# POSIX: a link in a kept file's place is refused, and a FIFO is never waited on.
+_KEPT_FLAGS: Final[int] = (
+    os.O_RDONLY if sys.platform == "win32" else os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
+)
+
+
+def read_kept(path: Path, limit: int) -> bytes:
+    """What a file this console keeps holds. Raises ``OSError``: ``FileNotFoundError``
+    when there is none; another for a link, a FIFO, a directory or anything but a
+    regular file in its place, and for a file over ``limit`` bytes, never read whole."""
+    descriptor = os.open(path, _KEPT_FLAGS)
+    content = b""
+    try:
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            raise OSError(errno.EINVAL, "not a regular file")
+        while len(content) <= limit:
+            chunk = os.read(descriptor, limit + 1 - len(content))
+            if not chunk:
+                break
+            content += chunk
+    finally:
+        os.close(descriptor)
+    if len(content) > limit:
+        raise OSError(errno.EFBIG, "file too large")
+    return content
 
 
 def load_list(
@@ -430,7 +475,7 @@ def load_list(
     """The list kept at ``path``, verified again; ``None`` when there is none. Startup only.
     ``machine_id``: as :func:`read_list`."""
     try:
-        raw = path.read_bytes()
+        raw = read_kept(path, KEPT_FILE_MAX_BYTES)
     except FileNotFoundError:
         return Ok(None)
     except OSError as error:
@@ -458,7 +503,7 @@ def load_failures(path: Path) -> StoredLockout:
     locks after five wrong codes, counted again from this start.
     """
     try:
-        return _STORED_LOCKOUT.validate_json(path.read_bytes())
+        return _STORED_LOCKOUT.validate_json(read_kept(path, KEPT_FILE_MAX_BYTES))
     except FileNotFoundError:
         return NO_FAILURES
     except (OSError, ValueError) as error:

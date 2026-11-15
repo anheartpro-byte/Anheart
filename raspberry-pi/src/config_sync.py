@@ -67,7 +67,14 @@ import anyio
 from src.clock import Clock
 from src.cloud_sync import TOO_LARGE_ANSWER, CloudTransport, Unreachable
 from src.config_view import ChangeView, ConfigView, PendingView
-from src.console_access import STORED_LIST, StoredList, replace_file, signed_text
+from src.console_access import (
+    KEPT_FILE_MAX_BYTES,
+    STORED_LIST,
+    StoredList,
+    read_kept,
+    replace_file,
+    signed_text,
+)
 from src.local_config import (
     KEY_OCCUPIED_ENABLED,
     KEY_PROGRAMS_ENABLED,
@@ -161,7 +168,7 @@ class PendingConfig:
 def _stored(path: Path) -> Result[StoredList | None, str]:
     """What ``path`` holds, as written; ``None`` when there is no file."""
     try:
-        raw = path.read_bytes()
+        raw = read_kept(path, KEPT_FILE_MAX_BYTES)
     except FileNotFoundError:
         return Ok(None)
     except OSError as error:

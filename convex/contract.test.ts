@@ -153,7 +153,7 @@ async function startAfter(
 describe("ANH-133 EX-1 one contract, defined in contracts/machine-api.json", () => {
   it("serves the version, header and error codes of the shared file", () => {
     expect(CONTRACT_VERSION).toBe(shared.contract_version);
-    expect(CONTRACT_VERSION).toBe("1.15");
+    expect(CONTRACT_VERSION).toBe("1.16");
     expect(CONTRACT_HEADER).toBe(shared.header);
     expect(MACHINE_ERROR_CODES).toEqual(Object.keys(shared.error_codes));
     expect(MACHINE_ERROR_CODES.length).toBeGreaterThan(0);
@@ -410,6 +410,7 @@ describe("ANH-133 EX-4 the poll answer names the server's contract", () => {
     expect(await response.json()).toEqual({
       session: null,
       incidents_open_high: 0,
+      drive_interventions_due: 0,
       [shared.server_version_field]: CONTRACT_VERSION,
     });
   });
@@ -644,6 +645,28 @@ describe("ANH-133 EX-5 every refusal is {error: <stable code>, message}", () => 
               occupied: false,
               status: "open",
               openedAt: Date.now(),
+            }),
+          ),
+        ),
+    },
+    {
+      name: "training/start: an auto launch while a drive fault of its machine waits for its intervention",
+      status: 409,
+      code: "drive_intervention_required",
+      run: (w) =>
+        startAfter(w, () =>
+          w.t.run((ctx) =>
+            ctx.db.insert("incidents", {
+              organizationId: w.organizationId,
+              machineId: w.machine,
+              kind: "drive_fault",
+              rule: "OCF",
+              t: 0,
+              severity: "medium",
+              occupied: false,
+              status: "closed",
+              openedAt: Date.now(),
+              interventionDue: true,
             }),
           ),
         ),
