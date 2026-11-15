@@ -306,7 +306,21 @@ Chaque ligne complète de `events.jsonl` est un objet :
 
 L'énumération fermée est `verdict`, `verdict_ack`, `refusal`, `phase`,
 `operator_action`, `drive_fault`, `remote_command`, `preflight`, `warning`,
-`end`. Un kind inconnu est une erreur de lecture. `actor` vaut `system`,
+`end`, `sto`. Un kind inconnu est une erreur de lecture.
+
+`sto` (A1-20) dit ce que la console lit de la chaîne de sécurité : un au
+premier tic, puis un à chaque changement d'état ou de source, jamais un par
+lecture. Son `detail` est fermé : l'état puis la source entre parenthèses,
+`ready (drive_input)`, chacun une valeur de l'énumération de la console
+(`StoState`, `StoSourceKind`), et rien d'autre ; `actor` vaut `system`. Une
+lecture du relais toutes les 0,5 s sur le variateur n'écrit donc rien tant que
+l'état ne change pas : une séance en écrit quelques-uns (prête, puis inconnue
+pendant l'arrêt qui retient les lectures, puis prête à nouveau), loin de la
+borne de `events.jsonl` (vingt événements par seconde, 512 octets chacun ; une
+ligne `sto` en fait moins de cent). Le rejeu lit la chaîne dans ces
+événements ([rejeu](#ce-quun-enregistrement-doit-contenir-pour-être-rejoué)) ; l'import ne garde leur
+`detail` que s'il est exactement un état et une source, et l'anonymise
+sinon. `actor` vaut `system`,
 `remote` ou un identifiant opaque d'opérateur. `detail` est du texte nettoyé
 à la frontière d'export ; son contenu libre n'est jamais traité comme HTML.
 
@@ -834,8 +848,18 @@ la clé nouvelle.
 Depuis ANH-92, le document porte aussi `sto_source`, la valeur de
 `STO_SOURCE`, comme `motor_backend` : l'empreinte de toute console change une
 fois, un nouveau document est écrit, et chaque enregistrement antérieur garde
-le sien. Le rejeu relit un document sans cette clé ; il ne s'en sert pas et
-lit toujours une chaîne STO simulée prête.
+le sien. Le rejeu relit un document sans cette clé ; il ne s'en sert pas.
+Depuis A1-20, il lit la chaîne STO dans les événements `sto` de
+l'enregistrement : chaque état et sa source à partir de l'instant de son
+événement, le premier avant lui, comme une lecture qui vient d'être faite
+(l'enregistrement garde les changements, pas l'âge de chaque lecture). Un
+enregistrement sans événement `sto` se rejoue sur une chaîne simulée prête,
+comme avant ; un événement `sto` dont le `detail` n'est pas exactement un état
+et une source de la console rend l'enregistrement non rejouable, avec la
+raison. Ces événements comptent surtout là où le variateur ne montre rien : au
+repos, à un départ, ou quand la chaîne se lit inconnue. Une chaîne qui s'ouvre
+sur un bras qui tourne se rejoue aussi sans eux, le runtime déduisant
+l'ouverture de la coupure de couple que le variateur rapporte.
 
 Au démarrage, la console remet ces octets au journal, en mémoire. Le premier
 cycle du fil `record-journal` les écrit dans `config/<config_hash>.json` :
@@ -1011,8 +1035,12 @@ un rejeu conforme ne remplace pas ce contrôle.
 ## Utilisation et compatibilité
 
 Le reader reste strict : une clé inconnue refuse la ligne, le bloc ou le
-manifeste. Les ajouts restent au schéma 2 et n'ajoutent aucun kind
-d'événement. Certains ajoutent des clés au manifeste, dont `subject_fit` et
+manifeste. Les ajouts restent au schéma 2 : un lecteur antérieur refuse un
+enregistrement plus récent dans tous les cas, par un `schema_version` ou par
+un kind qu'il ne connaît pas, et seuls des outils hors de la console lisent un
+enregistrement (rejeu, import, vue) ; la console n'en relit aucun. Un seul
+kind d'événement a été ajouté ainsi, `sto` (A1-20). Certains ajouts mettent des
+clés dans le manifeste, dont `subject_fit` et
 `fitness_questionnaire_version` (ANH-143, avant-dernier paragraphe de cette
 section) et les trois compteurs de zone de `end_observation` (ANH-234). Les
 versions ci-dessous désignent les révisions du lecteur, pas une nouvelle
@@ -1029,6 +1057,7 @@ valeur de `schema_version` :
 | commande `latch_estop` | ANH-192 | même refus de commande inconnue par le rejeu antérieur ; le verrou immédiat de la surface est distinct de l'appel `estop` du runtime |
 | `sto_source` dans le manifeste | ANH-92 | le lecteur du Pi refuse le manifeste (clé inconnue) ; le dépôt Convex antérieur le refuse aussi ([convex.md](convex.md#source-sto-dans-le-manifeste-anh-92)) |
 | `zone_in_s`, `zone_above_s`, `zone_below_s` dans `end_observation` | ANH-234 | le lecteur du Pi refuse le manifeste (clé inconnue), même aux trois `null` d'une séance manuelle ; le dépôt Convex antérieur le refuse aussi ([convex.md](convex.md#compteurs-de-zone-et-ordre-de-déploiement-anh-234)) |
+| kind d'événement `sto` | A1-20 | le lecteur du Pi refuse la ligne (kind inconnu), donc l'enregistrement : un rejeu ou un import antérieurs ne le lisent pas ; aucun ne le lit autrement qu'en entier. Convex ne lit pas les kinds strictement : son dépôt ne lit pas `events.jsonl`, son résumé ne regarde que les `warning`, et la route des événements accepte tout kind en minuscules ; aucun ordre de déploiement. Un enregistrement antérieur, sans `sto`, se rejoue sur une chaîne prête, comme avant |
 
 Une commande mal écrite sous un kind d'entrée est aussi refusée par le rejeu
 avec sa raison. Le reader ne décode pas les commandes : il doit pouvoir

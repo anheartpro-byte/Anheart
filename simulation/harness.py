@@ -106,7 +106,7 @@ from src.motor.sto import (
 )
 from src.record import commands
 from src.record.journal import MIN_FREE_BYTES
-from src.record.schema import EventKind, Manifest
+from src.record.schema import EventKind, Manifest, sto_detail
 from src.result import Err, Ok, Result
 from src.sensors.base import SensorKind
 from src.sim.bitalino import SimulatedBitalinoClient
@@ -709,6 +709,7 @@ class Session:
         "_last_measured",
         "_last_phase",
         "_last_rule",
+        "_last_sto",
         "_last_verdict",
         "_latency_until",
         "_manifest",
@@ -852,6 +853,7 @@ class Session:
         self._finished_at: Monotonic | None = None
         self._last_phase: str | None = None
         self._last_rule: str | None = None
+        self._last_sto: str | None = None
         self._last_verdict: str | None = None
         self._manifest: Manifest = manifest_for(scenario, clock, origin, self.meta())
 
@@ -1373,6 +1375,11 @@ class Session:
         if rule != self._last_verdict:
             self._event(now, EventKind.VERDICT, "cleared" if rule is None else rule)
             self._last_verdict = rule
+        # As the console's record does: the chain's changes, never each read (A1-20).
+        sto = sto_detail(snapshot.sto.state, snapshot.sto.source)
+        if sto != self._last_sto:
+            self._event(now, EventKind.STO, sto)
+            self._last_sto = sto
 
     def _row(self, now: Monotonic, snapshot: TelemetrySnapshot) -> Row:
         rig = self._rig

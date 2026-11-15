@@ -300,6 +300,7 @@ def every_event_of_the_record_is_on_the_dashboard_once(outcome: Outcome) -> None
         "operator_action",
         "warning",
         "phase",
+        "sto",  # the chain as read at the first tick, and never again: it did not change
         "operator_action",
         "operator_action",
         "refusal",

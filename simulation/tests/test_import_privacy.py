@@ -64,6 +64,13 @@ def recording(*events: Event, raw_hex: str | None = None) -> Recording:
         (EventKind.DRIVE_FAULT, "cleared", "cleared"),
         (EventKind.PHASE, "hold", "hold"),
         (EventKind.PHASE, "hold SECRET", ANONYMIZED),
+        (EventKind.STO, "open (drive_input)", "open (drive_input)"),
+        (EventKind.STO, "bridged (bridged_declared)", "bridged (bridged_declared)"),
+        (EventKind.STO, "open (Jeanne Martin)", ANONYMIZED),
+        (EventKind.STO, "Jeanne Martin (drive_input)", ANONYMIZED),
+        (EventKind.STO, "ready (drive_input): Jeanne Martin", ANONYMIZED),
+        (EventKind.STO, "ready (drive_input) Jeanne", ANONYMIZED),
+        (EventKind.STO, "SECRET", ANONYMIZED),
         (EventKind.END, "operator_stop", "operator_stop"),
         (EventKind.END, "SECRET", ANONYMIZED),
         (
