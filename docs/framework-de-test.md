@@ -4384,7 +4384,8 @@ exigences n'est pas tenue :
    | `operator` | `sim-operator` | `anonymized` |
    | `actor` de chaque événement | `system`, `remote` ou `sim-operator` | `system`, `remote` ou `anonymized` |
    | `record_id`, `local_ref` | ceux de la bibliothèque, dérivés du nom de l'archive (`library_identity`) | les mêmes : les identifiants d'origine ramèneraient à la séance |
-   | nom du dossier dans l'archive | se termine par `_<local_ref>` | se termine par `_<local_ref>` |
+   | nom du dossier dans l'archive | se termine par `_<local_ref>` | `2000-01-01T000000Z_<local_ref>` |
+   | dates (`started_at`, `ended_at`, `clocks.utc_start`, `profile.resolved_at`) | celles de l'horloge déterministe du harness | la date neutre de la bibliothèque, `2000-01-01T00:00:00Z` |
 
 3. un rejeu conforme à ce que la bibliothèque déclare : `MATCH`, ou l'écart
    accepté décrit en 16.7.
@@ -4394,8 +4395,8 @@ enregistrement de la bibliothèque ne porte jamais ceux sous lesquels sa
 source le connaît, quelle que soit la forme qu'il déclare.
 
 L'import de console neutralise aussi les dates de séance et le nom du dossier
-(section 16.6). Les dates des archives de scénarios viennent de l'horloge
-déterministe du harness.
+(section 16.6), et la gate le vérifie (`date`). Les dates des archives de
+scénarios viennent de l'horloge déterministe du harness.
 
 Une archive est le fichier de quelqu'un d'autre. Elle est extraite membre par
 membre (`unpack`), et seuls des fichiers ordinaires et des dossiers sont
@@ -4412,9 +4413,31 @@ de padding, plus un bloc terminal tar de 10 240 octets. Les extensions,
 masquées par l'itérateur public de `tarfile`, ne prennent pas de rang de
 membre ; elles partagent ce plafond d'octets avec le contenu, les en-têtes
 et le padding. Le flux refuse avant de remettre des octets au-delà de
-512 Mio plus cette marge, quelle que soit la version de `tarfile`.
+512 Mio plus cette marge, quelle que soit la version de `tarfile`. Une
+extension annoncée au-delà de 64 Kio (`MAX_EXTENSION_BYTES`) est refusée sans
+être lue, une chaîne d'extensions trop longue pour la récursion de `tarfile`
+aussi, et un fragment de moins de 512 octets après le dernier membre n'est
+pas pris pour la fin de l'archive. Un en-tête PAX global et toute forme creuse
+(GNU ancien, clés `GNU.sparse.`) sont refusés avant d'être lus, et les membres
+extraits ne restent pas en mémoire : des archives de quelques dizaines de Kio
+qui prenaient des gigaoctets sont refusées avec une mémoire de quelques Mio,
+vérifiée par `tracemalloc` dans les tests.
 Une taille négative, une taille non nulle hors fichier ordinaire, un en-tête
-invalide ou une erreur de décompression donne un refus nommé.
+invalide, une erreur de décompression, ou une erreur de valeur ou d'index que
+`tarfile` lève sur un en-tête, donne un refus nommé. Le lecteur partagé borne
+aussi l'ECG avant de le décoder, pour l'import, le rejeu `--replay` et le
+jugement de bibliothèque : 39 000 blocs et `MAX_RAW_BYTES` (113 568 000
+octets) décompressés au plus, ce que tient la séance la plus longue, à six
+voies, et chaque fichier lu en entier est borné de même avant d'être lu
+(`FILE_BOUNDS`), un lien, un tube ou un périphérique refusé ; une ligne de plus
+de 64 Kio est refusée avant d'être analysée, une trame de plus de registres
+qu'une lecture Modbus (125) dès qu'elle l'est. Un enregistrement à ces bornes
+demande au plus environ 7 Go de mémoire pour être rejoué : 6,7 mesurés au plus
+fort de sa lecture, chaque fichier rempli de la ligne valide qui garde le plus
+de mémoire par octet lu et l'ECG à sa borne, dont 3,2 pour les trames et 2
+pour l'ECG (`src/record/reader.py`, `FILE_BOUNDS`, dit comment) ; un
+`ticks.csv` gonflé de ses propres lignes est refusé avec quelques Mio (test de
+`test_real_records.py`).
 Le compte des membres et leurs tailles effectives sont vérifiés avant
 d'écrire le membre suivant. L'import, le rejeu,
 le jugement de bibliothèque et le visualiseur utilisent cette même extraction.

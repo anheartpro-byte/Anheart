@@ -5,6 +5,7 @@ import gzip
 import hashlib
 import json
 import os
+import tracemalloc
 from dataclasses import replace
 from pathlib import Path
 
@@ -12,9 +13,9 @@ import pytest
 
 from simulation import import_record as importer
 from simulation import real_records
-from simulation.import_privacy import NEUTRAL_MILLIS, NEUTRAL_UTC, anonymous_manifest, identities
+from simulation.import_privacy import anonymous_manifest, identities
 from simulation.import_record import Acceptance, import_record
-from simulation.real_records import judge, pack, replay_path, unpack
+from simulation.real_records import NEUTRAL_MILLIS, NEUTRAL_UTC, judge, pack, replay_path, unpack
 from simulation.replay import ReplayError, replay
 from simulation.replay_config import sidecar
 from simulation.replay_report import ReplayReport
@@ -25,9 +26,11 @@ from simulation.tests.replay_support import (
     edit_manifest,
     edit_ticks,
     reseal,
+    with_largest_zero_blocks,
 )
 from simulation.tests.test_record_console_parity import console_record
 from simulation.tests.test_replay_modbus import console_native
+from src.record import reader as shared_reader
 from src.record import writer as shared_writer
 from src.record.codec import JSON, mapping
 from src.record.reader import Recording, read
@@ -551,6 +554,130 @@ def test_publish_cleans_only_its_own_files_on_collision(
     assert isinstance(result, Err)
     assert not sidecar(collision).exists()
     assert collision.read_bytes() == b"theirs"
+
+
+def test_a_failed_publication_leaves_no_folder_the_import_made(
+    sources: dict[str, tuple[Path, Path]], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The library folder, and the folders above it, made for this import alone are taken
+    away again when its files cannot be written: nothing of the import is left."""
+    source, config = sources["programme"]
+    above = tmp_path / "new"
+    shelf = above / "library"
+
+    def refused(_files: tuple[tuple[Path, Path], ...]) -> None:
+        raise PermissionError(13, "not allowed here")
+
+    monkeypatch.setattr(importer, "_publish", refused)
+    result = import_record(source, "opaque", shelf, config=config)
+    assert result == Err("the import could not read or write its files")
+    assert not above.exists()
+
+
+def test_an_import_refuses_more_ecg_than_the_longest_record_before_reading_it(
+    sources: dict[str, tuple[Path, Path]], tmp_path: Path
+) -> None:
+    """The reader keeps every decoded block: a hundred and ten of the largest blocks, a few
+    kilobytes each compressed, took gigabytes. Their sizes are summed from their gzip
+    trailers first, and the source is refused without one being decoded."""
+    source, config = sources["programme"]
+    hostile = copy(source, tmp_path / "hostile")
+    with_largest_zero_blocks(hostile)
+    archive = tmp_path / "hostile.tar.gz"
+    pack(hostile, archive)
+    assert archive.stat().st_size < 1024 * 1024
+    tracemalloc.start()
+    try:
+        result = import_record(archive, "opaque", tmp_path / "library", config=config)
+        _now, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert result == Err("the source record holds more ECG than the longest record")
+    assert peak < 64 * 1024 * 1024, f"held {peak} bytes"
+    assert not (tmp_path / "library").exists()
+
+
+def test_an_import_refuses_more_ecg_blocks_than_the_longest_record(
+    sources: dict[str, tuple[Path, Path]], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source, config = sources["programme"]
+    blocks = len(tuple((source / "ecg_raw").glob("*.bin.gz")))
+    assert blocks > 1
+    monkeypatch.setattr(shared_reader, "MAX_RAW_BLOCKS", blocks - 1)
+    result = import_record(source, "opaque", tmp_path / "library", config=config)
+    assert result == Err("the source record holds more ECG blocks than the longest record")
+
+
+@pytest.mark.parametrize(
+    ("name", "line", "refusal"),
+    [
+        (
+            "events.jsonl",
+            "x" * (shared_reader.LONGEST_LINE + 1),
+            "the source record holds a line longer than any record writes",
+        ),
+        (
+            "drive_frames.jsonl",
+            json.dumps(
+                {
+                    "t": 0.1,
+                    "kind": "read_status",
+                    "register": list(range(shared_reader.MODBUS_READ_REGISTERS + 1)),
+                    "value": None,
+                    "ok": True,
+                    "latency_ms": 0,
+                }
+            ),
+            "the source record holds a drive frame of more registers than a Modbus read",
+        ),
+    ],
+)
+def test_an_import_names_a_line_or_a_frame_that_holds_more_than_a_record_writes(
+    sources: dict[str, tuple[Path, Path]], tmp_path: Path, name: str, line: str, refusal: str
+) -> None:
+    source, config = sources["programme"]
+    hostile = copy(source, tmp_path / "hostile")
+    with (hostile / name).open("a") as file:
+        file.write(line + "\n")
+    reseal(hostile)
+    result = import_record(hostile, "opaque", tmp_path / "library", config=config)
+    assert result == Err(refusal)
+    assert not (tmp_path / "library").exists()
+
+
+def test_a_block_too_short_to_say_its_size_counts_for_nothing_before_the_reader_refuses_it(
+    sources: dict[str, tuple[Path, Path]], tmp_path: Path
+) -> None:
+    source, config = sources["programme"]
+    broken = copy(source, tmp_path / "broken")
+    (broken / "ecg_raw" / "999999.bin.gz").write_bytes(b"gz")
+    reseal(broken)
+    result = import_record(broken, "opaque", tmp_path / "library", config=config)
+    assert result == Err("the source record cannot be read")
+
+
+def test_a_library_folder_that_cannot_be_made_leaves_no_folder_the_import_made(
+    sources: dict[str, tuple[Path, Path]], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The making of the library folder fails half way: the folders it made are taken away."""
+    source, config = sources["programme"]
+    above = tmp_path / "new"
+    shelf = above / "library"
+    made = Path.mkdir
+
+    def half_way(
+        path: Path, mode: int = 0o777, parents: bool = False, exist_ok: bool = False
+    ) -> None:
+        if path == shelf:
+            made(above)
+            raise PermissionError(13, "not allowed here")
+        made(path, mode, parents, exist_ok)
+
+    monkeypatch.setattr(Path, "mkdir", half_way)
+    result = import_record(source, "opaque", shelf, config=config)
+    assert result == Err("the import could not read or write its files")
+    monkeypatch.undo()
+    assert not above.exists()
 
 
 def test_import_refuses_an_archive_above_the_shared_extraction_limit(

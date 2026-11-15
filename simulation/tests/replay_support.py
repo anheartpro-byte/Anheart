@@ -8,21 +8,33 @@ copy under its own ``tmp_path`` and edits that.
 from __future__ import annotations
 
 import csv
+import gzip
 import hashlib
 import io
 import json
 import shutil
+import zlib
 from collections.abc import Callable, Mapping
 from dataclasses import replace
 from pathlib import Path
+from typing import Final, cast
 
 from simulation.harness import PANEL_SAFETY, RUNTIME_LIMITS, load_motion
-from simulation.real_records import ANONYMIZED, LOCAL_REF_LENGTH, library_identity
+from simulation.real_records import (
+    ANONYMIZED,
+    LOCAL_REF_LENGTH,
+    NEUTRAL_FOLDER,
+    NEUTRAL_MILLIS,
+    NEUTRAL_UTC,
+    library_identity,
+)
 from simulation.scenario import SCENARIO_DIR, Action, EcgMode, Scenario
 from simulation.tests.conftest import document, load, run
 from src.geometry import MachineGeometry
 from src.local_config import load_local_config
 from src.record.codec import Privacy
+from src.record.ecg import MAX_RAW_BLOCK_BYTES, Header, RawBlock, encode_block
+from src.record.reader import MAX_RAW_BYTES
 from src.record.schema import Manifest
 from src.record.session import applied_configuration
 from src.result import Ok
@@ -126,6 +138,30 @@ def tick_at(header: Cells, rows: list[Cells], t: float) -> Cells:
     return found
 
 
+def largest_zero_block(seq: int) -> bytes:
+    """A raw block at its bound, all zeros: a few kilobytes on disk, a megabyte inside."""
+    small = encode_block(
+        RawBlock(Header(seq=seq, t_first=float(seq), n_samples=1, channels=("ECG",)), ((0,),))
+    )
+    prefix = zlib.decompress(small, wbits=31).split(b"\n", 1)[0]
+    assert prefix.count(b'"n_samples":1,') == 1
+    prefix = prefix.replace(b'"n_samples":1,', b'"n_samples":%d,' % (MAX_RAW_BLOCK_BYTES // 2))
+    return gzip.compress(prefix + b"\n" + b"\0" * MAX_RAW_BLOCK_BYTES, mtime=0)
+
+
+ABOVE_THE_LONGEST: Final[int] = MAX_RAW_BYTES // MAX_RAW_BLOCK_BYTES + 2
+"""Largest blocks enough to pass the reader's bound (110): a hundred kilobytes compressed."""
+
+
+def with_largest_zero_blocks(folder: Path, count: int = ABOVE_THE_LONGEST) -> None:
+    """Add ``count`` largest zero blocks after the record's own, and seal it again."""
+    raw = folder / "ecg_raw"
+    start = len(tuple(raw.glob("*.bin.gz")))
+    for index in range(start, start + count):
+        (raw / f"{index:06d}.bin.gz").write_bytes(largest_zero_block(index))
+    reseal(folder)
+
+
 def reseal(folder: Path) -> None:
     """Write ``checksums.sha256`` again, as the writer does when it closes a record.
 
@@ -168,7 +204,8 @@ def as_real(folder: Path, name: str) -> Path:
 
     Nothing in the library is a real session yet. This is what one looks like
     once anonymised: nobody named in the manifest or the events, the library's
-    identifiers, the folder renamed after them, the checksums written again.
+    identifiers and its neutral date, the folder renamed after them, the
+    checksums written again.
     """
     identity = library_identity(name)
     local_ref = identity[:LOCAL_REF_LENGTH]
@@ -181,7 +218,12 @@ def as_real(folder: Path, name: str) -> Path:
             subject_id=None,
             record_id=identity,
             local_ref=local_ref,
+            started_at=NEUTRAL_UTC,
+            ended_at=NEUTRAL_UTC,
         )
+        cast("Line", manifest["clocks"])["utc_start"] = NEUTRAL_UTC
+        if manifest["profile"] is not None:
+            cast("Line", manifest["profile"])["resolved_at"] = NEUTRAL_MILLIS
 
     def rename(lines: list[Line]) -> list[Line]:
         for line in lines:
@@ -192,5 +234,4 @@ def as_real(folder: Path, name: str) -> Path:
     edit_manifest(folder, anonymise)
     edit_lines(folder, "events.jsonl", rename)
     reseal(folder)
-    stamp = folder.name.partition("_")[0]
-    return folder.rename(folder.with_name(f"{stamp}_{local_ref}"))
+    return folder.rename(folder.with_name(f"{NEUTRAL_FOLDER}_{local_ref}"))

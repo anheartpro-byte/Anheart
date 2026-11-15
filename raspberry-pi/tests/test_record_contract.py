@@ -2,6 +2,8 @@ import dataclasses
 import gzip
 import hashlib
 import json
+import os
+import zlib
 from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -12,8 +14,19 @@ from pydantic import ValidationError
 
 from src.clock import ManualClock
 from src.motor.sto import StoSourceKind
+from src.record import reader
 from src.record.codec import JSON, Privacy, encode, mapping
-from src.record.ecg import Header, RawBlock, decode_block, encode_block
+from src.record.ecg import (
+    MAX_BLOCK_HEADER_BYTES,
+    MAX_RAW_BLOCK_BYTES,
+    Header,
+    RawBlock,
+    RuntimeDelivery,
+    decode_block,
+    encode_block,
+    inflate,
+)
+from src.record.journal import RAW_BLOCKS_PER_SECOND
 from src.record.reader import read
 from src.record.rows import JsonValue
 from src.record.schema import (
@@ -25,11 +38,14 @@ from src.record.schema import (
     Manifest,
     Preflight,
     Profile,
+    ReadWarning,
     RecordedBallast,
+    RecordError,
 )
 from src.record.writer import MANIFEST, TICK_COLUMNS, Writer
 from src.result import Err, Ok
 from src.sensors.base import Metric, SensorKind, SensorReading
+from src.sensors.registry import processor_for
 from src.training.types import SignalQuality
 from src.units import Monotonic, Seconds, UnixMillis
 from tests.record_support import manifest, row, writer
@@ -323,6 +339,235 @@ def test_anh131_reception_instant_is_optional_and_a_block_without_it_keeps_its_b
     assert decode_block(encode_block(received)) == received
     with pytest.raises(ValueError, match="finite"):
         Header(0, 0.0, 1, ("ECG",), 1000, float("nan"))
+
+
+def test_a_block_is_never_inflated_past_what_a_block_can_be() -> None:
+    """A small file that inflates to more than any block (a header line and its samples) is
+    refused before it is inflated whole: a block may come from a file somebody else made."""
+    largest = MAX_BLOCK_HEADER_BYTES + MAX_RAW_BLOCK_BYTES
+    bomb = gzip.compress(bytes(largest + 1), mtime=0)
+    assert len(bomb) < largest // 100
+    with pytest.raises(ValueError, match="larger than any block"):
+        decode_block(bomb)
+    assert inflate(gzip.compress(bytes(largest), mtime=0)) == bytes(largest)
+
+
+def test_a_block_cut_short_is_read_as_truncated_and_one_followed_by_anything_is_refused() -> None:
+    """Cut short: ``EOFError``, which the reader takes for a block being written
+    (``truncated``). Anything after its gzip member, or a file that is not gzip: refused."""
+    whole = encode_block(RawBlock(Header(0, 0.0, 1, ("ECG",)), ((7,),)))
+    with pytest.raises(EOFError, match="cut short"):
+        decode_block(whole[:-4])
+    with pytest.raises(ValueError, match="after its gzip member"):
+        decode_block(whole + whole)
+    with pytest.raises(zlib.error):
+        decode_block(b"not a gzip member")
+
+
+def _with_raw_blocks(tmp_path: Path, count: int) -> Path:
+    recording = writer(tmp_path)
+    for seq in range(count):
+        block = RawBlock(Header(seq, seq * 0.2, 1, ("ECG",)), ((7,),))
+        assert isinstance(recording.raw(block), Ok)
+    return recording.path
+
+
+@pytest.mark.parametrize(
+    ("limit", "refusal"),
+    [
+        ("MAX_RAW_BLOCKS", "raw_blocks_above_longest_record"),
+        ("MAX_RAW_BYTES", "raw_bytes_above_longest_record"),
+    ],
+)
+def test_the_reader_refuses_more_raw_ecg_than_the_longest_record_before_decoding_any(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, limit: str, refusal: str
+) -> None:
+    """The reader keeps every decoded block: more blocks, or more bytes they say they hold,
+    than the longest record are refused first, for the import, a replay and the gate alike."""
+    path = _with_raw_blocks(tmp_path, 3)
+
+    def never(_raw: bytes) -> RawBlock:
+        raise AssertionError("a block was decoded before the bound was checked")
+
+    monkeypatch.setattr(reader, limit, 2)
+    monkeypatch.setattr(reader, "decode_block", never)
+    assert read(path) == Err(RecordError("read", refusal))
+
+
+def test_a_raw_block_too_short_to_say_its_size_counts_for_nothing_and_is_refused(
+    tmp_path: Path,
+) -> None:
+    path = _with_raw_blocks(tmp_path, 1)
+    (path / "ecg_raw" / "000099.bin.gz").write_bytes(b"gz")
+    assert read(path) == Err(RecordError("read", "error"))
+
+
+def test_the_bound_holds_a_real_six_channel_record_of_the_longest_length() -> None:
+    """The bound's own arithmetic, on a real header line: six channels, both delivery
+    instants written in full, the largest numbers of a two-hour record."""
+    channels = tuple(kind.value for kind in SensorKind)
+    header = Header(
+        seq=123_456,
+        t_first=7199.123456789012,
+        n_samples=200,
+        channels=channels,
+        t_received=7199.3234567890123,
+        runtime_delivery=RuntimeDelivery(t=7199.3334567890123, t_observed=7199.3284567890123),
+    )
+    content = inflate(encode_block(RawBlock(header, tuple((-1234,) * 200 for _ in channels))))
+    line = len(content.split(b"\n", 1)[0]) + 1
+    assert line <= reader.RAW_HEADER_ALLOWANCE // 2
+    per_second = RAW_BLOCKS_PER_SECOND * len(content)
+    assert per_second * reader.LONGEST_RECORD_S < reader.MAX_RAW_BYTES
+    assert (reader.MAX_RAW_BLOCKS, reader.MAX_RAW_BYTES) == (39_000, 113_568_000)
+
+
+def _closed_record(tmp_path: Path) -> Path:
+    """A closed record, every file the reader reads whole on its disk."""
+    recording = writer(tmp_path)
+    ticked = recording.tick(row())
+    assert isinstance(ticked, Ok)
+    noted = recording.event(Event(t=0.1, kind=EventKind.WARNING, detail="x"))
+    assert isinstance(noted, Ok)
+    frame = DriveFrame(t=0.1, kind="write_request", register=8602, value=100, ok=True, latency_ms=0)
+    framed = recording.frame(frame)
+    assert isinstance(framed, Ok)
+    block = RawBlock(Header(0, 0.0, 1, ("ECG",)), ((7,),))
+    kept = recording.raw(block)
+    assert isinstance(kept, Ok)
+    closed = recording.close(ManualClock(epoch_millis=UnixMillis(1)), "x")
+    assert isinstance(closed, Ok)
+    return recording.path
+
+
+@pytest.mark.parametrize("name", sorted(reader.FILE_BOUNDS))
+def test_a_file_larger_than_the_longest_record_is_refused_before_a_byte_is_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, name: str
+) -> None:
+    """The reader keeps what it reads, all of it: a file above its bound is refused from
+    its size, the record left unread, and one at its bound is read."""
+    path = _closed_record(tmp_path)
+    size = (path / name).stat().st_size
+    assert size > 0
+    monkeypatch.setattr(reader, "FILE_BOUNDS", {**reader.FILE_BOUNDS, name: size})
+    assert isinstance(read(path), Ok)
+
+    def never(_path: Path, _warnings: list[ReadWarning]) -> list[str]:
+        raise AssertionError("a file was read before its size was checked")
+
+    monkeypatch.setattr(reader, "FILE_BOUNDS", {**reader.FILE_BOUNDS, name: size - 1})
+    monkeypatch.setattr(reader, "complete_lines", never)
+    assert read(path) == Err(RecordError("read", reader.FILE_ABOVE_ITS_BOUND))
+
+
+def test_a_raw_block_file_larger_than_a_block_can_be_is_refused(tmp_path: Path) -> None:
+    path = _closed_record(tmp_path)
+    (path / "ecg_raw" / "000099.bin.gz").write_bytes(b"\0" * (reader.LARGEST_BLOCK_FILE + 1))
+    assert read(path) == Err(RecordError("read", reader.FILE_ABOVE_ITS_BOUND))
+
+
+def test_a_folder_holding_a_pipe_or_a_link_where_a_file_belongs_is_refused_unread(
+    tmp_path: Path,
+) -> None:
+    """A folder given as it is, not extracted: a pipe would block the reader, a link to
+    an endless device would be read without end. Neither is a regular file."""
+    piped = _closed_record(tmp_path / "piped")
+    (piped / "ticks.csv").unlink()
+    os.mkfifo(piped / "ticks.csv")
+    assert read(piped) == Err(RecordError("read", reader.NOT_A_REGULAR_FILE))
+    linked = _closed_record(tmp_path / "linked")
+    (linked / "ecg_raw" / "000099.bin.gz").symlink_to("/dev/zero")
+    assert read(linked) == Err(RecordError("read", reader.NOT_A_REGULAR_FILE))
+    zero = _closed_record(tmp_path / "zero")
+    (zero / "manifest.json").unlink()
+    (zero / "manifest.json").symlink_to("/dev/zero")
+    assert read(zero) == Err(RecordError("read", reader.NOT_A_REGULAR_FILE))
+
+
+def test_the_file_bounds_hold_a_real_record_of_the_longest_length() -> None:
+    """The bounds' own arithmetic, against the longest lines a console writes (every
+    column filled) and its busiest rates, over the longest record."""
+    longest = reader.LONGEST_RECORD_S
+    real = {
+        "ticks.csv": 5 * 344,
+        "sensors.csv": len(SensorKind) * reader.METRICS_PER_CHANNEL * 78,
+        "events.jsonl": 5 * 126,
+        "drive_frames.jsonl": 120 * 106,
+    }
+    for name, per_second in real.items():
+        assert per_second * longest < reader.FILE_BOUNDS[name], name
+    assert dict(reader.FILE_BOUNDS) == {
+        "manifest.json": 2_097_152,
+        "checksums.sha256": 4_994_048,
+        "ticks.csv": 19_968_000,
+        "sensors.csv": 23_961_600,
+        "events.jsonl": 79_872_000,
+        "drive_frames.jsonl": 255_590_400,
+    }
+
+
+def test_every_channel_reports_no_more_metrics_than_the_sensors_bound_counts() -> None:
+    """``sensors.csv`` holds a row a second per metric of each channel, the simulation's
+    record as the console's: the bound counts four for each."""
+    for kind in SensorKind:
+        reading = processor_for(kind).process((), 1000, Monotonic(1.0))
+        assert len(reading.metrics) <= reader.METRICS_PER_CHANNEL, kind
+
+
+@pytest.mark.parametrize(
+    "name", ["checksums.sha256", "ticks.csv", "sensors.csv", "events.jsonl", "drive_frames.jsonl"]
+)
+def test_a_line_longer_than_any_written_is_refused_before_it_is_parsed(
+    tmp_path: Path, name: str
+) -> None:
+    """Parsed, a line of ``x`` would be malformed: refused for its length, it never was."""
+    path = _closed_record(tmp_path)
+    with (path / name).open("a") as file:
+        file.write("x" * (reader.LONGEST_LINE + 1) + "\n")
+    assert read(path) == Err(RecordError("read", reader.LINE_ABOVE_ITS_BOUND))
+
+
+def test_a_line_as_long_as_the_bound_is_read(tmp_path: Path) -> None:
+    path = _closed_record(tmp_path)
+    line = '{"t":0.2,"kind":"warning","detail":"%s"}'
+    padded = line % ("x" * (reader.LONGEST_LINE - len(line % "")))
+    assert len(padded) == reader.LONGEST_LINE
+    with (path / "events.jsonl").open("a") as file:
+        file.write(padded + "\n")
+    loaded = read(path)
+    assert isinstance(loaded, Ok)
+    assert loaded.value.events[-1].detail == "x" * (reader.LONGEST_LINE - len(line % ""))
+
+
+def test_a_frame_holding_more_registers_than_a_modbus_read_is_refused(tmp_path: Path) -> None:
+    """A Modbus read returns 125 registers at most: a frame that holds more is none a
+    console wrote, refused as soon as it is parsed."""
+    whole = tuple(range(reader.MODBUS_READ_REGISTERS))
+    frame = DriveFrame(
+        t=0.1, kind="read_status", register=whole, value=whole, ok=True, latency_ms=0
+    )
+    read_whole = writer(tmp_path / "whole")
+    assert isinstance(read_whole.frame(frame), Ok)
+    loaded = read(read_whole.path)
+    assert isinstance(loaded, Ok)
+    assert loaded.value.frames == (frame,)
+    for name, above in (
+        ("register", replace(frame, register=(*whole, 0))),
+        ("value", replace(frame, value=(*whole, None))),
+    ):
+        recording = writer(tmp_path / name)
+        assert isinstance(recording.frame(above), Ok)
+        refusal = RecordError("read", reader.REGISTERS_ABOVE_A_MODBUS_READ)
+        assert read(recording.path) == Err(refusal), name
+
+
+def test_a_quoted_field_longer_than_the_csv_module_allows_is_refused(tmp_path: Path) -> None:
+    """Every line short, one quoted field across them all: the CSV module's own error is a
+    refusal like any other, never an exception out of the reader."""
+    path = _closed_record(tmp_path)
+    with (path / "ticks.csv").open("a") as file:
+        file.write('"' + "x\n" * 70_000)
+    assert read(path) == Err(RecordError("read", "Error"))
 
 
 def test_ex7_configured_sensor_metrics_are_published_at_one_hz(tmp_path: Path) -> None:

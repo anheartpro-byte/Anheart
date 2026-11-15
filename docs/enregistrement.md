@@ -1052,10 +1052,31 @@ compteur borne les octets réellement lus du flux décompressé à 512 Mio plus
 40 930 240 octets (`MAX_ARCHIVE_HEADER_BYTES` : un en-tête de 512 octets et
 au plus 511 octets de padding par membre, plus un bloc tar de 10 240 octets).
 Les extensions PAX et GNU longues, invisibles dans l'itérateur public,
-partagent ce plafond d'octets, sans compter comme membres. Aucune surcharge
-de `TarInfo` ou `TarFile` ne porte ces bornes. Les tailles négatives, tailles
-non nulles hors fichiers ordinaires, en-têtes invalides et erreurs de
-décompression donnent un refus nommé. Il retire ensuite sa copie
+partagent ce plafond d'octets, sans compter comme membres. Une sous-classe de
+`TarInfo` en ajoute : une extension annoncée au-delà de 64 Kio
+(`MAX_EXTENSION_BYTES`) est refusée avant que son contenu soit lu, `tarfile`
+le gardant entier en mémoire ; un en-tête PAX global, que `tarfile` recopie
+dans chaque membre suivant, et toute forme creuse (membre GNU ancien, clés
+`GNU.sparse.` d'un en-tête PAX et leurs tables, lues entières et converties
+sans contrôle) sont refusés avant que `tarfile` n'en lise rien. Les membres
+déjà extraits ne restent pas en mémoire. Une chaîne d'extensions trop longue
+pour être lue (`tarfile` les lit l'une après l'autre par récursion) et un
+fragment de moins de 512 octets après le dernier membre, sans bloc de fin,
+sont refusés aussi. Les tailles négatives, tailles non nulles hors fichiers
+ordinaires, en-têtes invalides, erreurs de décompression, et toute erreur de
+valeur ou d'index que `tarfile` lève sur un en-tête donnent un refus nommé,
+jamais une trace d'exception. Le lecteur partagé (`read`), par où passent
+l'import, le rejeu et le jugement de bibliothèque, refuse avant de décoder et
+de garder les blocs ECG plus de 39 000 blocs ou plus d'octets décompressés (la
+taille que chaque bloc gzip annonce, jamais comptée au-delà de ce qu'un bloc
+peut tenir : un bloc coupé en cours d'écriture reste lu comme `truncated`)
+que n'en tient la séance la plus longue :
+deux heures de programme et dix minutes, cinq blocs de 200 échantillons par
+seconde, six voies de deux octets et 512 octets d'en-tête par bloc
+(`MAX_RAW_BYTES`, 39 000 × 2 912 = 113 568 000 octets ; un vrai enregistrement
+de six voies de cette durée en tient environ 102,8 Mo, avec ses en-têtes de
+235 octets). Le refus est `raw_blocks_above_longest_record` ou
+`raw_bytes_above_longest_record`. Chaque fichier que le lecteur lit en entier est d'abord jugé sur ce que dit le système de fichiers, avant qu'un octet n'en soit lu : un fichier ordinaire, jamais un lien, un tube ou un périphérique (`not_a_regular_file`, ce qu'un dossier donné tel quel peut contenir, une archive jamais), et pas plus grand que ce qu'en fait la séance la plus longue (`FILE_BOUNDS`, `file_above_its_bound`) : 2 Mio pour le manifeste, 19 968 000 octets pour `ticks.csv` (cinq lignes par seconde de 512 octets au plus, 344 pour la plus longue écrite), 23 961 600 pour `sensors.csv` (une ligne par seconde pour chacune des quatre mesures de chacune des six voies, 128 octets au plus ; la simulation l'écrit par le même writer que la console, au même rythme), 79 872 000 pour `events.jsonl` (vingt par seconde de 512 octets), 255 590 400 pour `drive_frames.jsonl` (128 trames par seconde de 256 octets : le diagnostic du lien en écrit environ 120, le pilote seul environ 30), 4 994 048 pour `checksums.sha256`, et un bloc ECG pas plus grand que ce qu'un bloc peut tenir. Une ligne de plus de 64 Kio (`LONGEST_LINE`, `line_above_its_bound`) est refusée avant d'être analysée, une trame qui porte plus de registres qu'une lecture Modbus (125, `registers_above_a_modbus_read`) dès qu'elle l'est. La mémoire que demande un enregistrement à ces bornes est mesurée : chaque fichier rempli jusqu'à sa borne de la ligne valide qui garde le plus de mémoire par octet lu (la plus courte, et pour les trames deux lectures entières de nombres que l'interpréteur ne partage pas), et l'ECG à sa borne, sa lecture a pris 6,7 Go au plus fort, dont 3,2 pour les trames et 2 pour l'ECG (empreinte mémoire maximale du processus, mémoire compressée comprise, `/usr/bin/time -l`) ; avec la ligne la plus courte de chaque fichier, 4,5 Go. Au plus environ 7 Go, donc, et la machine du rejeu doit les avoir ; un vrai enregistrement de cette durée en demande environ 2, presque tous pour l'ECG. Aucune archive, si petite soit-elle, ne demande plus. L'import retire ensuite sa copie
 temporaire. Le serveur utilise le reader
 partagé et le viewer affiche les avertissements de complétude dans sa zone
 source existante. `/?trace=out/ancienne-trace.jsonl` garde la lecture du
@@ -1141,7 +1162,10 @@ plus. Ces bornes permettent les nombreux petits blocs bruts sans dépasser la
 limite native des tableaux Convex. Un fichier hors limites reste sur le Pi.
 
 Les blocs bruts sont refusés avant allocation au-delà de 1 MiB décodé
-(`MAX_RAW_BLOCK_BYTES` dans `src/record/ecg.py`). La borne fichier de 16 MiB
+(`MAX_RAW_BLOCK_BYTES` dans `src/record/ecg.py`). Un bloc lu n'est jamais
+décompressé au-delà de ce qu'un bloc peut faire (1 MiB plus 64 Kio d'en-tête,
+`inflate`), si petit qu'il soit compressé : un bloc tronqué est lu comme tel,
+un bloc suivi d'autre chose est refusé. La borne fichier de 16 MiB
 reste inférieure aux 100 MiB de réponse HTTP et ménage la mémoire de l'action
 de vérification (64 MiB). Références consultées le 13 octobre 2026 :
 [limites Convex](https://docs.convex.dev/production/state/limits) et

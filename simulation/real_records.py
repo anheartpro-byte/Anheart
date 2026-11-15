@@ -33,11 +33,11 @@ import re
 import shutil
 import tarfile
 import zlib
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import replace
 from pathlib import Path, PurePosixPath
 from tempfile import TemporaryDirectory
-from typing import Final, override
+from typing import Final, cast, override
 
 from pydantic import ConfigDict, TypeAdapter, ValidationError
 from pydantic.dataclasses import dataclass
@@ -69,6 +69,19 @@ MAX_ARCHIVE_HEADER_BYTES: Final[int] = (
 Extension headers and their payloads share the decompressed byte budget;
 they are hidden by tarfile's public member iterator, so are not counted as members.
 """
+MAX_EXTENSION_BYTES: Final[int] = 64 * 1024
+"""The largest PAX or GNU extension payload read: a record's member names and attributes
+need a few hundred bytes. tarfile holds a payload in memory whole, and copies it."""
+
+_EXTENSIONS: Final[frozenset[bytes]] = frozenset(
+    {tarfile.XHDTYPE, tarfile.XGLTYPE, tarfile.SOLARIS_XHDTYPE}
+    | {tarfile.GNUTYPE_LONGNAME, tarfile.GNUTYPE_LONGLINK}
+)
+
+NEUTRAL_UTC: Final[str] = "2000-01-01T00:00:00Z"
+"""What stands where a real session gave a date (``simulation.import_privacy``)."""
+NEUTRAL_MILLIS: Final[int] = 946_684_800_000
+NEUTRAL_FOLDER: Final[str] = "2000-01-01T000000Z"
 
 SIMULATION_MACHINE: Final[str] = "simulation"
 """``machine_id`` of a record the simulation made (``simulation.session_record``)."""
@@ -163,6 +176,62 @@ class _ArchiveError(ValueError):
     pass
 
 
+_SPARSE: Final[str] = "the archive holds a sparse member: a record is plain files"
+
+
+class _BoundedHeader(tarfile.TarInfo):
+    """A member header whose extension payload is bounded before tarfile reads it.
+
+    ``_proc_member`` is the hook tarfile's source documents for a subclass: it is
+    called with the header parsed and its payload not yet read, for the first
+    header of a member and for each extension header chained to it. The type
+    stubs leave it out, so the parent's is reached by name.
+
+    Refused there, before tarfile reads anything of them: a global extension
+    header, which tarfile copies into every member after it, and an old GNU
+    sparse member, whose extended headers tarfile reads without checking the
+    stream holds them. The sparse forms of a PAX header are refused where
+    tarfile handles them (``_proc_gnusparse_00``, ``_01``, ``_10``, and any
+    ``GNU.sparse.`` key in ``_apply_pax_info``): a sparse map is read whole, and
+    its numbers are parsed unchecked. None of them is a form a record is written in.
+    """
+
+    def _proc_member(self, tar: tarfile.TarFile) -> tarfile.TarInfo:
+        if self.type == tarfile.XGLTYPE:
+            raise _ArchiveError(
+                "the archive holds a global extension header: a record's members carry their own"
+            )
+        if self.type == tarfile.GNUTYPE_SPARSE:
+            raise _ArchiveError(_SPARSE)
+        if self.type in _EXTENSIONS and self.size > MAX_EXTENSION_BYTES:
+            raise _ArchiveError("the archive holds an extension header above MAX_EXTENSION_BYTES")
+        parent = cast(
+            Callable[[tarfile.TarFile], tarfile.TarInfo],
+            getattr(super(), "_proc_member"),  # noqa: B009  # absent from the stubs
+        )
+        return parent(tar)
+
+    def _proc_gnusparse_00(self, _next: tarfile.TarInfo, _raw_headers: object) -> None:
+        raise _ArchiveError(_SPARSE)
+
+    def _proc_gnusparse_01(self, _next: tarfile.TarInfo, _pax_headers: object) -> None:
+        raise _ArchiveError(_SPARSE)
+
+    def _proc_gnusparse_10(
+        self, _next: tarfile.TarInfo, _pax_headers: object, _tar: tarfile.TarFile
+    ) -> None:
+        raise _ArchiveError(_SPARSE)
+
+    def _apply_pax_info(self, pax_headers: Mapping[str, str], encoding: str, errors: str) -> None:
+        if any(keyword.startswith("GNU.sparse.") for keyword in pax_headers):
+            raise _ArchiveError(_SPARSE)
+        parent = cast(
+            Callable[[Mapping[str, str], str, str], None],
+            getattr(super(), "_apply_pax_info"),  # noqa: B009  # absent from the stubs
+        )
+        parent(pax_headers, encoding, errors)
+
+
 class BoundedArchive(gzip.GzipFile):
     """Count decompressed bytes before tarfile can collect an extension payload."""
 
@@ -177,7 +246,8 @@ class BoundedArchive(gzip.GzipFile):
         remaining = MAX_ARCHIVE_BYTES + MAX_ARCHIVE_HEADER_BYTES - self._read_bytes
         requested = remaining + 1 if size is None or size < 0 else min(size, remaining + 1)
         content = super().read(requested)
-        self.last_read = content
+        if content:  # the end of the stream does not hide a short fragment read before it
+            self.last_read = content
         self._read_bytes += len(content)
         if self._read_bytes > MAX_ARCHIVE_BYTES + MAX_ARCHIVE_HEADER_BYTES:
             raise _ArchiveError("the archive exceeds MAX_ARCHIVE_BYTES")
@@ -194,6 +264,10 @@ def _check_size(member: tarfile.TarInfo) -> None:
 def _unpack_members(tar: tarfile.TarFile, content: BoundedArchive, into: Path) -> None:
     total = 0
     for count, member in enumerate(tar, start=1):
+        # A stream is read once and no member is looked up again: tarfile keeping them
+        # all would keep every header, with its extension payload, to the end. Its
+        # iterator reads the next one when it has none left, so emptying them is safe.
+        cast("list[tarfile.TarInfo]", getattr(tar, "members")).clear()  # noqa: B009  # unstubbed
         if count > MAX_ARCHIVE_MEMBERS:
             raise _ArchiveError("the archive exceeds MAX_ARCHIVE_MEMBERS")
         _check_size(member)
@@ -220,13 +294,22 @@ def unpack(archive: Path, into: Path) -> Result[Path, str]:
         # may silently stop on an invalid header instead of a zero block.
         with (
             BoundedArchive(archive) as content,
-            tarfile.open(fileobj=content, mode="r|", bufsize=tarfile.BLOCKSIZE) as tar,
+            tarfile.open(
+                fileobj=content, mode="r|", bufsize=tarfile.BLOCKSIZE, tarinfo=_BoundedHeader
+            ) as tar,
         ):
             _unpack_members(tar, content, into)
     except _ArchiveError as error:
         return Err(str(error))
+    except RecursionError:
+        # tarfile reads each extension header from the one before it, by recursion.
+        return Err("the archive holds a chain of extension headers too long to read")
     except (OSError, EOFError, tarfile.TarError, zlib.error):
         return Err("the archive cannot be read as a .tar.gz of a record folder")
+    except (ValueError, IndexError):
+        # What tarfile raises on a header it parses without checking, refused by the hooks
+        # above where they can; any other is still a refusal, never a traceback.
+        return Err("the archive holds a header tarfile cannot read")
     folders = [path for path in sorted(into.iterdir()) if (path / "manifest.json").is_file()]
     if len(folders) != 1:
         return Err("the archive must hold exactly one record folder")
@@ -291,7 +374,19 @@ def identifying(recording: Recording, name: str, folder: str) -> str | None:  # 
         return "actor"
     if not folder.endswith(f"_{manifest.local_ref}"):
         return "folder"
+    if not simulation and not _dated_neutrally(manifest, folder):
+        return "date"
     return None
+
+
+def _dated_neutrally(manifest: Manifest, folder: str) -> bool:
+    """Whether a real session's record gives only the library's date, never its own."""
+    resolved = None if manifest.profile is None else manifest.profile.resolved_at
+    return (
+        manifest.started_at == manifest.ended_at == manifest.clocks.utc_start == NEUTRAL_UTC
+        and resolved in {None, NEUTRAL_MILLIS}
+        and folder == f"{NEUTRAL_FOLDER}_{manifest.local_ref}"
+    )
 
 
 @dataclass(frozen=True, slots=True, config=ConfigDict(extra="forbid", allow_inf_nan=False))

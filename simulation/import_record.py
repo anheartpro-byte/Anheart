@@ -1,18 +1,18 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import re
 import shutil
 import sys
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from typing import Final
 
 from simulation.import_privacy import (
-    NEUTRAL_FOLDER,
-    NEUTRAL_MILLIS,
     anonymous_events,
     anonymous_manifest,
     identifying_content,
@@ -23,6 +23,8 @@ from simulation.import_privacy import (
 from simulation.real_records import (
     ACCEPTED_SUFFIX,
     ARCHIVE_SUFFIX,
+    NEUTRAL_FOLDER,
+    NEUTRAL_MILLIS,
     REAL_DIR,
     SCENARIO_NAME,
     pack,
@@ -34,7 +36,15 @@ from simulation.replay_report import ReplayReport
 from src.clock import ManualClock
 from src.record.codec import JSON, Privacy, document, encode
 from src.record.containment import resolve_under
-from src.record.reader import Recording, read
+from src.record.reader import (
+    FILE_ABOVE_ITS_BOUND,
+    LINE_ABOVE_ITS_BOUND,
+    RAW_BLOCKS_ABOVE_LONGEST_RECORD,
+    RAW_BYTES_ABOVE_LONGEST_RECORD,
+    REGISTERS_ABOVE_A_MODBUS_READ,
+    Recording,
+    read,
+)
 from src.record.writer import EVENT, MANIFEST, Writer
 from src.result import Err, Ok, Result
 from src.units import UnixMillis
@@ -102,6 +112,20 @@ def _publish(files: tuple[tuple[Path, Path], ...]) -> None:
         raise
 
 
+_SIZE_REFUSALS: Final[Mapping[str, str]] = {
+    RAW_BLOCKS_ABOVE_LONGEST_RECORD: (
+        "the source record holds more ECG blocks than the longest record"
+    ),
+    RAW_BYTES_ABOVE_LONGEST_RECORD: "the source record holds more ECG than the longest record",
+    FILE_ABOVE_ITS_BOUND: "the source record holds a file larger than the longest record",
+    LINE_ABOVE_ITS_BOUND: "the source record holds a line longer than any record writes",
+    REGISTERS_ABOVE_A_MODBUS_READ: (
+        "the source record holds a drive frame of more registers than a Modbus read"
+    ),
+}
+"""The reader's refusals of more than a record holds (``src.record.reader``)."""
+
+
 def _load_source(source: Path) -> Result[Recording, str]:  # noqa: PLR0911  # one return per refusal
     members = tuple(source.rglob("*"))
     if any(path.is_symlink() for path in members):
@@ -127,7 +151,7 @@ def _load_source(source: Path) -> Result[Recording, str]:  # noqa: PLR0911  # on
         return Err("the source record contains an entry outside schema 2")
     loaded = read(source)
     if isinstance(loaded, Err):
-        return Err("the source record cannot be read")
+        return Err(_SIZE_REFUSALS.get(loaded.error.detail, "the source record cannot be read"))
     recording = loaded.value
     if recording.manifest.ended_at is None or recording.manifest.end_reason is None:
         return Err("the source record is not closed")
@@ -204,9 +228,30 @@ def _import_folder(  # noqa: PLR0911  # one return per refusal
     staged = work / "archive.tar.gz"
     pack(made.value, staged)
     files.append((staged, archive))
-    archive.parent.mkdir(parents=True, exist_ok=True)
-    _publish(tuple(files))
+    _publish_into(archive.parent, tuple(files))
     return Ok(Imported(archive, report))
+
+
+def _publish_into(library: Path, files: tuple[tuple[Path, Path], ...]) -> None:
+    """Publish ``files`` into ``library``, made if missing. Raises ``OSError``.
+
+    A publication that fails takes away the folders it made (``library`` and its
+    missing parents, deepest first, each only once empty again), as ``_publish``
+    takes away the files: nothing of the import is left.
+    """
+    created: list[Path] = []
+    folder = library
+    while not folder.exists():
+        created.append(folder)
+        folder = folder.parent
+    try:
+        library.mkdir(parents=True, exist_ok=True)
+        _publish(files)
+    except OSError:
+        for made in created:
+            with contextlib.suppress(OSError):
+                made.rmdir()
+        raise
 
 
 def _destination(name: str, directory: Path) -> Result[Path, str]:
