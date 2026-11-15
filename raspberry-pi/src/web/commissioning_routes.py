@@ -136,7 +136,7 @@ def register_commissioning(
     async def run_commissioning(who: SignedIn = Depends(acting)) -> CommissioningRow:
         """Run the commissioning checks at rest, then send them to the dashboard.
 
-        Answered once the dashboard did, or did not, record it: a minute at most. **409**
+        Answered once the dashboard did, or did not, record it: about a minute. **409**
         with the reason, in the card's words, when none can start (one under way, no
         dashboard of 1.18, no emergency-stop attestation, the console not at rest), or
         when the console left rest while it ran, nothing sent.

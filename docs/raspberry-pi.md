@@ -4380,18 +4380,41 @@ Pre-vol ([console-locale.md, section 17](console-locale.md#17-page--pre-vol--anh
   rouges quand ils ne tiennent pas (`RAISED`). `src/training/preflight.py`
   n'est pas modifié : ses règles du banc et son verrou « personne à bord »
   restent les siennes, et `tests/test_commissioning.py` épingle sa liste
-  colonne par colonne. Trois contrôles de plus : `sto_source`, `sto_ready`
+  colonne par colonne : identifiant, libellé, sévérités, délai et la fonction
+  qui juge chaque contrôle. Trois contrôles de plus : `sto_source`, `sto_ready`
   (`check_sto_ready`, ou un pont déclaré au banc), `drive_limits`
   (`read_limits` puis `check_limits`, sous le plafond `max_motor_hz` de
   l'armement). La liste porte chaque contrôle que le tableau de bord exige
   (`required_controls` du contrat).
-* **Au repos.** La règle du contrôle `drive_state` : console en REPOS,
-  variateur ni en défaut ni en marche, moteur à 0. Le garde de roue libre
-  (`CoastDownHold`) s'y ajoutera par `CommissioningSetup.coasting`, qui ne dit
-  rien jusque-là (`never_coasting`).
+* **Au repos.** D'abord la règle de la console (`at_rest`, la même que
+  `catalog_at_rest`, que gardent le catalogue, la liste d'opérateurs et la
+  configuration) : aucune séance, aucun départ attendu ni en cours d'armement,
+  aucun lancement du tableau de bord en main ; l'instantané seul reste en
+  REPOS pendant qu'un départ s'arme. Puis celle du contrôle `drive_state` :
+  console en REPOS, variateur ni en défaut ni en marche, moteur à 0. Les deux
+  sont demandées avant de partir, à chaque attente de la passe, juste avant
+  la lecture du variateur et juste avant l'envoi. Reste : une lecture qui
+  chevauche un armement commencé pendant elle, une lecture sans effet sous le
+  verrou du variateur. Le garde de roue libre (`CoastDownHold`) s'ajoutera par
+  `CommissioningSetup.coasting`, qui n'a pas de valeur par défaut :
+  `build_panel` passe `never_coasting` en le nommant. **Jusqu'à ce que le
+  garde arrive, une mise en service peut être enregistrée au repos pendant
+  que le bras roule encore en roue libre** après une coupure secteur ou une
+  ouverture du STO (RFRD lit 0 étage coupé). Elle ne fait que lire.
 * **La lecture du variateur** passe par le `backend` de la console, celui du
   runtime et de son enregistreur : une lecture des cinq registres, sérialisée
-  avec les autres échanges par le verrou du client ATV320, rien d'écrit.
+  avec les autres échanges par le verrou du client ATV320, rien d'écrit. Ces
+  cinq lectures partent hors de l'ordonnancement de `StoReadGate` ; une
+  lecture qui échoue peut verrouiller un FREEZE `loop_stall` au repos, comme
+  tout échange qui échoue.
+* **La date de l'attestation** envoyée est l'horloge murale de la fin des
+  contrôles, moins le temps écoulé depuis l'attestation sur l'horloge
+  monotone (`attested_at`), jamais sa propre date : un Pi démarre sur
+  l'heure de son dernier arrêt (fake-hwclock), et une attestation donnée
+  avant que le service de temps règle l'horloge dirait cette heure, à des
+  jours près. Sur l'image, cette horloge restaurée rend rare le refus
+  « horloge pas à l'heure » (`MIN_DATE_MS`) ; c'est le contrôle `clock`,
+  rouge en mise en service, qui juge la date de la fin des contrôles.
 * **L'envoi** prend le transport du lien (`PacedTransport`), lié une fois le
   lien construit (`CommissioningDesk.bind`), et seulement vers un tableau de
   bord qui a annoncé 1.18 ou plus dans son dernier battement de cœur. Le

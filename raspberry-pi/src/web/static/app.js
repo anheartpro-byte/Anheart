@@ -1352,7 +1352,7 @@ function loadCommissioning() {
 function doRunCommissioning() {
   commissioningRunning = true;
   el("commissioning-run").disabled = true;
-  ok(el("commissioning-note"), "mise en service en cours : le pre-vol est relance, le variateur relu, puis le tableau de bord repond (une minute au plus)");
+  ok(el("commissioning-note"), "mise en service en cours : le pre-vol est relance, le variateur relu, puis le tableau de bord repond (environ une minute)");
   api("/api/commissioning/run", { method: "POST" })
     .then(function (row) {
       commissioningRunning = false;

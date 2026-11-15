@@ -20,7 +20,7 @@ from typing import Final, cast
 import pytest
 
 from src.clock import ManualClock
-from src.cloud_sync import CloudError, Document, Refused, Unreachable
+from src.cloud_sync import HELD_HERE, CloudError, Document, Refused, Unreachable
 from src.commissioning import (
     ATTESTED_UNSET,
     CLOCK_UNSET,
@@ -28,12 +28,14 @@ from src.commissioning import (
     COMMISSIONING_PATH,
     COMMISSIONING_SINCE,
     FORBIDDEN_CATEGORIES,
+    HELD,
     MAX_BODY_BYTES,
     MAX_DETAIL_CHARS,
     MAX_FINDINGS,
     MAX_STATEMENT_CHARS,
     MAX_TEXT_CHARS,
     MIN_DATE_MS,
+    NOT_AT_REST,
     NOT_LINKED,
     RAISED,
     RUN_WAIT,
@@ -46,6 +48,7 @@ from src.commissioning import (
     Facts,
     _pause,  # pyright: ignore[reportPrivateUsage]  # the default pause, run once
     attested,
+    attested_at,
     describe_outcome,
     drive_limits_result,
     dropped,
@@ -58,6 +61,7 @@ from src.commissioning import (
 )
 from src.commissioning_view import Finding, NotRecorded, Recorded, Verdict
 from src.contract import ContractVersion, ErrorCode
+from src.link_state import MAX_DETAIL, bounded
 from src.motor.drive import CommTimeout, DriveError, DriveLimits, DriveState
 from src.motor.sto import StoReading, StoSourceKind, StoState
 from src.result import Err, Ok, Result
@@ -68,10 +72,12 @@ from src.training.preflight import (
     ControlState,
     PreflightInputs,
     Severity,
+    judge,
 )
 from src.training.safety import ESTOP_ATTESTATION, EstopAttestation, EstopUnattested
-from src.training.types import RunMode
+from src.training.types import Occupancy, RunMode
 from src.units import Hertz, Monotonic, Seconds, UnixMillis
+from src.wall_clock import Unsynchronised
 from tests.test_preflight import (
     _green,  # pyright: ignore[reportPrivateUsage]  # the pre-flight's own fixtures
     _snapshot,  # pyright: ignore[reportPrivateUsage]
@@ -90,6 +96,8 @@ LIMITS: Final[DriveLimits] = DriveLimits(
     deceleration=Seconds(2.5),
 )
 CEILING: Final[Hertz] = Hertz(50.0)
+DRIVE_RUNNING: Final[str] = "variateur en marche ou seance en cours : attendre l'arret complet"
+"""What the pre-flight's ``drive_state`` says of a console in a session."""
 ATTESTATION: Final[EstopAttestation] = EstopAttestation(
     operator="user-2",
     statement=ESTOP_ATTESTATION,
@@ -120,26 +128,35 @@ def _reading(state: StoState, source: StoSourceKind = StoSourceKind.DRIVE_INPUT)
 # The pre-flight, unchanged, and the list made of it
 # =========================================================================
 
-PREFLIGHT: Final[tuple[tuple[str, str, str | None, float], ...]] = (
-    ("drive_link", "block", "block", 10.0),
-    ("drive_state", "block", "block", 10.0),
-    ("estop", "block", "block", 0.0),
-    ("verdict", "block", "block", 0.0),
-    ("disk", "block", "block", 10.0),
-    ("clock", "block", "warn", 10.0),
-    ("contract", "block", "block", 30.0),
-    ("medical", "block", None, 0.0),
-    ("incidents", "block", "warn", 30.0),
-    ("drive_interventions", "block", "warn", 30.0),
-    ("bitalino", "block", "warn", 10.0),
-    ("ecg", "block", None, 44.0),
-    ("temperature", "warn", "warn", 15.0),
-    ("cloud", "warn", "warn", 30.0),
-    ("records", "warn", "warn", 15.0),
-    ("software", "warn", "warn", 0.0),
+PREFLIGHT: Final[tuple[tuple[str, str, str, str | None, float, str], ...]] = (
+    ("drive_link", "Liaison variateur et parametres relus", "block", "block", 10.0, "_drive_link"),
+    ("drive_state", "Variateur ni en defaut ni en marche", "block", "block", 10.0, "_drive_state"),
+    ("estop", "Attestation de l'arret d'urgence", "block", "block", 0.0, "_estop"),
+    ("verdict", "Aucun verdict de securite en cours", "block", "block", 0.0, "_verdict"),
+    ("disk", "Espace disque (500 Mo)", "block", "block", 10.0, "_disk"),
+    ("clock", "Horloge (erreur < 5 s)", "block", "warn", 10.0, "_clock"),
+    ("contract", "Contrat compatible avec le tableau de bord", "block", "block", 30.0, "_contract"),
+    ("medical", "Parametres medicaux signes", "block", None, 0.0, "_medical"),
+    ("incidents", "Aucun incident grave ouvert", "block", "warn", 30.0, "_incidents"),
+    (
+        "drive_interventions",
+        "Aucun defaut variateur en attente d'intervention",
+        "block",
+        "warn",
+        30.0,
+        "_drive_interventions",
+    ),
+    ("bitalino", "BITalino joignable et batterie", "block", "warn", 10.0, "_bitalino"),
+    ("ecg", "Qualite ECG good depuis 30 s", "block", None, 44.0, "_ecg"),
+    ("temperature", "Temperature du Pi (70 °C)", "warn", "warn", 15.0, "_temperature"),
+    ("cloud", "Tableau de bord joignable", "warn", "warn", 30.0, "_cloud"),
+    ("records", "Enregistrements envoyes", "warn", "warn", 15.0, "_records"),
+    ("software", "Version logicielle", "warn", "warn", 0.0, "_software"),
 )
-"""The pre-flight as develop holds it (ANH-142, ANH-145, ANH-149): a commissioning changes
-none of its columns, its bench rules nor its nobody-on-board lock."""
+"""The pre-flight as develop holds it (ANH-142, ANH-145, ANH-149), column by column: id,
+label, severity with a person on board and at the bench, longest wait, and the check itself,
+by its name in :mod:`src.training.preflight`. A commissioning changes none of them: its
+"at rest" is the ``drive_state`` check, which a swapped function would no longer be."""
 
 
 def test_the_pre_flight_itself_is_not_changed() -> None:
@@ -147,14 +164,17 @@ def test_the_pre_flight_itself_is_not_changed() -> None:
         tuple(
             (
                 c.id,
+                c.label,
                 c.on_board.value,
                 None if c.bench is None else c.bench.value,
                 float(c.max_duration),
+                c.check.__qualname__,
             )
             for c in CONTROLS
         )
         == PREFLIGHT
     )
+    assert all(c.check.__module__ == "src.training.preflight" for c in CONTROLS)
 
 
 def test_the_commissioning_list_is_the_pre_flight_three_controls_raised() -> None:
@@ -444,12 +464,29 @@ def test_an_answer_this_console_cannot_read_is_none(changes: dict[str, object]) 
         ),
         (
             Err(Refused(400, "Expected the commissioning report", ErrorCode("invalid_request"))),
-            NotRecorded("refusee par le tableau de bord (400) : Expected the commissioning report"),
+            NotRecorded(
+                "refusee par le tableau de bord : invalid_request (HTTP 400): "
+                "Expected the commissioning report"
+            ),
         ),
         (
             Err(Unreachable("POST /api/machine/commissioning: ConnectError")),
             NotRecorded(
                 "tableau de bord injoignable : POST /api/machine/commissioning: ConnectError"
+            ),
+        ),
+        (
+            Err(Refused(429, HELD_HERE, ErrorCode("rate_limited"), retry_after=Seconds(4.0))),
+            NotRecorded(HELD),
+        ),
+        (
+            Err(
+                Refused(
+                    429, "Too many requests", ErrorCode("rate_limited"), retry_after=Seconds(4.0)
+                )
+            ),
+            NotRecorded(
+                "refusee par le tableau de bord : rate_limited (HTTP 429): Too many requests"
             ),
         ),
     ],
@@ -458,6 +495,26 @@ def test_what_the_dashboard_made_of_it_is_said_in_the_card_s_words(
     sent: Result[Document, CloudError], outcome: Recorded | NotRecorded
 ) -> None:
     assert outcome_of(sent) == outcome
+
+
+def test_the_dashboard_s_words_are_kept_on_one_line_and_bounded() -> None:
+    wall = "ligne une\nligne deux\r\x1b[31m" + "x" * 1000
+    for sent in (
+        Err(Refused(409, wall, ErrorCode("commissioning_refused"))),
+        Err(Refused(500, wall, None)),
+        Err(Unreachable(wall)),
+    ):
+        outcome = outcome_of(sent)
+        assert isinstance(outcome, NotRecorded)
+        assert "\n" not in outcome.reason
+        assert "\x1b" not in outcome.reason
+        assert len(outcome.reason) < 260
+    finding = {"id": "drive_hsp", "expected": wall, "read": wall}
+    recorded = recorded_of({**RECORDED_ANSWER, "findings": [finding]})
+    assert recorded is not None
+    (kept,) = recorded.findings
+    assert kept.expected == bounded(wall)
+    assert len(kept.read) <= MAX_DETAIL
 
 
 def test_the_log_line_names_the_verdict_and_the_findings_or_why_not() -> None:
@@ -518,25 +575,26 @@ class Rig:
         self.monitor = Monitor(_green(), polls)
         self.attestation: EstopAttestation | None = ATTESTATION
         self.coasting: str | None = None
+        self.at_rest = True
         self.read: Result[DriveLimits, DriveError] = Ok(LIMITS)
         self.sent: list[Mapping[str, JsonValue]] = []
         self.answer: Result[Document, CloudError] = Ok(RECORDED_ANSWER)
         self.on_pause: list[PreflightInputs] = []
         self.on_read: PreflightInputs | None = None
         self.announced = None if announced is None else ContractVersion(announced)
-        self.desk = CommissioningDesk(
-            CommissioningSetup(
-                clock=self.clock,
-                monitor=self.monitor,
-                attestation=lambda: self.attestation,
-                sto=lambda: _reading(StoState.READY),
-                read_limits=self._read_limits,
-                ceiling=CEILING,
-                facts=FACTS,
-                coasting=lambda: self.coasting,
-                pause=self._pause,
-            )
+        self.setup = CommissioningSetup(
+            clock=self.clock,
+            monitor=self.monitor,
+            attestation=lambda: self.attestation,
+            sto=lambda: _reading(StoState.READY),
+            read_limits=self._read_limits,
+            ceiling=CEILING,
+            at_rest=lambda: self.at_rest,
+            facts=FACTS,
+            coasting=lambda: self.coasting,
+            pause=self._pause,
         )
+        self.desk = CommissioningDesk(self.setup)
 
     def bind(self) -> Rig:
         self.desk.bind(DashboardLink(post=self._post, announced=lambda: self.announced))
@@ -587,14 +645,37 @@ def test_no_attestation_or_no_rest_or_a_coast_starts_none() -> None:
     assert rig.sent == []
 
 
+def test_the_attestation_is_dated_by_the_time_since_it_was_given() -> None:
+    """A Pi starts on the time it was shut down at: an attestation given before the time
+    service set the clock says that time, days off (review probe P3). It is sent at the
+    wall clock of now less the time since, on the monotonic clock: never after the end of
+    the checks, whatever its own wall clock said."""
+    for wall_clock in (
+        UnixMillis(1_800_000_000_000 - 3 * 86_400_000),
+        UnixMillis(1_800_000_000_000 + 3 * 86_400_000),
+    ):
+        rig = Rig().bind()
+        rig.attestation = replace(ATTESTATION, at=Monotonic(900.0), wall_clock=wall_clock)
+        assert rig.desk.view().refusal is None
+        assert isinstance(asyncio.run(rig.desk.run("user-1")), Ok)
+        (body,) = rig.sent
+        since = round((rig.clock.monotonic() - 900.0) * 1000)
+        assert (
+            cast("dict[str, int]", body["attestation"])["at"] == cast("int", body["ranAt"]) - since
+        )
+        assert attested_at(ATTESTATION, rig.clock) <= rig.clock.unix_millis()
+
+
 def test_a_clock_not_set_or_an_attestation_given_before_it_was_starts_none() -> None:
     rig = Rig(wall=UnixMillis(0)).bind()
     assert rig.desk.view().refusal == CLOCK_UNSET
     rig = Rig().bind()
-    rig.attestation = replace(ATTESTATION, wall_clock=UnixMillis(MIN_DATE_MS - 1))
+    # Given so long ago, on the monotonic clock, that it falls before the floor.
+    before = (rig.clock.unix_millis() - MIN_DATE_MS) / 1000
+    rig.attestation = replace(ATTESTATION, at=Monotonic(rig.clock.monotonic() - before - 1.0))
     assert rig.desk.view().refusal == ATTESTED_UNSET
     assert asyncio.run(rig.desk.run("user-1")) == Err(ATTESTED_UNSET)
-    rig.attestation = replace(ATTESTATION, wall_clock=MIN_DATE_MS)
+    rig.attestation = replace(ATTESTATION, at=Monotonic(rig.clock.monotonic() - before))
     assert rig.desk.view().refusal is None
     assert rig.sent == []
 
@@ -621,7 +702,7 @@ def test_a_commissioning_reruns_the_pre_flight_reads_the_drive_judges_and_sends(
     assert body["operator"] == "user-1"
     assert cast("dict[str, object]", body["attestation"])["operator"] == "user-2"
     assert [c["id"] for c in cast("list[dict[str, str]]", body["controls"])] == ids
-    # The clock, the BITalino and the medical parameters are judged red where the bench warns.
+    # Nobody on board: the ECG is not judged.
     states = {c.id: c.state for c in last.controls}
     assert states["ecg"] is ControlState.OK
     assert rig.desk.view().last == last
@@ -630,13 +711,25 @@ def test_a_commissioning_reruns_the_pre_flight_reads_the_drive_judges_and_sends(
 
 def test_a_red_commissioning_is_sent_too() -> None:
     rig = Rig().bind()
-    rig.monitor.current = _green(bitalino_connected=False)
+    rig.monitor.current = _green(
+        bitalino_connected=False,
+        wall_clock=Unsynchronised(),
+        medical_refusal="parametres medicaux non signes",
+    )
     rig.read = Err(CommTimeout(after=Seconds(0.5)))
     rig.answer = Err(Unreachable("POST /api/machine/commissioning: ConnectError"))
     done = asyncio.run(rig.desk.run("user-1"))
     assert isinstance(done, Ok)
     states = {c.id: c.state for c in done.value.controls}
-    assert states["bitalino"] is ControlState.BLOCK
+    # Red where the bench warns (the clock, the BITalino) or does not judge (the medical).
+    for raised in ("clock", "bitalino", "medical"):
+        assert states[raised] is ControlState.BLOCK, raised
+    bench = {r.id: r.state for r in judge(CONTROLS, rig.monitor.current, Occupancy.BENCH).results}
+    assert (bench["clock"], bench["bitalino"], bench["medical"]) == (
+        ControlState.WARN,
+        ControlState.WARN,
+        ControlState.OK,
+    )
     assert states["drive_limits"] is ControlState.BLOCK
     (body,) = rig.sent
     assert body["drive"] is None
@@ -663,6 +756,43 @@ def test_one_that_leaves_rest_while_it_waits_or_while_the_drive_is_read_sends_no
     rig.on_pause = []
     rig.coasting = None
     assert isinstance(asyncio.run(rig.desk.run("user-1")), Ok)
+
+
+def test_the_console_s_own_rest_is_held_up_front_before_the_read_and_before_the_send() -> None:
+    """The snapshot stays REPOS while a start is armed (review probes P1 and P2): the
+    console's own rule is asked too, and no read nor send happens outside rest."""
+    rig = Rig().bind()
+    rig.at_rest = False
+    assert rig.desk.view().refusal == f"console pas au repos : {NOT_AT_REST}"
+    rig.at_rest = True
+    reads: list[RunMode] = []
+    inner = rig._read_limits  # pyright: ignore[reportPrivateUsage]  # the rig's own drive
+
+    async def counted() -> Result[DriveLimits, DriveError]:
+        reads.append(rig.monitor.current.snapshot.mode)
+        return await inner()
+
+    rig.desk = CommissioningDesk(replace(rig.setup, read_limits=counted))
+    rig.bind()
+    # The last pause brings a manual session: dropped before the drive is read.
+    rig.on_pause = [_green(), _green(snapshot=_snapshot(mode=RunMode.MANUEL))]
+    rig.monitor.polls = 2
+    done = asyncio.run(rig.desk.run("user-1"))
+    assert done == Err(dropped(DRIVE_RUNNING))
+    assert (reads, rig.sent) == ([], [])
+    # A start armed while the drive is read: dropped before the send.
+    rig.monitor.current = _green()
+    rig.on_pause = []
+
+    async def arming() -> Result[DriveLimits, DriveError]:
+        rig.at_rest = False
+        return await inner()
+
+    rig.desk = CommissioningDesk(replace(rig.setup, read_limits=arming))
+    rig.bind()
+    done = asyncio.run(rig.desk.run("user-1"))
+    assert done == Err(dropped(NOT_AT_REST))
+    assert rig.sent == []
 
 
 def test_a_run_that_does_not_settle_is_judged_when_its_wait_is_over() -> None:

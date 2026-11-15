@@ -36,7 +36,14 @@ from dataclasses import dataclass, replace
 from typing import Final, Protocol, assert_never, cast
 
 from src.clock import Clock
-from src.cloud_sync import CloudError, Document, Refused, Unreachable
+from src.cloud_sync import (
+    CloudError,
+    Document,
+    Refused,
+    Unreachable,
+    describe_refusal,
+    held_here,
+)
 from src.commissioning_view import (
     CommissioningView,
     Finding,
@@ -47,6 +54,7 @@ from src.commissioning_view import (
     Verdict,
 )
 from src.contract import ContractVersion, ErrorCode, serves
+from src.link_state import bounded
 from src.motor.drive import DriveError, DriveLimits, check_limits, describe_violation
 from src.motor.sto import StoReading, StoSourceKind, sto_bridged
 from src.result import Err, Ok, Result
@@ -130,6 +138,18 @@ UNATTESTED: Final[str] = (
     "arret d'urgence non atteste depuis le demarrage de la console : donner l'attestation, "
     "page Securite"
 )
+HELD: Final[str] = (
+    "requete retenue ici, non envoyee : le tableau de bord a demande d'attendre sur cette route "
+    "(rate_limited) ; relancer la mise en service plus tard"
+)
+"""The words of a commissioning the link held here: nothing reached the dashboard."""
+
+NOT_AT_REST: Final[str] = (
+    "une seance, un depart attendu ou en cours d'armement, ou un lancement du tableau de bord "
+    "en main"
+)
+"""Why the console is not at rest by its own rule, whatever its snapshot says."""
+
 UNREADABLE_ANSWER: Final[str] = (
     "reponse du tableau de bord illisible : la mise en service n'est pas enregistree"
 )
@@ -347,7 +367,8 @@ def _finding(entry: object) -> Finding | None:
     fields = cast("Document", entry)
     finding_id, expected, read = fields.get("id"), fields.get("expected"), fields.get("read")
     if isinstance(finding_id, str) and isinstance(expected, str) and isinstance(read, str):
-        return Finding(finding_id, expected, read)
+        # The dashboard's words, shown and logged: one line each, bounded (``bounded``).
+        return Finding(bounded(finding_id), bounded(expected), bounded(read))
     return None
 
 
@@ -376,7 +397,12 @@ def recorded_of(document: Document) -> Recorded | None:
 
 
 def outcome_of(sent: Result[Document, CloudError]) -> Outcome:
-    """What the dashboard made of a commissioning sent, in the card's words."""
+    """What the dashboard made of a commissioning sent, in the card's words.
+
+    Its words are shown and logged: they come from whatever answers at the address, so they
+    go on one line and bounded (:func:`~src.link_state.bounded`,
+    :func:`~src.cloud_sync.describe_refusal`). A request the link held here was not sent.
+    """
     match sent:
         case Ok(document):
             recorded = recorded_of(document)
@@ -384,13 +410,17 @@ def outcome_of(sent: Result[Document, CloudError]) -> Outcome:
         case Err(error):
             match error:
                 case Refused():
+                    if held_here(error):
+                        return NotRecorded(HELD)
                     if error.code == COMMISSIONING_REFUSED:
-                        return NotRecorded(f"refusee par le tableau de bord : {error.detail}")
+                        return NotRecorded(
+                            f"refusee par le tableau de bord : {bounded(error.detail)}"
+                        )
                     return NotRecorded(
-                        f"refusee par le tableau de bord ({error.status}) : {error.detail}"
+                        f"refusee par le tableau de bord : {describe_refusal(error)}"
                     )
                 case Unreachable():
-                    return NotRecorded(f"tableau de bord injoignable : {error.detail}")
+                    return NotRecorded(f"tableau de bord injoignable : {bounded(error.detail)}")
             raise assert_never(error)
     raise assert_never(sent)
 
@@ -438,9 +468,15 @@ class CommissioningSetup:
     ceiling: Hertz
     """The HSP this console arms under (``max_motor_hz``)."""
 
+    at_rest: Callable[[], bool]
+    """The console's own rule of rest (:meth:`~src.local_panel.LocalPanel.catalog_at_rest`):
+    no session, no start in the mailbox or being armed, no launch from the dashboard in hand.
+    The snapshot alone stays REPOS while a start is armed."""
+
     facts: Facts
-    coasting: Callable[[], str | None] = never_coasting
-    """Why the shaft may still turn; ``None``: nothing says so (:func:`never_coasting`)."""
+    coasting: Callable[[], str | None]
+    """Why the shaft may still turn; ``None``: nothing says so. No default: whoever builds a
+    desk says it, :func:`never_coasting` until the coast-hold guard lands."""
 
     pause: Callable[[Seconds], Awaitable[None]] = _pause
 
@@ -459,6 +495,19 @@ class DashboardLink:
 def attested(confirmed: Result[EstopAttestation, MotionRefusal]) -> EstopAttestation | None:
     """The attestation the runtime holds, or ``None`` before one was given."""
     return confirmed.value if isinstance(confirmed, Ok) else None
+
+
+def attested_at(attestation: EstopAttestation, clock: Clock) -> UnixMillis:
+    """When the attestation was given, on the wall clock of now: now, less the time since,
+    on the monotonic clock.
+
+    Not its own wall clock: a Pi starts on the time it was shut down at (fake-hwclock), and
+    an attestation given before the time service set the clock says that time, days off.
+    The monotonic clock does not jump: the time since is right, and the wall clock of now is
+    what the ``clock`` control judges, red when the time service does not hold it.
+    """
+    since = clock.monotonic() - attestation.at
+    return UnixMillis(clock.unix_millis() - round(since * 1000))
 
 
 class CommissioningDesk:
@@ -489,7 +538,10 @@ class CommissioningDesk:
         )
 
     def _away(self) -> str | None:
-        """Why the console is not at rest now; ``None`` when it is."""
+        """Why the console is not at rest now; ``None`` when it is: its own rule (a session, a
+        start waited for or armed, a launch in hand), then the drive's, then a coast."""
+        if not self._setup.at_rest():
+            return NOT_AT_REST
         found = _DRIVE_STATE.check(self._setup.monitor.inputs())
         if isinstance(found, Err):
             return found.error.reason
@@ -511,7 +563,7 @@ class CommissioningDesk:
         # The dashboard refuses a date before its floor: none is sent that it would refuse.
         if self._setup.clock.unix_millis() < MIN_DATE_MS:
             return Err(CLOCK_UNSET)
-        if attestation.wall_clock < MIN_DATE_MS:
+        if attested_at(attestation, self._setup.clock) < MIN_DATE_MS:
             return Err(ATTESTED_UNSET)
         away = self._away()
         if away is not None:
@@ -541,11 +593,11 @@ class CommissioningDesk:
             if away is not None:
                 return Err(dropped(away))
             await setup.pause(POLL)
-        read = await setup.read_limits()
-        # The run and the read awaited: the console may have left rest meanwhile.
+        # The last pause awaited: the drive is read only at rest.
         away = self._away()
         if away is not None:
             return Err(dropped(away))
+        read = await setup.read_limits()
         controls = (
             *judge(COMMISSIONING_CONTROLS, setup.monitor.inputs(), Occupancy.BENCH).results,
             sto_source_result(setup.facts.sto_source),
@@ -556,11 +608,15 @@ class CommissioningDesk:
         body = report_body(
             ran_at=ran_at,
             operator=operator,
-            attestation=attestation,
+            attestation=replace(attestation, wall_clock=attested_at(attestation, setup.clock)),
             controls=controls,
             limits=read.value if isinstance(read, Ok) else None,
             facts=setup.facts,
         )
+        # The read awaited: the console may have left rest meanwhile. Nothing is sent then.
+        away = self._away()
+        if away is not None:
+            return Err(dropped(away))
         outcome = outcome_of(await link.post(body))
         last = LastRun(at=ran_at, operator=operator, controls=controls, outcome=outcome)
         self._last = last

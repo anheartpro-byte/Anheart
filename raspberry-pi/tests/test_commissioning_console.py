@@ -8,16 +8,29 @@ is linked and judges a pre-flight, its dashboard link bound once built.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+import asyncio
+from abc import abstractmethod
+from collections.abc import Awaitable, Mapping
 from dataclasses import replace
 from pathlib import Path
-from typing import Final, cast
+from typing import Final, Protocol, cast
 
 import httpx
+import pytest
 
 from src.clock import ManualClock
+from src.cloud_sync import CloudError, Document
+from src.commissioning import (
+    COMMISSIONING_PATH,
+    NOT_AT_REST,
+    RUN_WAIT,
+    UNATTESTED,
+    CommissioningDesk,
+    DashboardLink,
+    PreflightRuns,
+    dropped,
+)
 from src.commissioning import NOT_LINKED as NOT_LINKED_YET
-from src.commissioning import CommissioningDesk
 from src.commissioning_view import (
     CommissioningScreen,
     CommissioningView,
@@ -27,15 +40,20 @@ from src.commissioning_view import (
     Recorded,
     Verdict,
 )
-from src.local_panel import build_panel
+from src.contract import ContractVersion
+from src.local_panel import CONTROL_PERIOD, build_panel
+from src.motor.simulated import SimulatedDrive
 from src.result import Err, Ok, Result
-from src.training.preflight import ControlResult, ControlState
-from src.units import UnixMillis
+from src.training.plan import JsonValue
+from src.training.preflight import ControlResult, ControlState, PreflightInputs
+from src.training.types import Occupancy, RunMode
+from src.units import Monotonic, Seconds, UnixMillis
 from src.web.app import create_app
 from src.web.commissioning_routes import NOT_LINKED
 from src.web.deps import WebConfig
 from tests.access_support import OPERATOR_ID
-from tests.test_local_panel import BASE_ENV, config_from
+from tests.test_cloud_sync import Dashboard, config_of
+from tests.test_local_panel import BASE_ENV, OPERATOR, config_from
 from tests.test_pairing import KEY, ORIGIN
 from tests.test_web_access import TOKEN, console, device, signed
 
@@ -188,3 +206,156 @@ def test_a_console_without_a_dashboard_or_a_pre_flight_offers_none(tmp_path: Pat
             preflight=preflight,
         )
         assert panel.services.commissioning is None
+
+
+async def test_the_panel_runs_one_over_its_runtime_its_sto_and_its_link(tmp_path: Path) -> None:
+    """The four parts build_panel gives the desk: the runtime's attestation, the STO, the
+    link's transport and what its last heartbeat announced."""
+    dashboard = Dashboard()
+    clock = ManualClock(Monotonic(10.0), UnixMillis(1_800_000_000_000))
+    panel = build_panel(
+        config_of(),
+        clock=clock,
+        profiles_path=tmp_path / "p.json",
+        transport=lambda _config: dashboard,
+        preflight=True,
+    )
+    desk = panel.services.commissioning
+    assert isinstance(desk, CommissioningDesk)
+    assert desk.view().refusal == NOT_LINKED_YET
+    clock.advance(Seconds(1.0))
+    await panel.cloud_step()
+    assert desk.view().refusal == UNATTESTED
+    assert isinstance(panel.surface.attest_estop_wiring(OPERATOR_ID), Ok)
+    await panel.control_cycle()
+    assert desk.view().refusal is None
+    run = asyncio.create_task(desk.run(OPERATOR_ID))
+    await asyncio.sleep(0)
+    # The pre-flight's run is waited for no longer than its wait, the console ticking all along
+    # (a drive left without its keepalive would fault); then the drive is read again.
+    for _ in range(round(RUN_WAIT / CONTROL_PERIOD)):
+        clock.advance(CONTROL_PERIOD)
+        await panel.control_cycle()
+    done = await run
+    assert isinstance(done, Ok)
+    (body,) = dashboard.to(COMMISSIONING_PATH)
+    attestation = cast("Mapping[str, object]", body["attestation"])
+    assert (body["operator"], attestation["operator"]) == (OPERATOR_ID, OPERATOR_ID)
+    assert body["ranAt"] == clock.unix_millis()
+    sto = panel.services.sto
+    assert sto is not None
+    assert body["stoSource"] == sto.latest(clock.monotonic()).source.value
+    # The STO the desk read is the console's own: its reading, judged ready for the bench.
+    assert {c["id"]: c["state"] for c in cast("list[Mapping[str, str]]", body["controls"])}[
+        "sto_ready"
+    ] == "ok"
+    controls = cast("list[Mapping[str, str]]", body["controls"])
+    assert {c["id"]: c["state"] for c in controls}["drive_limits"] == "ok"
+    assert body["drive"] is not None
+    await panel.close()
+
+
+class Settled:
+    """The panel's own pre-flight, its run already over: the desk goes straight to the read."""
+
+    def __init__(self, inner: PreflightRuns) -> None:
+        self.inner = inner
+
+    @property
+    def running(self) -> bool:
+        return False
+
+    def rerun(self) -> None:
+        """Nothing to run again: the run is over."""
+
+    def inputs(self) -> PreflightInputs:
+        return self.inner.inputs()
+
+
+class Exchange(Protocol):
+    """One exchange of the simulated drive, as a method of its class."""
+
+    @abstractmethod
+    def __call__(self, drive: SimulatedDrive, /, *args: object) -> Awaitable[object]:
+        """Send it, and await its answer."""
+
+
+def yielding(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Each exchange of the simulated drive yields to the loop, as the ATV320 driver's
+    executor does on copper."""
+    for name in ("read_status", "read_limits", "write_command", "write_speed"):
+        real = cast("Exchange", getattr(SimulatedDrive, name))
+
+        def wrapped(real: Exchange = real) -> Exchange:
+            async def call(self: SimulatedDrive, *args: object) -> object:
+                await asyncio.sleep(0)
+                return await real(self, *args)
+
+            return call
+
+        monkeypatch.setattr(SimulatedDrive, name, wrapped())
+
+
+async def test_a_start_waited_for_or_armed_is_not_rest_whatever_the_snapshot_says(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Review probe P1: a start in the mailbox, then one armed while a run reads the drive.
+    The snapshot stays REPOS all along; the console's own rule says otherwise."""
+    clock = ManualClock(Monotonic(100.0), UnixMillis(1_800_000_000_000))
+    panel = build_panel(
+        config_from(LINKED_ENV), clock=clock, profiles_path=tmp_path / "p.json", preflight=True
+    )
+    desk = panel.services.commissioning
+    assert isinstance(desk, CommissioningDesk)
+    sent: list[Mapping[str, JsonValue]] = []
+
+    async def post(body: Mapping[str, JsonValue]) -> Result[Document, CloudError]:
+        sent.append(body)
+        return Ok({"recordId": "r", "verdict": "conforming", "findings": [], "signed": True})
+
+    link = DashboardLink(post=post, announced=lambda: ContractVersion("1.18"))
+    desk.bind(link)
+    assert isinstance(panel.surface.attest_estop_wiring(OPERATOR), Ok)
+    for _ in range(3):
+        clock.advance(Seconds(0.2))
+        panel.surface.note_presence(OPERATOR)
+        await panel.control_step()
+    yielding(monkeypatch)
+    assert desk.view().refusal is None
+    assert isinstance(
+        panel.surface.submit_start_manual(occupancy=Occupancy.BENCH, operator=OPERATOR), Ok
+    )
+    assert panel.runtime.snapshot().mode is RunMode.REPOS
+    assert desk.view().refusal == f"console pas au repos : {NOT_AT_REST}"
+    assert await desk.run("user-1") == Err(f"console pas au repos : {NOT_AT_REST}")
+    await panel.control_step()  # the start armed and running
+    await panel.close()
+
+    # Again on a console at rest: the run passes its checks, then a start is armed while it
+    # reads the drive. Nothing is sent.
+    clock = ManualClock(Monotonic(100.0), UnixMillis(1_800_000_000_000))
+    panel = build_panel(
+        config_from(LINKED_ENV), clock=clock, profiles_path=tmp_path / "q.json", preflight=True
+    )
+    built = panel.services.commissioning
+    assert isinstance(built, CommissioningDesk)
+    setup = built._setup  # pyright: ignore[reportPrivateUsage]  # the panel's own setup
+    racing = CommissioningDesk(replace(setup, monitor=Settled(setup.monitor)))
+    racing.bind(link)
+    assert isinstance(panel.surface.attest_estop_wiring(OPERATOR), Ok)
+    for _ in range(3):
+        clock.advance(Seconds(0.2))
+        panel.surface.note_presence(OPERATOR)
+        await panel.control_step()
+    assert racing.view().refusal is None
+    run = asyncio.create_task(racing.run("user-1"))
+    await asyncio.sleep(0)
+    assert isinstance(
+        panel.surface.submit_start_manual(occupancy=Occupancy.BENCH, operator=OPERATOR), Ok
+    )
+    tick = asyncio.create_task(panel.control_step())
+    _, done = await asyncio.gather(tick, run)
+    assert done == Err(dropped(NOT_AT_REST))
+    assert sent == []
+    assert panel.runtime.mode is RunMode.MANUEL
+    await panel.close()
