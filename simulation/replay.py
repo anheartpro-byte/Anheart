@@ -14,7 +14,12 @@ people asked. This module gives all of it back to a fresh, REAL
   :class:`~src.ecg_pipeline.EcgBridge`, as it did, and reaches the runtime
   through ``observe_ecg`` and nothing else;
 * the commands of ``events.jsonl`` (:mod:`src.record.commands`) are
-  issued at their instants.
+  issued at their instants;
+* the safety chain reads as the ``sto`` events of ``events.jsonl`` say the
+  console read it (A1-20): each state and source from its instant on, the first
+  one before it. A record without them replays on a ready simulated chain, as
+  before: the console reads the chain between ticks, out of the exchanges the
+  tape holds.
 
 What the runtime then DECIDES at each tick (setpoint, safety action, rule,
 phase) is compared with what the record says it decided
@@ -92,12 +97,19 @@ from src.ecg_pipeline import EcgBridge, EcgFrame, Treatment, load_treatment, tre
 from src.geometry import MachineGeometry
 from src.motor.atv320 import ATV320Drive
 from src.motor.drive import DriveBackend
-from src.motor.sto import SimulatedStoChain, SimulatedStoSource, StoSourceKind
+from src.motor.sto import (
+    SimulatedStoChain,
+    SimulatedStoSource,
+    StoReading,
+    StoSource,
+    StoSourceKind,
+    StoState,
+)
 from src.record import commands
 from src.record.configuration import WARNING_PREFIX
 from src.record.reader import Recording, read
 from src.record.rows import Row
-from src.record.schema import EventKind, GeometrySnapshot, Manifest, Profile
+from src.record.schema import EventKind, GeometrySnapshot, Manifest, Profile, read_sto_detail
 from src.result import Err, Ok, Result
 from src.sensors import ecg as typed_ecg
 from src.sensors.base import SensorReading
@@ -197,6 +209,15 @@ type _Step = _Tick | _Order | _Reading
 
 
 @dataclass(frozen=True, slots=True)
+class _StoChange:
+    """One ``sto`` event of the record: from ``t`` on, the chain read ``state`` from ``source``."""
+
+    t: float
+    state: StoState
+    source: StoSourceKind
+
+
+@dataclass(frozen=True, slots=True)
 class _Plan:
     expected: tuple[Decision, ...]
     steps: tuple[_Step, ...]
@@ -204,6 +225,7 @@ class _Plan:
     blocks: tuple[Delivery, ...]
     origin: Monotonic
     geometry: GeometrySnapshot | AppliedRuntime
+    sto: tuple[_StoChange, ...] = ()
 
 
 def _position(step: _Step) -> tuple[float, int]:
@@ -347,6 +369,20 @@ def _orders(recording: Recording) -> Result[tuple[_Order, ...], str]:
     return Ok(tuple(orders))
 
 
+def _sto_changes(recording: Recording) -> Result[tuple[_StoChange, ...], str]:
+    """The ``sto`` events of the record, each its instant, state and source."""
+    changes: list[_StoChange] = []
+    for event in recording.events:
+        if event.kind is EventKind.STO:
+            read = read_sto_detail(event.detail)
+            if read is None:
+                return Err(
+                    f"a sto event names no state and source of the console: {event.detail!r}"
+                )
+            changes.append(_StoChange(event.t, *read))
+    return Ok(tuple(changes))
+
+
 def _plan(recording: Recording, applied: AppliedRuntime | None) -> Result[_Plan, str]:
     """Everything a replay needs from the record, or EVERY reason it is not replayable.
 
@@ -354,11 +390,14 @@ def _plan(recording: Recording, applied: AppliedRuntime | None) -> Result[_Plan,
     exchanges, geometry). The refusal names each missing input.
     """
     problems: list[str] = []
+    sto = _sto_changes(recording)
     expected = _decisions(recording.rows)
     orders = _orders(recording)
     native = any(frame.kind in NATIVE_KINDS | SDK_KINDS for frame in recording.frames)
     exchanges = parse_native(recording.frames) if native else parse_frames(recording.frames)
-    problems.extend(part.error for part in (expected, orders, exchanges) if isinstance(part, Err))
+    problems.extend(
+        part.error for part in (expected, orders, exchanges, sto) if isinstance(part, Err)
+    )
     if not recording.frames:
         problems.append("the record holds no drive exchange: nothing says what the drive answered")
     if any(
@@ -391,6 +430,7 @@ def _plan(recording: Recording, applied: AppliedRuntime | None) -> Result[_Plan,
         isinstance(expected, Err)
         or isinstance(orders, Err)
         or isinstance(exchanges, Err)
+        or isinstance(sto, Err)
         or geometry is None
         or problems
     ):
@@ -431,6 +471,7 @@ def _plan(recording: Recording, applied: AppliedRuntime | None) -> Result[_Plan,
             blocks=deliveries(recording.raw, origin),
             origin=origin,
             geometry=geometry,
+            sto=sto.value,
         )
     )
 
@@ -461,11 +502,55 @@ async def _confirm_inline(
     return typed_ecg.make().process(window, sample_rate, at)
 
 
+EVENT_ROUNDING: Final[Seconds] = Seconds(0.0005)
+"""How far an event's instant may be from its tick's: events are stamped to the millisecond."""
+
+
+@final
+class _RecordedSto:
+    """The safety chain as the console read it, from the record's ``sto`` events (A1-20).
+
+    Each state and source holds from its event's instant on; before the first,
+    the first. Read as just read: the record keeps the changes, not each read,
+    so an age it would have had is not given back. Memory only, like every
+    source (:class:`~src.motor.sto.StoSource`).
+    """
+
+    __slots__ = ("_changes", "_origin")
+
+    def __init__(self, changes: tuple[_StoChange, ...], origin: Monotonic) -> None:
+        self._changes: tuple[_StoChange, ...] = changes
+        self._origin: Monotonic = origin
+
+    def latest(self, now: Monotonic) -> StoReading:
+        at = elapsed(self._origin, now) + EVENT_ROUNDING
+        current = self._changes[0]
+        for change in self._changes:
+            if change.t > at:
+                break
+            current = change
+        read = current.state not in (StoState.NOT_CONFIGURED, StoState.BRIDGED)
+        return StoReading(
+            state=current.state,
+            source=current.source,
+            last_success_at=now if read else None,
+            detail="replayed from the record",
+        )
+
+
+def _sto_of(plan: _Plan) -> StoSource:
+    """The record's chain, or a ready simulated one for a record that does not say it."""
+    if plan.sto:
+        return _RecordedSto(plan.sto, plan.origin)
+    return SimulatedStoSource(chain=SimulatedStoChain(), source=StoSourceKind.SIM_READY)
+
+
 def _runtime(
     geometry: GeometrySnapshot | AppliedRuntime,
     profile: Profile | None,
     clock: ManualClock,
     drive: DriveBackend,
+    sto: StoSource,
 ) -> Result[TrainingRuntime, str]:
     """Build from verified console settings, or simulation geometry and repository limits."""
     safety = (
@@ -479,9 +564,7 @@ def _runtime(
         if isinstance(geometry, AppliedRuntime):
             return Ok(
                 TrainingRuntime(
-                    sto=SimulatedStoSource(
-                        chain=SimulatedStoChain(), source=StoSourceKind.SIM_READY
-                    ),
+                    sto=sto,
                     clock=clock,
                     drive=drive,
                     geometry=geometry.geometry,
@@ -499,7 +582,7 @@ def _runtime(
         )
         return Ok(
             TrainingRuntime(
-                sto=SimulatedStoSource(chain=SimulatedStoChain(), source=StoSourceKind.SIM_READY),
+                sto=sto,
                 clock=clock,
                 drive=drive,
                 geometry=machine,
@@ -741,7 +824,9 @@ async def replay_recording(
     else:
         tape = TapeDrive(data, clock, plan.value.origin)
         drive = tape
-    runtime = _runtime(plan.value.geometry, recording.manifest.profile, clock, drive)
+    runtime = _runtime(
+        plan.value.geometry, recording.manifest.profile, clock, drive, _sto_of(plan.value)
+    )
     if isinstance(runtime, Err):
         return Err(ReplayError(runtime.error))
     session = _Session(plan.value, recording.manifest, runtime.value, clock)

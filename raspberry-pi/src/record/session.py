@@ -98,6 +98,7 @@ from src.record.schema import (
     Manifest,
     Profile,
     RecordedBallast,
+    sto_detail,
 )
 from src.remote_launch import BENCH_LAUNCH_ATTESTATION
 from src.result import Err
@@ -595,6 +596,7 @@ class _Live:
     phase: str | None = None
     verdict: str | None = None
     fault: str | None = None
+    sto: str | None = None
     raw_seq: int = 0
     link: LinkStats | None = None
     zoned: bool = False
@@ -1299,6 +1301,11 @@ class SessionRecorder:
             live.fault = fault
             said = "cleared" if report is None else f"{fault}: {report.message}"
             self._event(live, now, EventKind.DRIVE_FAULT, said, SYSTEM)
+        # The chain as the runtime read it this tick: its changes, never each read (A1-20).
+        sto = sto_detail(snapshot.sto.state, snapshot.sto.source)
+        if sto != live.sto:
+            live.sto = sto
+            self._event(live, now, EventKind.STO, sto, SYSTEM)
 
     def _row(
         self,

@@ -10,12 +10,14 @@ that is not exactly that reads back as one.
 from __future__ import annotations
 
 from itertools import product
+from pathlib import Path
 
 import pytest
 
-from src.motor.sto import StoSourceKind, StoState
+from src.motor.sto import SimulatedStoSource, StoSourceKind, StoState
 from src.record.reader import LONGEST_LINE
-from src.record.schema import read_sto_detail, sto_detail
+from src.record.schema import EventKind, read_sto_detail, sto_detail
+from tests.record_console_support import recorded_rig, set_target, start_bench
 
 
 @pytest.mark.parametrize(("state", "source"), list(product(StoState, StoSourceKind)))
@@ -42,3 +44,23 @@ def test_every_state_and_source_reads_back_as_itself(
 )
 def test_nothing_but_a_state_and_a_source_reads_as_a_chain(detail: str) -> None:
     assert read_sto_detail(detail) is None
+
+
+async def test_the_record_tells_the_chain_once_then_at_its_change_never_at_each_read(
+    tmp_path: Path,
+) -> None:
+    recorded = recorded_rig(tmp_path)
+    source = recorded.rig.panel.sto
+    assert isinstance(source, SimulatedStoSource)
+    async with recorded.rig.http() as session:
+        await start_bench(recorded, session)
+        await set_target(session, 5.0)
+        await recorded.tick(10.0)
+        source.chain.open(recorded.clock.monotonic())
+        await recorded.tick(20.0)
+    recording = recorded.recording()
+    told = [
+        (event.detail, event.actor) for event in recording.events if event.kind is EventKind.STO
+    ]
+    assert told == [("ready (sim_ready)", "system"), ("open (sim_ready)", "system")]
+    assert len(recording.rows) > 100, "read at every tick, told twice"

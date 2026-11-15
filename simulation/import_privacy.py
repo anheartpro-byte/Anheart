@@ -22,7 +22,7 @@ from src.record import commands
 from src.record.codec import EMAIL
 from src.record.ecg import inflate
 from src.record.reader import Recording
-from src.record.schema import Event, EventKind, Manifest
+from src.record.schema import Event, EventKind, Manifest, read_sto_detail
 from src.result import Err, Ok, Result
 from src.training.runtime import RULE_STO_OPEN, RULE_STO_UNREADABLE, EndReason
 from src.training.safety import ALL_RULES
@@ -111,6 +111,9 @@ def machine_detail(event: Event) -> Result[str, str]:  # noqa: PLR0911  # one re
         if fault is not None and fault[1] in _FAULTS and int(fault[2]) <= _MAX_REGISTER:
             return Ok(head)
         return Ok("cleared" if text == "cleared" else ANONYMIZED)
+    if event.kind is EventKind.STO:
+        # Only a state and a source of the console's own enums: nothing else can travel.
+        return Ok(text if read_sto_detail(text) is not None else ANONYMIZED)
     if event.kind is EventKind.PHASE:
         return Ok(text if text in _PHASES else ANONYMIZED)
     if event.kind is EventKind.END:

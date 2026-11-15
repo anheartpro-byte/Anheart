@@ -3,8 +3,10 @@
 The console reads register 5202 through the runtime's own ATV320 driver,
 between control ticks. Those reads stay out of the exchange log that feeds the
 session record (``ATV320Drive.read_auxiliary_register``): the record holds the
-control path's transactions only, so the native replay, whose runtime reads a
-ready simulated chain and never asks for 5202, consumes it without a divergence.
+control path's transactions only, so the native replay, whose runtime never
+asks for 5202, consumes it without a divergence. What the chain read is in the
+record as ``sto`` events, one per change (A1-20), and the replay's runtime reads
+the chain from them (``test_replay_sto.py``).
 """
 
 import asyncio
@@ -29,6 +31,7 @@ from src.motor.sto import DriveInputStoSource, SimulatedStoChain, StoSource, Sto
 from src.record.journal import Journal
 from src.record.reader import Recording, read
 from src.record.retention import records
+from src.record.schema import EventKind
 from src.result import Err, Ok
 from src.training.runtime import RuntimeState
 from src.training.types import Occupancy
@@ -165,6 +168,20 @@ def test_a_session_that_reads_the_sto_feedback_replays_without_divergence(
     assert one.value.comparison.deviating_ticks == 0
     assert one.value.comparison.tolerated_rpm == (0, 0)
     assert one.value.comparison.shifted_transitions == (0, 0)
+
+
+def test_the_record_holds_what_the_chain_read_at_each_change_not_at_each_read(
+    sessions: tuple[Session, Session],
+) -> None:
+    """A1-20: hundreds of reads of 5202, three ``sto`` events. Ready at the first tick;
+    unknown while the stop withholds the reads, the last read growing old; ready again
+    once the session is over and the reads resume."""
+    reading, silent = sessions
+    told = [event.detail for event in reading.record.events if event.kind is EventKind.STO]
+    assert told == ["ready (drive_input)", "unknown (drive_input)", "ready (drive_input)"]
+    assert reading.master.reads.count(LOGIC_INPUTS) > 100
+    ready = [event.detail for event in silent.record.events if event.kind is EventKind.STO]
+    assert ready == ["ready (sim_ready)"], "the ready chain read from memory"
 
 
 def test_reading_the_sto_feedback_records_exactly_the_exchanges_of_a_session_without_it(
