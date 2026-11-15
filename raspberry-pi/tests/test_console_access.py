@@ -66,11 +66,11 @@ from src.console_access import (
     device_actor,
     load_failures,
     load_list,
-    read_kept,
     read_list,
     replace_file,
     signed_text,
 )
+from src.kept_file import read_kept
 from src.result import Err, Ok
 from src.units import Seconds
 from tests.access_support import (

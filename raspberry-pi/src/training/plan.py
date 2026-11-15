@@ -94,6 +94,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Final, NewType, assert_never, cast, final
 
+from src.kept_file import read_kept
 from src.medical import SHIPPED_PARAMETERS, HrMaxFormula
 from src.result import Err, Ok, Result
 from src.training.types import Phase
@@ -1583,6 +1584,10 @@ class _Unreadable:
 
 type _ReadFailure = _Absent | _Unreadable
 
+PROFILES_FILE_MAX_BYTES: Final[int] = 4 * 1024 * 1024
+"""Four times the largest signed catalogue the store is made from
+(:data:`src.cloud_sync.MAX_RESPONSE_BYTES`): a larger file is unreadable, like a corrupt one."""
+
 
 def _read_text(path: Path) -> Result[str, _ReadFailure]:
     """Read a UTF-8 file, distinguishing "not there" from "went wrong".
@@ -1593,7 +1598,7 @@ def _read_text(path: Path) -> Result[str, _ReadFailure]:
     the defaults take over.
     """
     try:
-        return Ok(path.read_text(encoding="utf-8"))
+        return Ok(read_kept(path, PROFILES_FILE_MAX_BYTES).decode("utf-8"))
     except FileNotFoundError:
         return Err(_Absent())
     except (OSError, UnicodeDecodeError) as failure:

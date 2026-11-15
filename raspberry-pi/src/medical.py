@@ -67,6 +67,7 @@ from cryptography.exceptions import InvalidSignature, UnsupportedAlgorithm
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from cryptography.hazmat.primitives.serialization import load_pem_public_key
 
+from src.kept_file import read_kept
 from src.medical_unusable import MedicalParametersUnusableError
 from src.result import Err, Ok, Result
 from src.units import Bpm, GLoadPerSecond, MotorRpm, OutputRpmPerSecond, ResultantG, Seconds
@@ -508,10 +509,22 @@ def parse_document(
     )
 
 
+MEDICAL_FILE_MAX_BYTES: Final[int] = 64 * 1024
+"""The medical parameters, about a kilobyte: a larger file is not one that was signed."""
+
+SIGNATURE_FILE_MAX_BYTES: Final[int] = 4096
+"""An Ed25519 signature is 64 bytes and its public key in PEM about 110: a larger file is
+neither."""
+
+
 def read_document(path: Path) -> Result[MedicalDocument, tuple[str, ...]]:
-    """Read and parse the file at ``path``. Startup only."""
+    """Read and parse the file at ``path``. Startup only.
+
+    Read as a kept file (:func:`~src.kept_file.read_kept`): a link, a FIFO or a file
+    over :data:`MEDICAL_FILE_MAX_BYTES` is unreadable, and the console does not start
+    (:func:`shipped_document`)."""
     try:
-        content = path.read_bytes()
+        content = read_kept(path, MEDICAL_FILE_MAX_BYTES)
     except OSError as error:
         return Err((f"{path.name} illisible ({error})",))
     return parse_document(content, where=path.name)
@@ -571,9 +584,13 @@ def status_of(
     signature_path: Path = SIGNATURE_PATH,
     public_key_path: Path = PUBLIC_KEY_PATH,
 ) -> MedicalStatus:
-    """``document`` with the verdict of its signature. Reads the two small files, startup only."""
+    """``document`` with the verdict of its signature. Reads the two small files, startup only.
+
+    As kept files: a link, a FIFO or an oversize file in the place of either is missing,
+    and the document unsigned, so the console takes nobody on board.
+    """
     try:
-        public_key = public_key_path.read_bytes()
+        public_key = read_kept(public_key_path, SIGNATURE_FILE_MAX_BYTES)
     except OSError:
         return MedicalStatus(
             document=document,
@@ -583,7 +600,7 @@ def status_of(
             ),
         )
     try:
-        signature = signature_path.read_bytes()
+        signature = read_kept(signature_path, SIGNATURE_FILE_MAX_BYTES)
     except OSError:
         return MedicalStatus(
             document=document,

@@ -367,7 +367,8 @@ def test_ex2_a_state_that_cannot_be_opened_is_unreadable_not_absent(tmp_path: Pa
     (root / STATE_NAME).mkdir(parents=True)
     found = load(root / STATE_NAME)
     assert isinstance(found, Unreadable)
-    assert found.detail.startswith(("IsADirectoryError", "PermissionError"))
+    # Read as a kept file: not a regular file (EINVAL); Windows will not open it at all.
+    assert found.detail.startswith(("OSError:EINVAL", "PermissionError"))
     assert load(root / "absent.json") == Absent()
 
 

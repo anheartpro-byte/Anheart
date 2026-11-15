@@ -71,10 +71,10 @@ from src.console_access import (
     KEPT_FILE_MAX_BYTES,
     STORED_LIST,
     StoredList,
-    read_kept,
     replace_file,
     signed_text,
 )
+from src.kept_file import read_kept
 from src.local_config import (
     KEY_OCCUPIED_ENABLED,
     KEY_PROGRAMS_ENABLED,

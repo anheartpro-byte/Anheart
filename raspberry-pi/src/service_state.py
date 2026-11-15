@@ -82,6 +82,7 @@ from pydantic import ConfigDict, TypeAdapter
 from pydantic.dataclasses import dataclass as validated
 
 from src.clock import Clock
+from src.kept_file import read_kept
 from src.record.writer import create_private, describe_os_error, fsync_path
 from src.result import Err, Ok, Result
 from src.units import Seconds
@@ -131,6 +132,10 @@ class Stored:
 
 _STORED: Final[TypeAdapter[Stored]] = TypeAdapter(Stored)
 
+STATE_FILE_MAX_BYTES: Final[int] = 64 * 1024
+"""Far above a state with an unclean start every second of :data:`WINDOW`: a larger file
+is not one this wrote."""
+
 
 @dataclass(frozen=True, slots=True)
 class Absent:
@@ -179,7 +184,7 @@ class NotOutOfService:
 def load(path: Path) -> Previous:
     """The state the previous process left at ``path``. Never raises."""
     try:
-        raw = path.read_bytes()
+        raw = read_kept(path, STATE_FILE_MAX_BYTES)
     except FileNotFoundError:
         return Absent()
     except OSError as error:

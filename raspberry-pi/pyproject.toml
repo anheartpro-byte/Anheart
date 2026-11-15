@@ -265,6 +265,9 @@ include = [
     # Who may act at the console (ANH-152): the signed operator list, the
     # sign-in, the lockout and the sessions, and the link that brings the list.
     "src/console_access.py",
+    # How it, and every module that keeps or ships a file, reads one (ANH-149): never
+    # through a link, never waiting on a FIFO, never an oversize file read whole.
+    "src/kept_file.py",
     "src/operator_sync.py",
     # The machine's configuration as the dashboard proposes it (ANH-141): the
     # ceilings, the radii and the two locks pass its revalidation.
@@ -353,6 +356,7 @@ safety_chain = [
     "src/remote_launch.py",
     "src/programme_catalog.py",
     "src/console_access.py",
+    "src/kept_file.py",
     "src/operator_sync.py",
     "src/machine_config.py",
     "src/config_sync.py",

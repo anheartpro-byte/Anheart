@@ -18,6 +18,22 @@ pas le démarrage de l'image Raspberry Pi après une coupure secteur.
 Le volume et ses sous-dossiers root ne sont jamais donnés au compte de la
 console. Le durcissement existant ne parcourt que `/var/lib/anheart`.
 
+Chaque fichier que la console garde ou embarque est lu par
+`src.kept_file.read_kept` (ANH-149) : jamais à travers un lien symbolique,
+jamais en attendant sur une FIFO, jamais lu en entier s'il dépasse sa borne.
+Un tel fichier est illisible, et chaque lecteur garde son chemin habituel pour
+un fichier illisible :
+
+| Fichier | Borne | Illisible |
+|---|---|---|
+| compteurs de santé | 16 Kio | compteurs inconnus |
+| état du service (redémarrages) | 64 Kio | état illisible : le démarrage compte comme non propre |
+| curseur d'un enregistrement, registre des séances perdues | 1 Mio | curseur douteux ; une perte au registre |
+| `.sync-baseline.json` | 16 Mio | refaite : les enregistrements sans curseur sont mis de côté, non envoyés |
+| `profiles.local.json` | 4 Mio | mis de côté, les profils livrés prennent le relais |
+| `profiles.default.json`, paramètres médicaux | 4 Mio, 64 Kio | la console ne démarre pas |
+| signature et clé publique des paramètres médicaux | 4 Kio | non signés : banc seulement, personne à bord |
+
 ## Mise en service, console et Docker arrêtés
 
 Préparer un volume **LUKS2 déjà formaté en ext4**, vide, et conserver une copie

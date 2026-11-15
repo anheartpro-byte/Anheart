@@ -10,6 +10,7 @@ from typing import Final, NewType
 from pydantic import ConfigDict, TypeAdapter, ValidationError
 from pydantic.dataclasses import dataclass
 
+from src.kept_file import read_kept
 from src.record.writer import create_private
 from src.training.types import TelemetrySnapshot
 from src.units import Monotonic, Seconds, elapsed
@@ -31,10 +32,14 @@ class Counters:
 
 COUNTERS: Final[TypeAdapter[Counters]] = TypeAdapter(Counters)
 
+COUNTERS_FILE_MAX_BYTES: Final[int] = 16 * 1024
+"""Twice what :class:`Counters` takes with all its fault codes: a larger file is not one
+this wrote."""
+
 
 def load_counters(path: Path) -> Counters | None:
     try:
-        result = COUNTERS.validate_json(path.read_bytes(), strict=True)
+        result = COUNTERS.validate_json(read_kept(path, COUNTERS_FILE_MAX_BYTES), strict=True)
     except FileNotFoundError:
         return Counters(drive_faults_by_code={})
     except (OSError, ValidationError):
