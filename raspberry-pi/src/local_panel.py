@@ -1539,7 +1539,10 @@ class LocalPanel:
             simulator.advance(now)
         sim_ecg = self._sim_ecg
         if sim_ecg is not None:
-            sim_ecg.set_motor_rpm(self._last_measured)
+            # The simulated rider rides the plant's own shaft when the drive is simulated
+            # too: RFRD reads 0 with the stage off, and a coasting arm still loads him. Read
+            # from the drive side, never by the runtime, which decides on RFRD alone.
+            sim_ecg.set_motor_rpm(self._last_measured if simulator is None else simulator.shaft_rpm)
         snapshot = await self._runtime.tick(now)
         if self._health is not None:
             reason = self._runtime.end_reason
