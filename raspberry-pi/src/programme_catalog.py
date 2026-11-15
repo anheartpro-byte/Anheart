@@ -80,6 +80,7 @@ from src.cloud_sync import (
     Document,
     Unreachable,
 )
+from src.kept_file import read_kept
 from src.local_config import CardiacTiers, LocalConfig
 from src.medical import CONFIG_DIRECTORY, UNSIGNED_SENTENCE, MedicalVersion, verify_signature
 from src.result import Err, Ok, Result
@@ -172,10 +173,16 @@ def rules_of(config: LocalConfig) -> LocalRules:
     )
 
 
+PUBLIC_KEY_MAX_BYTES: Final[int] = 4096
+"""An Ed25519 public key in PEM is about 110 bytes: a larger file is not one."""
+
+
 def read_public_key(path: Path = PUBLIC_KEY_PATH) -> bytes | None:
-    """The public key's bytes, or ``None`` when it cannot be read. Startup only."""
+    """The public key's bytes, or ``None`` when it cannot be read: nothing it would verify
+    is then taken as signed. Startup only; read as a kept file
+    (:func:`~src.kept_file.read_kept`), so a FIFO in its place cannot hang the start."""
     try:
-        return path.read_bytes()
+        return read_kept(path, PUBLIC_KEY_MAX_BYTES)
     except OSError:
         return None
 

@@ -56,6 +56,7 @@ from uuid import uuid4
 from pydantic import ConfigDict, TypeAdapter
 from pydantic.dataclasses import dataclass as validated
 
+from src.kept_file import read_kept
 from src.record.retention import CURSOR_SUFFIX as _CURSOR_SUFFIX
 from src.record.retention import RECORD_NAME
 from src.record.writer import create_private, describe_os_error
@@ -200,6 +201,14 @@ class LostStops:
 
 _LOST_STOPS: Final[TypeAdapter[LostStops]] = TypeAdapter(LostStops)
 
+CURSOR_FILE_MAX_BYTES: Final[int] = 1024 * 1024
+"""A cursor or the register of lost stops: a few hundred bytes, a few lines of losses. A
+larger file is not one this wrote."""
+
+BASELINE_MAX_BYTES: Final[int] = 16 * 1024 * 1024
+"""The baseline names every record found on the first listing: some 160 000 names of
+under 100 bytes, more than a card holds."""
+
 
 @dataclass(frozen=True, slots=True)
 class NoCursor:
@@ -231,7 +240,7 @@ def cursor_of(record: Path) -> Path:
 def load(record: Path) -> CursorRead:
     """The cursor of ``record``. Never raises: a doubt is an :class:`UnreadableCursor`."""
     try:
-        raw = cursor_of(record).read_bytes()
+        raw = read_kept(cursor_of(record), CURSOR_FILE_MAX_BYTES)
     except FileNotFoundError:
         return NoCursor()
     except OSError as error:
@@ -250,7 +259,7 @@ def store(record: Path, cursor: Cursor) -> Result[None, CursorError]:
 def load_baseline(root: Path) -> Baseline | None:
     """The baseline of ``root``; ``None`` when there is none yet, or none that can be used."""
     try:
-        return _BASELINE.validate_json((root / BASELINE_NAME).read_bytes())
+        return _BASELINE.validate_json(read_kept(root / BASELINE_NAME, BASELINE_MAX_BYTES))
     except (OSError, ValueError):
         return None
 
@@ -264,7 +273,7 @@ def load_lost_stops(root: Path) -> LostStops:
     """The register ``root`` holds; an empty one when there is none. A register that cannot
     be read is one loss (:data:`LOST_STOPS_UNREADABLE`): it may have held some. Never raises."""
     try:
-        raw = (root / LOST_STOPS_NAME).read_bytes()
+        raw = read_kept(root / LOST_STOPS_NAME, CURSOR_FILE_MAX_BYTES)
     except FileNotFoundError:
         return LostStops()
     except OSError:

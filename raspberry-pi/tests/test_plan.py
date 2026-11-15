@@ -2548,9 +2548,16 @@ def test_the_plan_depends_only_on_the_vocabulary_and_the_units() -> None:
     one, and keeping the dependency thin is what lets the store be loaded at
     startup before any hardware exists. The medical parameters are the one
     other source it reads: the floors and the zone ceiling it checks are theirs.
+    Its files it reads as every kept file is read (``src.kept_file``), a leaf.
     """
     project_imports = {name for name in _imported_modules(PLAN_SOURCE) if name.startswith("src.")}
-    assert project_imports == {"src.medical", "src.result", "src.training.types", "src.units"}
+    assert project_imports == {
+        "src.kept_file",
+        "src.medical",
+        "src.result",
+        "src.training.types",
+        "src.units",
+    }
 
 
 def test_the_plan_never_reads_a_clock() -> None:

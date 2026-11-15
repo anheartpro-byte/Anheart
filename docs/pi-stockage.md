@@ -18,6 +18,36 @@ pas le démarrage de l'image Raspberry Pi après une coupure secteur.
 Le volume et ses sous-dossiers root ne sont jamais donnés au compte de la
 console. Le durcissement existant ne parcourt que `/var/lib/anheart`.
 
+Les fichiers que la console garde ou embarque, lus au démarrage ou au repos,
+passent par `src.kept_file.read_kept` (ANH-149) : jamais à travers un lien
+symbolique, jamais en attendant sur une FIFO, jamais lus en entier au-delà de
+leur borne. Un tel fichier est illisible, et chaque lecteur garde son chemin
+habituel pour un fichier illisible. Ce sont exactement ceux-ci :
+
+| Fichier | Borne | Illisible |
+|---|---|---|
+| `operators.json` | 1 Mio | liste refusée |
+| `operator_lockout.json` | 1 Mio | aucun échec gardé : la console verrouille de nouveau après cinq codes faux |
+| `config.applied.json`, `config.level.json` | 1 Mio | configuration refusée, la console ne démarre pas ; niveau illisible : verrous tenus à faux |
+| `drive_interventions_due.json` | 4 Kio | compte inconnu |
+| compteurs de santé | 16 Kio | compteurs inconnus |
+| état du service (redémarrages) | 64 Kio | état illisible : le démarrage compte comme non propre |
+| curseur d'un enregistrement, registre des séances perdues | 1 Mio | curseur douteux ; une perte au registre |
+| `.sync-baseline.json` | 16 Mio | refaite : les enregistrements sans curseur sont mis de côté, non envoyés |
+| marqueur de dépôt `<enregistrement>.deposit.json` | 4 Kio | aucune confirmation : l'enregistrement n'est pas purgé |
+| `profiles.local.json` | 4 Mio | mis de côté, les profils livrés prennent le relais |
+| `profiles.default.json`, paramètres médicaux | 4 Mio, 64 Kio | la console ne démarre pas |
+| signature et clé publique des paramètres médicaux | 4 Kio | non signés : banc seulement, personne à bord |
+| `anheart_catalog.pub` | 4 Kio | aucune clé : rien de ce qu'elle vérifie (catalogue, configuration, liste des opérateurs) n'est pris pour signé |
+| `VERSION` | 1 Kio | version inconnue, dite au tableau de bord |
+
+Ne passent **pas** par `read_kept`, à faire : les fichiers d'un enregistrement
+sous `data/records/`, lus par `src/record/reader.py` (manifeste, membres),
+`src/record/upload.py` (manifeste), `src/record/deposit_files.py` (manifeste,
+`checksums.sha256`) et `src/record/retention.py` (`checksums.sha256`, pour
+l'empreinte que le marqueur de dépôt vérifie). Une FIFO à leur place bloque le
+fil de travail qui les lit, pas le démarrage.
+
 ## Mise en service, console et Docker arrêtés
 
 Préparer un volume **LUKS2 déjà formaté en ext4**, vide, et conserver une copie

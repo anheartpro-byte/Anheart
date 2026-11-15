@@ -212,7 +212,8 @@ def test_a_cursor_the_disk_refuses_to_give_is_unusable_too(tmp_path: Path) -> No
     found = load(record)
 
     assert isinstance(found, UnreadableCursor)
-    assert found.detail.startswith(("IsADirectoryError", "PermissionError"))
+    # Read as a kept file: not a regular file (EINVAL); Windows will not open it at all.
+    assert found.detail.startswith(("OSError:EINVAL", "PermissionError"))
 
 
 def test_a_stored_cursor_replaces_the_previous_one_whole(tmp_path: Path) -> None:

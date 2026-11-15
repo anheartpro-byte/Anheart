@@ -36,8 +36,9 @@ from typing import Final, assert_never, cast
 
 import httpx
 
-from src.console_access import read_kept, replace_file
+from src.console_access import replace_file
 from src.contract import CONTRACT_HEADER, CONTRACT_VERSION
+from src.kept_file import read_kept
 from src.local_config import (
     KEY_CONVEX_URL,
     KEY_MACHINE_API_KEY,
@@ -194,7 +195,7 @@ def render_paired(link: PairedLink) -> bytes:
 def read_paired(path: Path) -> Result[PairedLink | None, str]:
     """The file a pairing wrote, ``None`` when there is none, or why it is not read.
 
-    Read as every file the console keeps is (:func:`~src.console_access.read_kept`):
+    Read as every file the console keeps is (:func:`~src.kept_file.read_kept`):
     opened without following a link and without waiting, then judged on what was opened,
     a regular file of at most :data:`MAX_FILE_BYTES`. Then ASCII, and the three keys of
     :func:`parse_paired`. Never raises.

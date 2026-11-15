@@ -154,7 +154,7 @@ from pydantic import ConfigDict, Field, TypeAdapter, ValidationError
 from pydantic.dataclasses import dataclass as validated
 
 from src.clock import Clock
-from src.console_access import read_kept, replace_file
+from src.console_access import replace_file
 from src.contract import (
     ARMING_REFUSALS,
     CONTRACT_HEADER,
@@ -185,6 +185,7 @@ from src.control_surface import (
     SurfaceBusy,
 )
 from src.health import HealthContext, HealthWatch
+from src.kept_file import read_kept
 from src.link_state import NOT_THE_DASHBOARD, LinkHealth, LinkStatus, bounded
 from src.local_config import CardiacTiers, CloudConfig
 from src.medical import MedicalStatus
