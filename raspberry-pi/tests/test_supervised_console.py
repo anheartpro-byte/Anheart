@@ -956,10 +956,18 @@ async def test_ex2_three_restarts_after_unclean_stops_take_the_console_out_of_se
     kept = load(records / STATE_NAME)
     assert isinstance(kept, Stored)
     assert not kept.out_of_service
+    # In service again: what refuses a start now is the coast-down hold the unclean stops
+    # left (ANH-92), the longest coast from the first read, no longer the service state.
     surface = console.panel.surface
+    hub = console.panel.hub.subscribe()
     assert isinstance(surface.attest_estop_wiring(OPERATOR), Ok)
     assert isinstance(surface.submit_start_manual(occupancy=Occupancy.BENCH, operator=OPERATOR), Ok)
-    await until(lambda: state_of(console) is RuntimeState.RUNNING, 5.0, "a session, in service")
+    await until(lambda: surface.counters[1] >= 1, 10.0, "the loop's answer")
+    said = await refusals(hub)
+    assert [line.split(" : attendre")[0] for line in said] == [
+        "demarrage refuse : arbre peut-etre encore en roue libre (etage de puissance coupe, "
+        "RFRD a 0)"
+    ]
     assert await end(console) == EXIT_OK
     lines = logbook_lines(records)
     restores = [line for line in lines if str(line["detail"]).startswith("service_restored")]

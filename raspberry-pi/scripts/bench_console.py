@@ -125,7 +125,14 @@ The exit status: 0 after a Ctrl+C taken while the page was served (the
 interruption itself during the start-up wait), 143 after SIGTERM, 129 after
 SIGHUP, 4 (``EXIT_STOP_UNFINISHED``) when the stop had not finished when
 the wait ended, and 3 (``WEB_SERVER_FAILED``) when the page could not start.
-A 1 is an ordinary error, and says nothing of the stop.
+A 1 is an ordinary error, and says nothing of the stop. A 2 is an argument, or a
+``COAST_TAU_S`` the console refuses, before anything is opened.
+
+The coast-down hold outlives the process (ANH-92). The driver's stop reads RFRD
+only, which reads 0 on a stage that dropped during it. So a stop not confirmed, a
+stage read on at the last poll, or a hold still running leave ``COAST_MARK``, and
+the last line says so: the next start holds it from its first read that shows the
+stage off, the longest coast at least in the first two cases.
 
 None of this depends on the last line being written. With the terminal gone
 or the pipe broken there is nobody to read it: the line is dropped, the
@@ -160,6 +167,7 @@ import threading
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
+from pathlib import Path
 from types import FrameType
 from typing import Annotated, Final, Literal, TextIO, assert_never, override
 
@@ -180,9 +188,11 @@ from scripts.drive_link import (
     link_from_args,
 )
 from src.clock import Clock, RealClock
+from src.console_access import replace_file
 from src.geometry import CONFIRMED_GEAR_RATIO, MachineGeometry
+from src.kept_coast_hold import kept_hold, stored_hold
 from src.local_config import DriveLink, coast_tau
-from src.motor.coast import DEFAULT_COAST_TAU, CoastWatch
+from src.motor.coast import DEFAULT_COAST_TAU, CoastWatch, hold_cap, longest_hold
 from src.motor.drive import (
     BadResponse,
     CommTimeout,
@@ -233,24 +243,30 @@ def _geometry_from_env() -> MachineGeometry | None:
 GEOMETRY = _geometry_from_env()
 
 
-def _coast_tau_from_env() -> Seconds:
-    """``COAST_TAU_S`` as the console reads it; the default, said, when it is not one it takes."""
+#: The coast-down hold's time constant, as the console's (ANH-92): after the output
+#: stage drops on a shaft last read turning, Activer and Acquitter wait it out. Read from
+#: ``COAST_TAU_S`` by ``main``, which refuses to start on a value the console refuses.
+COAST_TAU: Seconds = DEFAULT_COAST_TAU
+
+#: The console's standstill threshold (``RuntimeLimits.standstill_rpm``).
+STANDSTILL_RPM = MotorRpm(1)
+
+
+def _read_coast_tau() -> Seconds:
+    """``COAST_TAU_S`` as the console reads it; ``ValueError`` on one it refuses to start on."""
     read = coast_tau(os.environ)
     match read:
         case Ok(tau):
             return tau
         case Err(problem):
-            print(f"COAST_TAU_S ignore ({problem.detail}): {DEFAULT_COAST_TAU:g} s")
-            return DEFAULT_COAST_TAU
+            raise ValueError(f"{problem.key}: {problem.detail}")
     raise assert_never(read)
 
 
-#: The coast-down hold's time constant, as the console's (ANH-92): after the output
-#: stage drops on a shaft last read turning, Activer and Acquitter wait it out.
-COAST_TAU = _coast_tau_from_env()
-
-#: The console's standstill threshold (``RuntimeLimits.standstill_rpm``).
-STANDSTILL_RPM = MotorRpm(1)
+#: Left by an exit after which the shaft may still coast (ANH-92): a stop not confirmed,
+#: a stage that may still be on or dropped unseen during the exit's own stop, a hold still
+#: running. The next start holds it from its first read that shows the stage off.
+COAST_MARK: Path = Path(__file__).resolve().parent.parent / "data" / "bench_coast_hold.json"
 
 #: Plausibility bounds derived from the nameplate. A reading outside these did
 #: not come from the drive's sensors, so it is reported as a transport fault
@@ -370,6 +386,8 @@ class BusWorker(threading.Thread):
         self._hsp_final: bool = False
         self.snap = Snapshot()
         self.exit_report: str = "-"
+        # Whether the driver's own stop at the exit confirmed a standstill.
+        self.stop_confirmed: bool = False
 
     def submit(self, cmd: Command) -> None:
         """Queue ``cmd`` for the bus thread; dropped once the stop is asked for (ANH-218).
@@ -817,6 +835,53 @@ class BusWorker(threading.Thread):
             self._built.release_port()
             raise
         self.exit_report = _stop_report(closed)
+        self.stop_confirmed = isinstance(closed, Ok)
+
+    def expect_coast(self, mark: Path) -> None:
+        """What the exit before this start left at ``mark`` (:data:`COAST_MARK`), held from
+        the first read that shows the stage off. Before the bus thread starts."""
+        left = kept_hold(
+            mark, now=RealClock().unix_millis(), trusted=False, cap=longest_hold(STANDSTILL_RPM)
+        )
+        if left is not None:
+            self._coast_watch.expect(left, "kept from the exit before this start")
+
+    def coast_after_exit(self, confirmed: bool) -> Seconds | None:
+        """What the next start must hold from its first read; ``None``: nothing (ANH-92).
+
+        Read once the bus thread is over or given up on. The driver's stop reads RFRD
+        only, which reads 0 on a stage dropped during it: a stage on at the last read, a
+        stop not ``confirmed`` or a hold not started yet leave the longest coast.
+        """
+        left = self._coast_left()
+        if confirmed and not self._coast_watch.stage_on and self._coast_watch.expected is None:
+            return left
+        parts = (hold_cap(COAST_TAU, STANDSTILL_RPM), left, self._coast_watch.expected)
+        return max(part for part in parts if part is not None)
+
+
+def _leave_coast_mark(hold: Seconds | None) -> str:
+    """Write :data:`COAST_MARK`, or remove it with nothing to hold; what to add to the last line.
+
+    Blocking, at the exit, before the process ends."""
+    if hold is None:
+        try:
+            COAST_MARK.unlink(missing_ok=True)
+        except OSError as error:
+            return f" (attente de roue libre precedente non effacee: {error})"
+        return ""
+    written = replace_file(
+        COAST_MARK, stored_hold(hold, now=RealClock().unix_millis(), trusted=False)
+    )
+    if isinstance(written, Err):
+        return (
+            f" ATTENTION: attente de roue libre NON gardee ({written.error}): avant de relancer, "
+            "attendre l'arret du bras, vu a l'oeil."
+        )
+    return (
+        f" Le prochain demarrage refusera Activer et Acquitter {math.ceil(hold)} s depuis sa "
+        "premiere lecture: l'arbre peut encore tourner en roue libre."
+    )
 
 
 def _answered_for_good(error: DriveError) -> bool:
@@ -1319,6 +1384,9 @@ def _stop_and_report(started: BusWorker, before: Mapping[signal.Signals, _Handle
             "variateur (ttO) arrete le moteur: verifier sur le variateur qu'il est a l'arret "
             "avant de relancer."
         )
+    if started.ident is not None:
+        confirmed = started.stop_confirmed and not unfinished
+        report += _leave_coast_mark(started.coast_after_exit(confirmed))
     try:
         _say_last(f"\nsortie: {report}")
     finally:
@@ -1330,7 +1398,7 @@ def _stop_and_report(started: BusWorker, before: Mapping[signal.Signals, _Handle
 
 
 def main() -> int:
-    global worker  # noqa: PLW0603
+    global worker, COAST_TAU  # noqa: PLW0603
     ap = argparse.ArgumentParser(description="Console manuelle ATV320", epilog=EXIT_HELP)
     add_link_arguments(ap)
     ap.add_argument("--max-rpm", default=os.getenv("MOTOR_MAX_RPM", "300"))
@@ -1342,6 +1410,7 @@ def main() -> int:
         host = arg_text(args, "host")
         http_port = arg_int(args, "http_port")
         link = link_from_args(args)
+        COAST_TAU = _read_coast_tau()
     except ValueError as exc:
         print(f"configuration refusee: {exc}")
         return 2
@@ -1349,6 +1418,7 @@ def main() -> int:
         ap.error(f"--max-rpm={max_rpm} doit etre dans 0..{NOMINAL_RPM}")
 
     worker = BusWorker(link, max_rpm)
+    worker.expect_coast(COAST_MARK)
     # In this order: the exit signals first, then the `try`, then the bus
     # thread. A signal that arrives once the thread exists must find both its
     # handler and the `finally` below.

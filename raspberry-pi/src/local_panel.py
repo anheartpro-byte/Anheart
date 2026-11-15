@@ -245,7 +245,7 @@ from src.motor.atv320 import (
     AuxiliaryRegisterReads,
     serial_master,
 )
-from src.motor.coast import hold_cap
+from src.motor.coast import longest_hold
 from src.motor.drive import DriveBackend, LogicInput, RegisterMap
 from src.motor.simulated import SimulatedDrive, SimulatedDriveConfig
 from src.motor.sto import (
@@ -2445,6 +2445,11 @@ class LocalPanel:
             self._record_command(record_commands.Shutdown())
             report = await self._runtime.shutdown("console exit")
             detail = report.detail
+        # ANH-92: a stage that may still be on, or that dropped unseen during this exit's
+        # own stop (RFRD reads 0 either way), leaves the next start the longest coast.
+        if self._runtime.coast_stage_on:
+            self._runtime.expect_coast("the console exited with the output stage maybe on")
+        self._coast_keeper.keep(self._runtime, self._clock, self._clock.monotonic())
         recorder = self._recorder
         if recorder is not None:
             recorder.finish(self._clock.monotonic(), self._runtime, detail)
@@ -2458,7 +2463,10 @@ class LocalPanel:
             await self._cloud.close()
         if self._transport is not None:
             await self._transport.close()
-        self._coast_keeper.close()
+        if not self._coast_keeper.close():
+            # The next start would hold nothing: it must take this stop for an unclean one.
+            self._stalled_at_stop = True
+            _logger.error("coast-down hold not kept for the next start: not a clean stop")
         return detail
 
 
@@ -2832,16 +2840,24 @@ def build_panel(  # noqa: PLR0915  # one statement per wired part
             else ESTOP_ATTESTATION
         ),
     )
-    # A hold the process before this one left: kept across the restart (ANH-92).
+
+    # A hold the process before this one left, kept across the restart; and after an
+    # unclean stop, whose last reads nobody kept, the longest coast (ANH-92). Both from the
+    # first read that shows the stage off.
+    def clock_trusted() -> bool:
+        return watch is not None and is_trusted(watch.current())
+
     hold_path = profiles_path.parent / COAST_HOLD_FILE
     kept = kept_hold(
         hold_path,
         now=clock.unix_millis(),
-        trusted=watch is not None and is_trusted(watch.current()),
-        cap=hold_cap(config.coast_tau, RUNTIME_LIMITS.standstill_rpm),
+        trusted=clock_trusted(),
+        cap=longest_hold(RUNTIME_LIMITS.standstill_rpm),
     )
     if kept is not None:
-        runtime.hold_coast(clock.monotonic(), kept, "kept from the process before this start")
+        runtime.expect_coast("kept from the process before this start", kept)
+    if service is not None and service.status().unclean_stop:
+        runtime.expect_coast("the process before this start did not stop cleanly")
     hub = TelemetryHub(clock=clock)
     ecg_side = build_ecg_client(config, clock)
     recorder = (
@@ -2967,7 +2983,7 @@ def build_panel(  # noqa: PLR0915  # one statement per wired part
         config=config,
         drive=drive,
         runtime=runtime,
-        coast_keeper=HoldKeeper(hold_path),
+        coast_keeper=HoldKeeper(hold_path, clock_trusted),
         watchdog=watchdog,
         surface=surface,
         hub=hub,

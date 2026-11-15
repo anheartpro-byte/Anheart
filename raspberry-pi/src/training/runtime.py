@@ -179,6 +179,7 @@ from src.motor.coast import (
     MIN_COAST_TAU,
     CoastWatch,
     hold_cap,
+    longest_hold,
 )
 from src.motor.drive import (
     DEFAULT_MAX_MOTOR_HZ,
@@ -1863,15 +1864,40 @@ class TrainingRuntime:
     def hold_coast(self, now: Monotonic, hold: Seconds, why: str) -> None:
         """Hold every start and fault reset for ``hold``, capped, never shortening one.
 
-        Called by :meth:`_note_stage`, and by the console at boot with the hold the
-        previous process left (``LocalPanel``).
+        Called by :meth:`_note_stage`. Capped at the longest hold any ``COAST_TAU_S``
+        gives, not at this runtime's: what a process before this one kept is never cut
+        short by a lower one (:func:`~src.motor.coast.longest_hold`). A hold this runtime
+        computes is within its own cap already.
         """
-        capped = min(hold, hold_cap(self._limits.coast_tau, self._limits.standstill_rpm))
+        capped = min(hold, longest_hold(self._limits.standstill_rpm))
         until = Monotonic(now + capped)
         if self._coast_until is not None and self._coast_until >= until:
             return
         self._coast_until = until
         _logger.warning("coast-down hold: %s; starts and resets refused for %.0f s", why, capped)
+
+    def expect_coast(self, why: str, hold: Seconds | None = None) -> None:
+        """A coast no read of this runtime saw may be under way: the next read that shows the
+        stage off holds ``hold`` from then (:meth:`CoastWatch.expect`).
+
+        ``None``: the longest coast on this runtime's ``COAST_TAU_S``, one from the
+        nameplate. Called by the console at boot, with what the process before it left
+        or after it stopped uncleanly, and at its exit with the stage maybe still on.
+        """
+        cap = hold_cap(self._limits.coast_tau, self._limits.standstill_rpm)
+        expected = cap if hold is None else min(hold, longest_hold(self._limits.standstill_rpm))
+        self._coast_watch.expect(expected, why)
+
+    @property
+    def coast_expected(self) -> Seconds | None:
+        """The hold :meth:`expect_coast` asked for that no read has started; ``None``: none."""
+        return self._coast_watch.expected
+
+    @property
+    def coast_stage_on(self) -> bool:
+        """Whether the output stage may be on: the last read showed it, or this runtime
+        believes it live. A console leaving now may leave a coast no read sees."""
+        return self._coast_watch.stage_on or self._enabled
 
     def _note_stage(self, now: Monotonic, status: DriveStatus, period: Seconds) -> None:
         """Every read: start the coast-down hold when it shows the stage dropped (ANH-92)."""
@@ -2638,6 +2664,10 @@ class TrainingRuntime:
         """Judge what was read, then energise the output stage with a zero reference."""
         if status.state is DriveState.OPERATION_ENABLED:
             return await self._refuse_precommanded(now, status)
+        # This read may be the first there is, and have started a hold (_note_stage).
+        held = self.coast_hold_remaining(now)
+        if held is not None:
+            return CoastDownHold(held)
         if status.fault_present:
             # No automatic fault reset, anywhere. "Reset it and see" with a
             # person inside the machine is how a short circuit becomes a fire.

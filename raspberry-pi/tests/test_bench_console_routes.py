@@ -21,6 +21,7 @@ from collections.abc import AsyncGenerator, AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from http import HTTPStatus
+from pathlib import Path
 from typing import Final, cast
 
 import httpx
@@ -28,10 +29,12 @@ import pytest
 
 import scripts.bench_console as bench
 from scripts.drive_link import BuiltDrive
-from src.clock import Clock, ManualClock
+from src.clock import Clock, ManualClock, RealClock
 from src.geometry import MachineGeometry
+from src.kept_coast_hold import stored_hold
 from src.local_config import DriveLink, load_local_config
 from src.motor.atv320 import ATV320Drive, ModbusMaster
+from src.motor.coast import hold_cap
 from src.motor.drive import ControlWord, RegisterMap
 from src.result import Ok
 from src.units import Metres, Seconds
@@ -148,10 +151,12 @@ async def started(
     monkeypatch: pytest.MonkeyPatch,
     prepare: Callable[[FakeBus], None] | None = None,
     line: Callable[[FakeBus], ModbusMaster] | None = None,
+    mark: Path | None = None,
 ) -> AsyncGenerator[Bench]:
     """The bench over a fresh in-memory drive; ``prepare`` shapes that drive before the
     bus thread first opens it, and ``line``, when given, is what the driver talks to
-    instead of the drive itself (a line that loses some frames, say)."""
+    instead of the drive itself (a line that loses some frames, say). ``mark`` is what
+    the exit before this start left (``COAST_MARK``)."""
     clock = ManualClock()
     regs = RegisterMap()
     bus = FakeBus(clock, regs)
@@ -185,6 +190,8 @@ async def started(
     monkeypatch.setattr(bench, "build_drive", build)
     monkeypatch.setattr(bench, "LEAVING", threading.Event())
     worker = bench.BusWorker(_link(), max_rpm=300)
+    if mark is not None:
+        worker.expect_coast(mark)
     monkeypatch.setattr(bench, "worker", worker)
     page = httpx.AsyncClient(transport=httpx.ASGITransport(app=bench.app), base_url="http://bench")
     worker.start()
@@ -929,7 +936,8 @@ async def test_after_the_stage_drops_on_a_turning_shaft_enable_and_reset_wait_ou
             await asyncio.sleep(0.1)
         rig.worker.snap.last_action = "-"  # the refused reset's result is not this one's
         await rig.press("/api/fault-reset")
-        assert await rig.result("fault_reset") == "fault_reset: ok"
+        reset = await rig.result("fault_reset")
+        assert reset == "fault_reset: ok"
 
 
 async def test_a_stop_at_standstill_before_the_stage_drops_holds_nothing(rig: Bench) -> None:
@@ -938,4 +946,48 @@ async def test_a_stop_at_standstill_before_the_stage_drops_holds_nothing(rig: Be
     rig.bus.registers[rig.regs.eta] = ETA_SWITCHED_ON
     await rig.polled()
     await rig.polled()
-    assert await coast_hold_shown(rig) is None
+    shown = await coast_hold_shown(rig)
+    assert shown is None
+    assert rig.worker.coast_after_exit(confirmed=True) is None, "nothing for the next start"
+
+
+async def test_what_an_exit_leaves_the_next_start(rig: Bench) -> None:
+    """The driver's stop at the exit reads RFRD only, which a stage dropped during it reads
+    0 too: a stage on at the last read, or a stop not confirmed, leaves the longest coast."""
+    cap = hold_cap(bench.COAST_TAU, bench.STANDSTILL_RPM)
+    assert rig.worker.coast_after_exit(confirmed=True) is None
+    assert rig.worker.coast_after_exit(confirmed=False) == cap
+    await rig.armed_and_enabled()
+    rig.bus.registers[rig.regs.rfrd] = TURNING_RPM
+    await rig.polled()
+    assert rig.worker.coast_after_exit(confirmed=True) == cap
+
+
+async def test_a_start_after_an_exit_that_left_a_coast_holds_it_from_its_first_read(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """What the exit before left (an unconfirmed stop, exit 4 among them): LFRD reads 0, the
+    stage is off, and Activer still waits for the coast."""
+    mark = tmp_path / "bench_coast_hold.json"
+    mark.write_bytes(stored_hold(Seconds(1.5), now=RealClock().unix_millis(), trusted=False))
+    async with started(monkeypatch, mark=mark) as rig:
+        armed = await rig.press("/api/arm", {"motor_uncoupled": True})
+        assert armed.status_code == HTTPStatus.OK
+        assert whole_seconds(await coast_hold_shown(rig)) in {1, 2}
+        await rig.press("/api/enable")
+        shown = await rig.result("enable")
+        assert "activation refusee (arbre peut-etre encore en roue libre" in shown, shown
+        deadline = time.monotonic() + WAIT_S
+        while await coast_hold_shown(rig) is not None:
+            assert time.monotonic() < deadline, "the hold never ran out"
+            await asyncio.sleep(0.1)
+        rig.worker.snap.last_action = "-"
+        await rig.press("/api/enable")
+        enabled = await rig.result("enable")
+        assert enabled.startswith("enable: ok"), enabled
+
+
+def whole_seconds(shown: object) -> int:
+    """The countdown the page shows, in whole seconds: there is one."""
+    assert isinstance(shown, int)
+    return shown

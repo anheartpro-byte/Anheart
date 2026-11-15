@@ -50,7 +50,8 @@ exactement ceux-ci :
 | les autres fichiers d'un enregistrement relus en entier (`ticks.csv`, `sensors.csv`, `events.jsonl`, `drive_frames.jsonl`, blocs ECG) | celles de `FILE_BOUNDS` et `LARGEST_BLOCK_FILE` (`src/record/reader.py`) | `reader.read` : refusé. Il les juge déjà par `lstat` avant d'en lire un octet ; la lecture gardée ferme la fenêtre entre ce contrôle et la lecture. Chaque fichier que `checksums.sha256` liste est haché par morceaux (`open_kept`), au plus à la borne de son nom (la sienne, celle d'un bloc sous `ecg_raw/`, la plus grande pour un autre) : un lien est refusé, une FIFO, qui n'est pas un fichier, est dite manquante sans être ouverte |
 | un document de configuration gardé sous son empreinte (`config/<sha>.json`) | 64 Kio (`MAX_CONFIG_BYTES`) | `configuration.persist`, sur le fil du journal : un avertissement de la séance, le document n'est pas remplacé |
 | chaque fichier d'un enregistrement, à sa fermeture | haché par morceaux (`open_kept`) | `Writer.close`, sur le fil du journal : un lien planté fait échouer la fermeture (aucun `checksums.sha256` : l'enregistrement n'est pas pris pour fermé ni déposé) ; une FIFO n'est ni listée ni ouverte |
-| `coast_hold.json`, l'attente de roue libre (ANH-92) | 4 Kio | l'attente la plus longue, depuis la plaque : 289 s avec `COAST_TAU_S` à 40 s |
+| `coast_hold.json`, l'attente de roue libre (ANH-92) | 4 Kio | l'attente la plus longue que `COAST_TAU_S` admet, depuis la plaque : 2169 s (300 s × ln 1380), quelle que soit sa valeur, depuis la première lecture qui montre l'étage coupé |
+| `bench_coast_hold.json`, l'attente que l'outil de banc laisse à son démarrage suivant (ANH-92) | 4 Kio | la même, 2169 s |
 
 `O_NOFOLLOW` ne garde que le dernier élément d'un chemin. Un enregistrement dont
 le répertoire, ou son `ecg_raw`, est un lien est donc refusé à part, par

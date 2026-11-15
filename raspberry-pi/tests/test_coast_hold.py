@@ -12,14 +12,16 @@ from __future__ import annotations
 import logging
 import math
 import os
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Final, final, override
 
 import httpx
 import pytest
 
+from src import kept_coast_hold
 from src.clock import ManualClock
-from src.kept_coast_hold import COAST_HOLD_FILE, HoldKeeper, kept_hold
+from src.kept_coast_hold import COAST_HOLD_FILE, HoldKeeper, kept_hold, stored_hold
 from src.local_config import coast_tau
 from src.local_panel import describe_reset_refusal, describe_start_refusal
 from src.motor.coast import (
@@ -30,6 +32,7 @@ from src.motor.coast import (
     CoastWatch,
     coast_hold,
     hold_cap,
+    longest_hold,
 )
 from src.motor.drive import DriveFault, DriveState, DriveStatus
 from src.motor.sto import SimulatedStoChain
@@ -47,13 +50,22 @@ from src.units import (
 )
 from src.wall_clock import Synchronised, Unsynchronised, WallClockProbe, WallClockState
 from src.web.schemas import SnapshotRow
-from tests.test_failure_rig import OPERATOR, Rig, make_rig, start_manual
+from tests.test_failure_rig import (
+    BENCH_ENV,
+    OPERATOR,
+    Rig,
+    make_rig,
+    precommanded,
+    start_manual,
+)
+from tests.test_out_of_service_console import console
 
 TAU: Final[Seconds] = DEFAULT_COAST_TAU
 ONE: Final[MotorRpm] = MotorRpm(1)
 TICK: Final[Seconds] = Seconds(0.2)
 IDLE_POLL: Final[Seconds] = Seconds(0.5)
 START_MS: Final[int] = 1_700_000_000_000
+HOUR_MS: Final[int] = 3_600_000
 
 
 def status(state: DriveState, rpm: int, lfrd: int = 0, *, word: int = 0x0637) -> DriveStatus:
@@ -118,7 +130,7 @@ def test_a_read_with_the_stage_off_after_one_that_drove_the_shaft_starts_a_hold(
     started = watch.note(status(dropped, 0, 1000), TICK)
     assert started == CoastStart(
         coast_hold(MotorRpm(1000), since_read=TICK, tau=TAU, standstill=ONE),
-        "the output stage dropped at 1000 motor rpm",
+        "the output stage dropped at 1000 motor rpm, LFRD 1000",
     )
     # Once: the next read with the stage still off starts nothing more.
     assert watch.note(status(dropped, 0, 1000), TICK) is None
@@ -240,9 +252,8 @@ async def test_an_sto_opening_at_speed_holds_starts_through_the_acknowledgement(
         await rig.tick(1.4)
         assert held(rig) is None
         assert state_of(rig) is RuntimeState.FINISHED
-        assert isinstance(
-            await rig.panel.runtime.start_manual(Occupancy.BENCH, OPERATOR, MotorRpm(276)), Ok
-        )
+        accepted = await rig.panel.runtime.start_manual(Occupancy.BENCH, OPERATOR, MotorRpm(276))
+        assert isinstance(accepted, Ok)
     await rig.panel.close()
 
 
@@ -271,7 +282,8 @@ async def test_a_resettable_fault_while_the_arm_coasts_is_not_reset_until_the_ho
         assert left is not None
         await rig.tick(left + 0.4)
         assert rig.simulator.shaft_rpm == 0
-        assert isinstance(await rig.panel.runtime.fault_reset(), Ok)
+        reset = await rig.panel.runtime.fault_reset()
+        assert isinstance(reset, Ok)
     await rig.panel.close()
 
 
@@ -295,9 +307,11 @@ async def test_a_drop_seen_after_a_lost_read_holds_from_the_read_that_sees_it(
     await rig.panel.close()
 
 
-async def started_hold(tmp_path: Path) -> tuple[Rig, Seconds]:
+async def started_hold(
+    tmp_path: Path, probe: WallClockProbe | None = None, env: Mapping[str, str] = BENCH_ENV
+) -> tuple[Rig, Seconds]:
     """A console whose hold has just started, and that hold."""
-    rig, _ = make_rig(tmp_path)
+    rig, _ = make_rig(tmp_path, wall_clock=probe, env=env)
     async with rig.http() as session:
         await at_speed(rig, session)
         chain_of(rig).open(rig.clock.monotonic())
@@ -307,36 +321,195 @@ async def started_hold(tmp_path: Path) -> tuple[Rig, Seconds]:
     return rig, left
 
 
-def restarted(tmp_path: Path, wall: UnixMillis, probe: WallClockProbe) -> Rig:
+def restarted(
+    tmp_path: Path, wall: UnixMillis, probe: WallClockProbe, env: Mapping[str, str] = BENCH_ENV
+) -> Rig:
     """A new console on the same data, its wall clock at ``wall``, attested."""
-    rig, _ = make_rig(tmp_path, clock=ManualClock(Monotonic(10.0), wall), wall_clock=probe)
+    clock = ManualClock(Monotonic(10.0), wall)
+    rig, _ = make_rig(tmp_path, clock=clock, wall_clock=probe, env=env)
     assert isinstance(rig.panel.runtime.confirm_estop_wiring(OPERATOR), Ok)
     return rig
 
 
-@pytest.mark.parametrize("trusted", [True, False], ids=["trusted_clock", "untrusted_clock"])
-async def test_a_restart_mid_hold_keeps_it_to_its_end_or_whole(
-    tmp_path: Path, trusted: bool
+@pytest.mark.parametrize(
+    ("written", "read"),
+    [(TRUSTED, TRUSTED), (TRUSTED, UNTRUSTED), (UNTRUSTED, TRUSTED), (UNTRUSTED, UNTRUSTED)],
+    ids=["kept_then_kept", "kept_then_lost", "set_right_in_between", "never_kept"],
+)
+async def test_a_restart_mid_hold_keeps_it_to_its_end_only_on_a_clock_kept_at_both_ends(
+    tmp_path: Path, written: Fixed, read: Fixed
 ) -> None:
-    rig, left = await started_hold(tmp_path)
+    """A clock nobody kept at the write may have been wrong by anything: an hour behind
+    here, set right by a time service before the restart. Its stored end means nothing,
+    so the whole stored length runs again."""
+    rig, left = await started_hold(tmp_path, written)
     kept = tmp_path / COAST_HOLD_FILE
     started_at = rig.clock.unix_millis()
     await rig.panel.close()
     assert kept.is_file()
     # 30 s pass while nothing runs, then a new process starts on the same data directory.
-    later = UnixMillis(rig.clock.unix_millis() + 30_000)
-    again = restarted(tmp_path, later, TRUSTED if trusted else UNTRUSTED)
-    gone = (again.clock.unix_millis() - started_at) / 1000
+    behind = HOUR_MS if written is UNTRUSTED else 0
+    again = restarted(tmp_path, UnixMillis(rig.clock.unix_millis() + 30_000 + behind), read)
+    gone = (again.clock.unix_millis() - started_at - behind) / 1000
     assert gone >= 30.0
     await again.tick(0.2)
     kept_left = held(again)
     assert kept_left is not None
-    # Trusted: to the stored end. Untrusted: the whole stored length again, never less.
-    assert kept_left == pytest.approx(left - gone - 0.2 if trusted else left - 0.2, abs=0.3)
+    # From the first read: to the stored end, or the whole stored length, never less.
+    both = written is TRUSTED and read is TRUSTED
+    assert kept_left == pytest.approx(left - gone if both else left, abs=0.3)
     refused = await again.panel.runtime.start_manual(Occupancy.BENCH, OPERATOR, MotorRpm(276))
     assert isinstance(refused, Err)
     assert isinstance(refused.error, CoastDownHold)
     await again.panel.close()
+
+
+async def test_a_restart_on_a_lower_coast_tau_s_never_shortens_the_hold_it_finds(
+    tmp_path: Path,
+) -> None:
+    """A hold started at 300 s is kept whole by a console restarted at 5 s, whose own
+    longest hold is 36 s: the cap is the longest any COAST_TAU_S gives."""
+    rig, left = await started_hold(tmp_path, env={**BENCH_ENV, "COAST_TAU_S": "300"})
+    assert left > 1500.0
+    await rig.panel.close()
+    again = restarted(
+        tmp_path,
+        rig.clock.unix_millis(),
+        UNTRUSTED,
+        env={**BENCH_ENV, "COAST_TAU_S": "5"},
+    )
+    assert hold_cap(Seconds(5.0), ONE) < 40.0
+    await again.tick(0.2)
+    assert held(again) == pytest.approx(left, abs=0.3)
+    await again.panel.close()
+
+
+async def test_after_an_unclean_stop_the_first_read_with_the_stage_off_holds_the_longest_coast(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The process before died, or froze: its last reads, its hold, nobody kept them, and
+    the exit stop it may have run zeroed LFRD. A start whose first read is its own arming
+    read is refused on that read; the hold runs from it."""
+    rig = console(tmp_path, deaths=1, monkeypatch=monkeypatch)
+    assert isinstance(rig.panel.runtime.confirm_estop_wiring(OPERATOR), Ok)
+    assert held(rig) is None, "nothing read yet: nothing started"
+    refused = await rig.panel.runtime.start_manual(Occupancy.BENCH, OPERATOR, MotorRpm(276))
+    assert isinstance(refused, Err)
+    assert isinstance(refused.error, CoastDownHold)
+    assert refused.error.remaining == pytest.approx(hold_cap(TAU, ONE))
+    assert rig.simulator.commanded_setpoint == 0
+    await rig.tick(0.2)
+    assert held(rig) == pytest.approx(hold_cap(TAU, ONE) - 0.2)
+    await rig.panel.close()
+
+
+async def test_after_an_unclean_stop_a_first_read_that_shows_the_stage_on_holds_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The drive was left driving the shaft: RFRD reads it, and the stop the console then
+    makes ends at a standstill read under torque."""
+    clock = ManualClock(Monotonic(100.0), UnixMillis(START_MS))
+    rig = console(
+        tmp_path,
+        deaths=1,
+        monkeypatch=monkeypatch,
+        clock=clock,
+        simulator=await precommanded(clock, 300),
+    )
+    await rig.tick(0.2)
+    assert held(rig) is None
+    await rig.tick(60.0)
+    assert rig.simulator.shaft_rpm == 0
+    assert held(rig) is None
+    await rig.panel.close()
+
+
+async def test_a_clean_exit_with_the_stage_maybe_on_leaves_the_longest_coast_from_the_next_read(
+    tmp_path: Path,
+) -> None:
+    """The exit's own stop reads RFRD only, which a stage dropped during it reads 0 too:
+    the next start holds the longest coast from its first read, whatever its clock says."""
+    rig, _ = make_rig(tmp_path, wall_clock=TRUSTED)
+    async with rig.http() as session:
+        await at_speed(rig, session)
+    await rig.panel.close()
+    kept = tmp_path / COAST_HOLD_FILE
+    assert kept_hold(kept, now=rig.clock.unix_millis(), trusted=True, cap=longest_hold(ONE)) == (
+        pytest.approx(hold_cap(TAU, ONE), abs=0.01)
+    ), "the whole of it, the clock not believed"
+    again = restarted(tmp_path, UnixMillis(rig.clock.unix_millis() + HOUR_MS), TRUSTED)
+    await again.tick(0.2)
+    assert held(again) == pytest.approx(hold_cap(TAU, ONE), abs=0.01)
+    await again.panel.close()
+
+
+async def test_a_hold_the_exit_cannot_keep_makes_the_stop_an_unclean_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The next start would find no hold: it must count this stop as unclean, and hold the
+    longest coast from its first read."""
+
+    def refused(_path: Path, _content: bytes) -> Err[str]:
+        return Err("the disk refuses")
+
+    monkeypatch.setattr(kept_coast_hold, "replace_file", refused)
+    rig, _ = await started_hold(tmp_path)
+    assert not rig.panel._stalled_at_stop  # pyright: ignore[reportPrivateUsage]
+    await rig.panel.close()
+    assert rig.panel._stalled_at_stop  # pyright: ignore[reportPrivateUsage]
+
+
+def expected_of(watch: CoastWatch) -> Seconds | None:
+    """Read afresh: a checker would otherwise keep a narrowing across a call."""
+    return watch.expected
+
+
+def test_an_expected_hold_starts_at_the_next_read_that_shows_the_stage_off() -> None:
+    watch = CoastWatch(tau=TAU, standstill=ONE)
+    watch.expect(Seconds(100.0), "a drop nobody saw")
+    watch.expect(Seconds(50.0), "a shorter one")
+    assert expected_of(watch) == 100.0
+    assert watch.note(status(DriveState.FAULT, 0), TICK) == CoastStart(
+        Seconds(100.0), "a drop nobody saw"
+    )
+    assert expected_of(watch) is None
+    # The longer of it and what the read itself starts.
+    found = CoastWatch(tau=TAU, standstill=ONE)
+    found.expect(Seconds(1.0), "a short one")
+    started = found.note(status(DriveState.FAULT, 0, 149), TICK)
+    assert started is not None
+    assert started.hold == pytest.approx(40.0 * math.log(149))
+    # A read that shows the stage on reads the shaft: nothing is expected any more.
+    driven = CoastWatch(tau=TAU, standstill=ONE)
+    driven.expect(Seconds(100.0), "a drop nobody saw")
+    assert driven.note(status(DriveState.OPERATION_ENABLED, 0), TICK) is None
+    assert driven.stage_on
+    assert expected_of(driven) is None
+    assert driven.note(status(DriveState.READY, 0), TICK) is None
+
+
+def test_a_reference_written_in_one_jump_bounds_the_hold_whatever_the_last_speed_read() -> None:
+    """The bench's slider writes LFRD in one jump: read at 100 rpm towards 1000, then the
+    link lost, then the drop. The shaft may have gone all the way to the reference."""
+    watch = CoastWatch(tau=TAU, standstill=ONE)
+    assert watch.note(status(DriveState.OPERATION_ENABLED, 100, 1000), IDLE_POLL) is None
+    started = watch.note(status(DriveState.FAULT, 0, 1000), IDLE_POLL)
+    assert started == CoastStart(
+        Seconds(40.0 * math.log(1000)), "the output stage dropped at 100 motor rpm, LFRD 1000"
+    )
+    # The reference read with the last read that drove the shaft counts too: LFRD zeroed
+    # by the time the drop is read says nothing of where the ramp had taken the shaft.
+    zeroed = CoastWatch(tau=TAU, standstill=ONE)
+    assert zeroed.note(status(DriveState.OPERATION_ENABLED, 100, 1000), IDLE_POLL) is None
+    started = zeroed.note(status(DriveState.FAULT, 0, 0), IDLE_POLL)
+    assert started is not None
+    assert started.hold == pytest.approx(40.0 * math.log(1000))
+    # Read at rest under torque, a reference just written: no longer nothing.
+    resting = CoastWatch(tau=TAU, standstill=ONE)
+    assert resting.note(status(DriveState.OPERATION_ENABLED, 0, 0), TICK) is None
+    started = resting.note(status(DriveState.SWITCH_ON_DISABLED, 0, 500), TICK)
+    assert started is not None
+    assert started.hold == pytest.approx(40.0 * math.log(500))
 
 
 async def test_the_hold_file_goes_once_the_hold_is_over_and_a_bad_one_is_the_longest(
@@ -371,7 +544,9 @@ async def test_a_hold_is_never_shortened_by_a_shorter_one(tmp_path: Path) -> Non
     runtime.hold_coast(now, Seconds(10.0), "a shorter one")
     assert runtime.coast_hold_remaining(now) == pytest.approx(100.0)
     runtime.hold_coast(now, Seconds(10_000.0), "a longer one, capped")
-    assert runtime.coast_hold_remaining(now) == pytest.approx(hold_cap(TAU, ONE))
+    # At the longest hold of any COAST_TAU_S, not this console's: 300 ln 1380.
+    assert runtime.coast_hold_remaining(now) == pytest.approx(longest_hold(ONE))
+    assert round(longest_hold(ONE)) == 2169
     await rig.panel.close()
 
 
@@ -405,12 +580,15 @@ def test_a_kept_hold_is_never_longer_than_the_cap_nor_kept_once_over(tmp_path: P
     kept = tmp_path / COAST_HOLD_FILE
     cap = Seconds(100.0)
     now = UnixMillis(START_MS)
-    kept.write_text(
-        f'{{"until_unix_ms": {START_MS + 500_000}, "remaining_s": 500.0}}', encoding="utf-8"
-    )
+    kept.write_bytes(stored_hold(Seconds(500.0), now=now, trusted=True))
     assert kept_hold(kept, now=now, trusted=True, cap=cap) == cap
     assert kept_hold(kept, now=now, trusted=False, cap=cap) == cap
-    kept.write_text(f'{{"until_unix_ms": {START_MS - 1}, "remaining_s": 0.0}}', encoding="utf-8")
+    # Written on a clock an hour behind that nobody kept, read once one keeps it: its
+    # stored end is an hour gone, and means nothing. The whole of it runs again.
+    behind = UnixMillis(START_MS - HOUR_MS)
+    kept.write_bytes(stored_hold(Seconds(50.0), now=behind, trusted=False))
+    assert kept_hold(kept, now=now, trusted=True, cap=cap) == 50.0
+    kept.write_bytes(stored_hold(Seconds(0.0), now=UnixMillis(START_MS - 1), trusted=True))
     assert kept_hold(kept, now=now, trusted=True, cap=cap) is None
     assert kept_hold(kept, now=now, trusted=False, cap=cap) is None
 
@@ -435,12 +613,12 @@ async def test_a_hold_the_disk_refuses_is_said_and_the_console_goes_on(
     (tmp_path / "a_directory").mkdir()
     (tmp_path / "a_file").write_text("not a directory", encoding="utf-8")
     with caplog.at_level(logging.WARNING, logger="src.kept_coast_hold"):
-        nowhere = HoldKeeper(tmp_path / "a_file" / COAST_HOLD_FILE)
+        nowhere = HoldKeeper(tmp_path / "a_file" / COAST_HOLD_FILE, lambda: False)
         nowhere.keep(runtime, rig.clock, now)
-        nowhere.close()
-        stuck = HoldKeeper(tmp_path / "a_directory")
+        assert not nowhere.close(), "a hold the disk refused is said not kept"
+        stuck = HoldKeeper(tmp_path / "a_directory", lambda: False)
         stuck.keep(runtime, rig.clock, Monotonic(now + 31.0))  # over: the file is removed
-        stuck.close()
+        assert stuck.close(), "a file left behind is a hold for nothing, not one missing"
     assert "coast-down hold not kept across a restart" in caplog.text
     assert "coast-down hold file not removed" in caplog.text
     await rig.panel.close()

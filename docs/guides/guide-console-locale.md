@@ -1223,7 +1223,11 @@ refusé (`demarrage refuse : arbre peut-etre encore en roue libre (etage de puis
 un reset de défaut aussi, et la séance reste en `cooldown`. Aucun acquittement ne lève
 cette attente : seul le temps. Sa durée vient de `COAST_TAU_S` (40 s par défaut, à
 mesurer au banc) et de la dernière vitesse lue : environ 215 s depuis 3 tr/min au bras.
-Elle est gardée à travers un redémarrage de la console.
+Elle est gardée à travers un redémarrage de la console. Après un arrêt non propre
+(console tuée, figée, plantée, coupure de courant), ou une sortie avec l'étage de
+puissance peut-être encore en marche (sortie en séance), la console relancée tient
+l'attente la plus longue, depuis la plaque, dès sa première lecture qui montre l'étage
+coupé : 289 s avec 40 s, 72 s avec 10 s, même si le bras ne tournait pas.
 
 **Pendant un gel, un programme fait quand même son retour au calme.** Un gel `freeze`
 tient la vitesse d'un programme pendant `warmup` et `hold`. Quand le programme arrive à
@@ -2547,10 +2551,23 @@ ln(v), v étant cette vitesse plus une période de lecture de la rampe la plus r
 action le dit, `ECHEC: activation refusee (arbre peut-etre encore en roue libre (etage
 coupe, RFRD a 0): attendre encore N s)`, la page affiche le compte à rebours et grise les
 deux boutons. Avec la valeur par défaut, 40 s, depuis 3 tr/min au bras (149 tr/min
-moteur) : environ 231 s. `COAST_TAU_S` est lu dans l'environnement de l'outil, comme la
-console le lit ; une valeur hors de [5, 300] s est ignorée, dite, et remplacée par 40 s.
-L'outil ne garde pas cette attente à travers un redémarrage : après l'avoir relancé,
-attendre l'arrêt du bras, vu à l'œil.
+moteur) : environ 231 s. Une consigne écrite d'un coup par le curseur compte aussi :
+l'attente part de la plus grande de cette vitesse et de LFRD, lu à la même lecture ou à
+celle de la coupure. `COAST_TAU_S` est lu dans l'environnement de l'outil, comme la
+console le lit ; une valeur que la console refuse (hors de [5, 300] s, ou qui n'est pas
+un nombre) fait refuser le démarrage de l'outil aussi, code 2, avec
+`configuration refusee: COAST_TAU_S: ...`. Une sortie dont l'arrêt n'est pas confirmé
+(code 4, ou `sortie: ATTENTION`), une sortie avec l'étage peut-être encore en marche
+(bras entraîné à la dernière lecture : l'arrêt du pilote lit RFRD, qui lit 0 aussi sur
+un étage coupé pendant cet arrêt), ou pendant une attente, laisse un marqueur,
+`raspberry-pi/data/bench_coast_hold.json`, et la dernière ligne le dit
+(`Le prochain demarrage refusera Activer et Acquitter N s depuis sa premiere lecture: l'arbre peut encore tourner en roue libre.`).
+Le démarrage suivant de l'outil tient alors cette attente dès sa première lecture qui
+montre l'étage coupé : la plus longue (289 s avec 40 s, 72 s avec 10 s) après une sortie
+non confirmée ou bras entraîné, sinon ce qui restait de l'attente en cours. Un SIGKILL ou une
+coupure de courant ne laissent pas de marqueur, et la console ne lit pas celui de
+l'outil : après eux, ou avant de lancer la console après l'outil, attendre l'arrêt du
+bras, vu à l'œil.
 
 **Quand le variateur n'est pas là.** Le bandeau en haut de la page de l'outil dit
 pourquoi : `LIAISON MODBUS PERDUE.` quand plus rien ne se lit, ou `Variateur pas
@@ -2597,7 +2614,8 @@ Sa dernière ligne, `sortie: ...`, dit comment la machine a été laissée :
 
 Son code de sortie : 0 après un Ctrl+C reçu quand la page était servie (130 s'il est
 reçu pendant le démarrage), 143 après SIGTERM, 129 après SIGHUP, 4 quand l'arrêt
-n'avait pas fini au bout de l'attente, et 3 quand la page n'a pas pu démarrer. Un 1
+n'avait pas fini au bout de l'attente, 3 quand la page n'a pas pu démarrer, et 2 pour
+un argument ou un `COAST_TAU_S` refusé, avant que rien ne soit ouvert. Un 1
 est une erreur ordinaire, que la dernière ligne décrit ; il ne dit rien de l'arrêt.
 Lancé sans sortie d'erreur (`2>&-`), l'outil sort avec les mêmes codes.
 

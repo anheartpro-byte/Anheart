@@ -57,6 +57,15 @@ def hold_cap(tau: Seconds, standstill: MotorRpm) -> Seconds:
     return coast_hold(PLATE_RPM, since_read=Seconds(0.0), tau=tau, standstill=standstill)
 
 
+def longest_hold(standstill: MotorRpm) -> Seconds:
+    """The longest hold any accepted ``COAST_TAU_S`` gives: 2169 s, at 300 s.
+
+    What a hold kept across a restart is capped at, never the cap of the restarted
+    console's own ``tau``: a ``COAST_TAU_S`` lowered meanwhile never shortens a hold that
+    a process before it started."""
+    return hold_cap(MAX_COAST_TAU, standstill)
+
+
 @dataclass(frozen=True, slots=True)
 class CoastStart:
     """A hold a read starts: how long, and why, for the log."""
@@ -71,38 +80,81 @@ class CoastWatch:
 
     The stage is on in OPERATION_ENABLED, or wherever RFRD shows motion (a ramp stop, a
     fault reaction that ramps): RFRD is the output frequency. A read with the stage off
-    after one that drove the shaft at ``standstill`` or above starts a hold from that
-    speed plus one read period of the fastest ramp, however long the link was down
-    between the two. The first read there ever is, off with LFRD not zero (another
-    master, a process that died), holds from ``|LFRD|``: nothing says how fast the shaft
-    was, and the ramp never takes it past its reference.
+    after one that showed it on starts a hold from the faster of two bounds: the speed
+    that read showed, at ``standstill`` or above, plus one read period of the fastest
+    ramp; and ``|LFRD|`` read with either, which the ramp never takes the shaft past
+    however long the link was down between the two (a reference written in one jump, as
+    the bench's slider does). The first read there ever is, off with LFRD not zero
+    (another master, a process that died), holds from ``|LFRD|``: nothing says how fast
+    the shaft was. A hold :meth:`expect` asked for starts at the next read that shows
+    the stage off.
     """
 
-    __slots__ = ("_on_rpm", "_read_once", "_standstill", "_tau")
+    __slots__ = ("_expected", "_on_reference", "_on_rpm", "_read_once", "_standstill", "_tau")
 
     def __init__(self, *, tau: Seconds, standstill: MotorRpm) -> None:
         self._tau: Seconds = tau
         self._standstill: MotorRpm = standstill
         self._on_rpm: MotorRpm | None = None
+        self._on_reference: MotorRpm = MotorRpm(0)
         self._read_once: bool = False
+        self._expected: CoastStart | None = None
+
+    @property
+    def stage_on(self) -> bool:
+        """Whether the last read showed the stage on: it may still be, or drop unseen."""
+        return self._on_rpm is not None
+
+    @property
+    def expected(self) -> Seconds | None:
+        """The hold :meth:`expect` asked for that no read has started yet; ``None``: none."""
+        return None if self._expected is None else self._expected.hold
+
+    def expect(self, hold: Seconds, why: str) -> None:
+        """A drop no read here saw may have left a coast: the next read starts ``hold`` if it
+        shows the stage off, from that read. One that shows the stage on reads the shaft
+        itself, and drops it. Never shortened by a shorter one."""
+        if self._expected is None or hold > self._expected.hold:
+            self._expected = CoastStart(hold, why)
 
     def note(self, status: DriveStatus, period: Seconds) -> CoastStart | None:
         """One read, ``period`` after the one before it was due; the hold it starts, if any."""
+        expected = self._expected
+        self._expected = None
+        seen = self._seen(status, period)
+        if expected is None or self.stage_on or (seen is not None and seen.hold >= expected.hold):
+            return seen
+        return expected
+
+    def _seen(self, status: DriveStatus, period: Seconds) -> CoastStart | None:
         speed = MotorRpm(abs(status.output_rpm))
+        reference = MotorRpm(abs(status.setpoint_echo_rpm))
         first = not self._read_once
         self._read_once = True
         if status.state is DriveState.OPERATION_ENABLED or speed >= self._standstill:
             self._on_rpm = speed
+            self._on_reference = reference
             return None
         last = self._on_rpm
         self._on_rpm = None
-        if last is not None and last >= self._standstill:
-            hold = coast_hold(last, since_read=period, tau=self._tau, standstill=self._standstill)
-            return CoastStart(hold, f"the output stage dropped at {last} motor rpm")
-        if first and status.setpoint_echo_rpm != 0:
-            reference = MotorRpm(abs(status.setpoint_echo_rpm))
-            hold = coast_hold(
-                reference, since_read=Seconds(0.0), tau=self._tau, standstill=self._standstill
+        if last is not None:
+            towards = MotorRpm(max(self._on_reference, reference))
+            ramped = (
+                coast_hold(last, since_read=period, tau=self._tau, standstill=self._standstill)
+                if last >= self._standstill
+                else Seconds(0.0)
             )
-            return CoastStart(hold, f"found with the stage off and LFRD at {reference}")
+            hold = max(ramped, self._from(towards))
+            if hold == 0.0:
+                return None
+            return CoastStart(hold, f"the output stage dropped at {last} motor rpm, LFRD {towards}")
+        if first and reference != 0:
+            why = f"found with the stage off and LFRD at {reference}"
+            return CoastStart(self._from(reference), why)
         return None
+
+    def _from(self, speed: MotorRpm) -> Seconds:
+        """The hold for a shaft at ``speed`` when the stage drops."""
+        return coast_hold(
+            speed, since_read=Seconds(0.0), tau=self._tau, standstill=self._standstill
+        )

@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import errno
 import io
+import math
 import os
 import queue
 import signal
@@ -60,8 +61,10 @@ import uvicorn
 import scripts.bench_console as bench
 from scripts.drive_link import BuiltDrive
 from src.clock import Clock
+from src.kept_coast_hold import kept_hold
 from src.local_config import DriveLink, load_local_config
 from src.motor.atv320 import ATV320Drive, ModbusMaster
+from src.motor.coast import DEFAULT_COAST_TAU, hold_cap
 from src.motor.drive import (
     BadResponse,
     CommTimeout,
@@ -71,7 +74,7 @@ from src.motor.drive import (
     DriveStatus,
 )
 from src.result import Err, Ok, Result
-from src.units import Amperes, MotorRpm, Seconds, StatusWord
+from src.units import Amperes, MotorRpm, Seconds, StatusWord, UnixMillis
 
 NO_ANSWER: Final[CommTimeout] = CommTimeout(after=Seconds(0.1))
 
@@ -98,6 +101,14 @@ def _hang_up() -> signal.Signals:
 
 
 HANG_UP: Final[signal.Signals] = _hang_up()
+
+
+@pytest.fixture(autouse=True)
+def _coast_mark_here(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """The mark an exit leaves for the next start (ANH-92), never the checkout's own."""
+    monkeypatch.setattr(bench, "COAST_MARK", tmp_path / "bench_coast_hold.json")
+
+
 """The terminal going away."""
 
 BY_HANG_UP: Final[int] = 128 + int(HANG_UP)
@@ -330,6 +341,25 @@ def test_a_configuration_the_tool_refuses_ends_it_with_2_before_anything_opens(
     code = bench.main()
     assert code == 2
     assert capsys.readouterr().out.startswith("configuration refusee: ")
+    assert started == []
+
+
+@pytest.mark.parametrize("tau", ["4.9", "301", "vite"])
+def test_a_coast_time_constant_the_console_refuses_ends_the_tool_with_2_too(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tau: str
+) -> None:
+    """The console refuses to start on it (exit 2): the tool used to take 40 s instead."""
+    started: list[str] = []
+
+    def start(_self: bench.BusWorker) -> None:
+        started.append("bus")
+
+    monkeypatch.setattr(bench.BusWorker, "start", start)
+    monkeypatch.setenv("COAST_TAU_S", tau)
+    monkeypatch.setattr(sys, "argv", ["bench_console.py", "--port", "COM-NONE"])
+    code = bench.main()
+    assert code == 2
+    assert capsys.readouterr().out.startswith("configuration refusee: COAST_TAU_S: ")
     assert started == []
 
 
@@ -1275,6 +1305,16 @@ def test_a_stop_not_finished_when_the_wait_ends_is_said_and_the_process_ends_by_
     assert "Arret NON confirme" in last
     assert "Le port et le verrou du cable, encore tenus" in last
     assert "delai de communication du variateur (ttO)" in last
+    # The next start holds the longest coast from its first read (ANH-92): LFRD reads 0.
+    cap = math.ceil(hold_cap(DEFAULT_COAST_TAU, bench.STANDSTILL_RPM))
+    assert last.endswith(
+        f"Le prochain demarrage refusera Activer et Acquitter {cap} s depuis sa premiere "
+        "lecture: l'arbre peut encore tourner en roue libre."
+    ), last
+    mark = tmp_path / "bench_coast_hold.json"
+    assert kept_hold(mark, now=UnixMillis(0), trusted=False, cap=Seconds(1e6)) == (
+        pytest.approx(hold_cap(DEFAULT_COAST_TAU, bench.STANDSTILL_RPM))
+    )
 
 
 # --- the console's output taken away from under it ------------------------
@@ -1390,9 +1430,14 @@ class _StillStopping:
 
     ident: int | None = 1
     exit_report: str = "-"
+    stop_confirmed: bool = False
 
     def shutdown(self) -> None:
         """Asked to stop: it does not."""
+
+    def coast_after_exit(self, _confirmed: bool) -> Seconds | None:
+        """Nothing to keep: what is kept is another test's business."""
+        return None
 
     def join(self, timeout: float | None = None) -> None:
         """Waited for: it does not come."""
