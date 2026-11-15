@@ -87,8 +87,8 @@ class SimulatedBitalinoClient:
     :meth:`set_motor_rpm`, so this object holds no reference to the drive.
     Closing the loop is then visible in the runner::
 
-        status = await drive.read_status()
-        client.set_motor_rpm(measured_rpm)
+        drive.advance(now)
+        client.set_motor_rpm(drive.shaft_rpm)
         batch = await client.read_samples(1000)
 
     and nothing here can quietly regulate on a speed that was never commanded.
@@ -198,9 +198,11 @@ class SimulatedBitalinoClient:
     def set_motor_rpm(self, rpm: MotorRpm) -> None:
         """Tell the subject how fast the machine it is strapped into is turning.
 
-        Motor-shaft rpm, signed, as the drive reports it - the gearbox ratio is
-        applied inside the plant, so handing an output-shaft speed in here
-        would understate the load by a factor of 49.79.
+        Motor-shaft rpm, signed - the gearbox ratio is applied inside the plant,
+        so handing an output-shaft speed in here would understate the load by a
+        factor of 49.79. The shaft's own speed when the drive is simulated too
+        (``SimulatedDrive.shaft_rpm``): RFRD reads 0 with the stage off, and a
+        coasting arm still loads the rider.
         """
         self._motor_rpm = rpm
 

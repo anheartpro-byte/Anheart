@@ -370,7 +370,10 @@ class OperatorMessage:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class PrerollView:
-    """The idle console before the start: what the shaft did while nobody commanded it."""
+    """The idle console before the start: what the shaft did while nobody commanded it.
+
+    The plant's own speed (``SimulatedDrive.shaft_rpm``), a coast included, which RFRD
+    does not show with the stage off."""
 
     peak_motor_rpm: int
     final_motor_rpm: int
@@ -706,7 +709,6 @@ class Session:
         "_faulty",
         "_finished_at",
         "_last_fault",
-        "_last_measured",
         "_last_phase",
         "_last_rule",
         "_last_sto",
@@ -728,6 +730,7 @@ class Session:
         "_runtime",
         "_scenario",
         "_sensor",
+        "_shaft",
         "_shutdown_detail",
         "_sim",
         "_sink",
@@ -830,9 +833,9 @@ class Session:
         self._source: FaultySource | None = ecg.source
         self._pending: list[Action] = list(scenario.actions)
         self._attendant: bool = True
-        self._last_measured: MotorRpm = MotorRpm(0)
         self._latency_until: Monotonic | None = None
         self._rows: list[Row] = []
+        self._shaft: list[int] = []
         self._sto_observations: list[StoObservation] = []
         # The idle ticks before the start, with their instants: they are inputs of
         # a replay (the DSP and the idle poll are warm when the session starts),
@@ -930,7 +933,7 @@ class Session:
         self._manifest = manifest_for(
             self._scenario, self._ticker.clock, self._start_at, self.meta()
         )
-        self._preroll_final = abs(int(self._last_measured))
+        self._preroll_final = abs(int(self._sim.shaft_rpm))
         await self._start()
         alive = True
         while alive:
@@ -1038,7 +1041,6 @@ class Session:
             # As the console's tick and its task of its own: the ECG window, then the run.
             self._preflight.observe(snapshot)
             await self._preflight.step()
-        self._last_measured = snapshot.measured.motor_rpm
         self._counters = snapshot.counters
         self._note_messages(now, snapshot)
         if not record:
@@ -1047,6 +1049,7 @@ class Session:
         if record:
             row = self._row(now, snapshot)
             self._rows.append(row)
+            self._shaft.append(int(self._sim.shaft_rpm))
             self._sto_observations.append(
                 StoObservation(
                     at=elapsed(self._start_at, now),
@@ -1069,7 +1072,9 @@ class Session:
             self._latency_until = None
 
     async def _feed_ecg(self, now: Monotonic) -> None:
-        self._truth = self._subject.advance(now, self._last_measured)
+        """The rider and the ECG's motion are driven by the plant's own shaft, not by RFRD:
+        RFRD reads 0 with the stage off, and a coasting arm still loads the rider."""
+        self._truth = self._subject.advance(now, self._sim.shaft_rpm)
         sensor = self._sensor
         if sensor is not None:
             reading = sensor.sample(now, self._truth.heart_rate, float(self._truth.g_load))
@@ -1078,7 +1083,7 @@ class Session:
         bitalino = self._bitalino
         bridge = self._bridge
         if bitalino is not None and bridge is not None and bitalino.is_acquiring:
-            bitalino.set_motor_rpm(self._last_measured)
+            bitalino.set_motor_rpm(self._sim.shaft_rpm)
             await bridge.pump()
 
     # -- actions ------------------------------------------------------------
@@ -1280,7 +1285,7 @@ class Session:
             now = await self._ticker.next()
             self._heal(now)
             self._sim.advance(now)
-            self._truth = self._subject.advance(now, self._last_measured)
+            self._truth = self._subject.advance(now, self._sim.shaft_rpm)
         self._stalled = True
 
     def _harness_clock(self) -> HarnessClock:
@@ -1360,7 +1365,7 @@ class Session:
         self._last_rule = rule
 
     def _note_preroll(self, snapshot: TelemetrySnapshot) -> None:
-        self._preroll_peak = max(self._preroll_peak, abs(int(snapshot.measured.motor_rpm)))
+        self._preroll_peak = max(self._preroll_peak, abs(int(self._sim.shaft_rpm)))
         safety = snapshot.safety
         if safety is not None and safety.rule not in self._preroll_rules:
             self._preroll_rules.append(safety.rule)
@@ -1434,12 +1439,18 @@ class Session:
             self._sim.advance(clock.monotonic())
 
     async def _probe_shaft(self) -> MotorRpm | None:
-        """RFRD read by a fresh connection after teardown, as the e2e tests do."""
+        """The shaft's speed after teardown, once a fresh connection reaches the drive.
+
+        The connection is the e2e tests' probe: a drive that still does not
+        answer leaves the exit unknown. The speed is the plant's own, not the RFRD
+        that answer carries: with the output stage off RFRD reads 0, a coasting
+        shaft included.
+        """
         await self._sim.open()
         status = await self._sim.read_status()
         if isinstance(status, Err):
             return None
-        return status.value.output_rpm
+        return self._sim.shaft_rpm
 
     async def _result(self) -> RunResult:
         runtime = self._runtime
@@ -1464,6 +1475,7 @@ class Session:
         trace = Trace(
             meta=self.meta(),
             rows=tuple(self._rows),
+            shaft=tuple(self._shaft),
             preamble=tuple(replace(row, t=float(at) - origin) for at, row in self._preamble),
             frames=tuple(frame_to_json(frame, origin) for frame in self._drive.frames),
             events=tuple(self._events),

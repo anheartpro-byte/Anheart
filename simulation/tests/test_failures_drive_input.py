@@ -102,7 +102,9 @@ def test_a_stop_withholds_every_read_then_the_reads_resume_and_show_the_chain(na
     pairs = _pairs(result)
     stopping = [row.t for row, _ in pairs if stop_under_way(row)]
     began, ended = stopping[0], stopping[-1]
-    assert began < at < ended, (began, at, ended)
+    # The opening lands in the gap after the stop's last tick: the tick that latches
+    # it ends the stop, the stage being off and RFRD 0 (docs/securite.md, section 3).
+    assert began < at <= ended + TICK + 1e-6, (began, at, ended)
     assert any(view.reads for row, view in pairs if began - 3 * TICK <= row.t < began)
     assert not any(view.reads for row, view in pairs if began <= row.t <= ended)
     assert any(view.reads for row, view in pairs if row.t > ended)
@@ -142,10 +144,11 @@ def test_a_faulted_drive_s_coast_is_read_and_the_reading_latches_the_opening(sha
     result = _run(case)
     latched = _first_latch(result)
     assert 0.0 < latched - at <= READ_LATCH_S
+    # The plant's own speed: a faulted drive's RFRD reads 0 through its coast.
     coasting = [
         (row, view)
-        for row, view in _pairs(result)
-        if row.drive_state == "FAULT" and row.measured_motor_rpm > 1
+        for (row, view), shaft in zip(_pairs(result), result.trace.shaft, strict=True)
+        if row.drive_state == "FAULT" and shaft > 1
     ]
     assert any(view.reads for row, view in coasting if row.t < at)
     assert any(view.state is StoState.OPEN for row, view in coasting if row.t <= latched)

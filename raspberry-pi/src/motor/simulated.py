@@ -668,6 +668,18 @@ class SimulatedDrive:
         return self._state
 
     @property
+    def shaft_rpm(self) -> MotorRpm:
+        """The shaft's own speed, coast included, as of the plant's last step.
+
+        Same caveat as :attr:`sim_state`: for the simulation's physics checks and
+        the tests only. RFRD does not show it while the output stage is off
+        (:meth:`read_status`), and nothing on the drive path may read it: the
+        ATV320 offers no such register. Reading it steps nothing, so watching
+        the shaft cannot change the plant's integration.
+        """
+        return MotorRpm(round(self._rpm))
+
+    @property
     def commanded_setpoint(self) -> MotorRpm:
         """LFRD as the drive holds it, readable with the link down.
 
@@ -927,8 +939,12 @@ class SimulatedDrive:
                 status_word=word,
                 setpoint_echo_rpm=self._setpoint,
                 # Whole rpm, because that is the resolution RFRD has. Sub-rpm
-                # plant state is real but not observable, here or on copper.
-                output_rpm=MotorRpm(round(self._rpm)),
+                # plant state is real but not observable, here or on copper. And
+                # RFRD is the drive's output frequency: with the output stage off it
+                # reads 0 whatever the shaft does, a coast included, as the ATV320
+                # does (docs/securite.md, section 3). The shaft's own speed is
+                # :attr:`shaft_rpm`, for the simulation and the tests only.
+                output_rpm=MotorRpm(round(self._rpm)) if self._energised() else MotorRpm(0),
                 current=self._current(),
                 fault=None if latched is None else latched.fault,
                 fault_code=None if latched is None else latched.raw_code,

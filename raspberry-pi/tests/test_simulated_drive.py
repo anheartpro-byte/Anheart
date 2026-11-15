@@ -293,7 +293,9 @@ def test_the_two_fault_reactions_are_indistinguishable_from_outside() -> None:
 
     They share a status word because the profile gives them one, and that is a
     fact with consequences: the safety layer cannot learn from ETA whether the
-    centrifuge is being stopped or is merely free. It has to read output_rpm.
+    centrifuge is being stopped or is merely free. Nor from RFRD: it reads the
+    ramp while the stage drives and 0 once it is off, a freewheel included, the
+    same 0 as a shaft at rest (docs/securite.md, section 3).
     """
     ramping = ETA_WORDS[SimState.FAULT_REACTION_RAMP_STOP]
     coasting = ETA_WORDS[SimState.FAULT_REACTION_FREEWHEEL]
@@ -538,13 +540,59 @@ async def test_dropping_the_output_stage_leaves_the_centrifuge_turning() -> None
     assert _sim_state(sim) is SimState.READY_TO_SWITCH_ON
 
     await _run_fed(sim, clock, Seconds(0.2))
-    assert (await _status(sim)).output_rpm > MotorRpm(1300)  # not a step change
+    assert sim.shaft_rpm > MotorRpm(1300)  # not a step change
 
     await _run_fed(sim, clock, Seconds(19.8))
-    assert (await _status(sim)).output_rpm == pytest.approx(1380.0 * math.exp(-1.0), abs=2.0)
+    assert sim.shaft_rpm == pytest.approx(1380.0 * math.exp(-1.0), abs=2.0)
 
     await _run_fed(sim, clock, Seconds(40.0))
-    assert (await _status(sim)).output_rpm > MotorRpm(0)  # still turning after a minute
+    assert sim.shaft_rpm > MotorRpm(0)  # still turning after a minute
+
+
+async def _rfrd_reads_zero_through_the_coast(sim: SimulatedDrive, clock: ManualClock) -> None:
+    await _run_fed(sim, clock, Seconds(0.2))
+    assert (await _status(sim)).output_rpm == MotorRpm(0)
+    assert sim.shaft_rpm > MotorRpm(1300)
+
+    await _run_fed(sim, clock, Seconds(60.0))
+    assert (await _status(sim)).output_rpm == MotorRpm(0)
+    assert sim.shaft_rpm > MotorRpm(0)
+
+
+async def test_rfrd_reads_zero_with_the_output_stage_off_however_fast_the_shaft_coasts() -> None:
+    """RFRD is the drive's output frequency, not a speed sensor, as on the ATV320.
+
+    With the output stage on it follows the shaft; the instant word 6 drops the
+    stage it reads 0 while the shaft still turns at 1300 rpm and more, and it
+    stays 0 for the whole coast. That is the limit docs/securite.md states in
+    section 3 (a start on a shaft still coasting is not seen): a simulator that
+    showed the coast in RFRD would let a coast check pass here that cannot pass
+    on copper. Only ``shaft_rpm``, the plant's own speed, sees the coast.
+    """
+    clock = ManualClock()
+    sim = await _spun_up(clock)
+    assert (await _status(sim)).output_rpm == sim.shaft_rpm == MotorRpm(1380)
+
+    _ok(await sim.write_command(ControlWord.SHUTDOWN))
+    await _rfrd_reads_zero_through_the_coast(sim, clock)
+
+
+async def test_rfrd_reads_zero_through_a_freewheel_fault_as_well() -> None:
+    """The same 0 when a fault drops the stage: the status word says FAULT, RFRD 0."""
+    clock = ManualClock()
+    sim = await _spun_up(clock)
+    sim.inject_fault(DriveFault.DC_BUS_OVERVOLTAGE)
+    await _rfrd_reads_zero_through_the_coast(sim, clock)
+
+
+async def test_rfrd_shows_the_shaft_while_a_ramp_stop_still_drives_it() -> None:
+    """The other half: word 7 keeps the stage on, so RFRD reads the ramp down."""
+    clock = ManualClock()
+    sim = await _spun_up(clock)
+    _ok(await sim.write_command(ControlWord.SWITCH_ON))
+    await _run_fed(sim, clock, Seconds(1.0))
+    assert _sim_state(sim) is SimState.DISABLING_ON_RAMP
+    assert (await _status(sim)).output_rpm == sim.shaft_rpm == MotorRpm(1242)
 
 
 async def test_the_coast_does_eventually_reach_a_standstill() -> None:
@@ -559,7 +607,7 @@ async def test_the_coast_does_eventually_reach_a_standstill() -> None:
 
     # 20 * ln(1380) ~ 145 s to fall below 1 rpm.
     await _run_fed(sim, clock, Seconds(150.0))
-    assert (await _status(sim)).output_rpm == MotorRpm(0)
+    assert sim.shaft_rpm == MotorRpm(0)
 
 
 async def test_word_seven_ramps_the_machine_down_and_word_six_abandons_it() -> None:
@@ -597,18 +645,18 @@ async def test_word_seven_ramps_the_machine_down_and_word_six_abandons_it() -> N
     await _run_fed(ramped, ramp_clock, Seconds(1.0))
     await _run_fed(coasted, coast_clock, Seconds(1.0))
     assert (await _status(ramped)).output_rpm == MotorRpm(1242)
-    assert (await _status(coasted)).output_rpm > MotorRpm(1300)
+    assert coasted.shaft_rpm > MotorRpm(1300)
 
     # Ten seconds: the ramp is finished and the output stage is now genuinely
     # off. The freewheel is at 1380 * exp(-0.5) ~ 837 rpm and has 135 s to go.
     await _run_fed(ramped, ramp_clock, Seconds(9.0))
     await _run_fed(coasted, coast_clock, Seconds(9.0))
-    assert (await _status(ramped)).output_rpm == MotorRpm(0)
+    assert ramped.shaft_rpm == MotorRpm(0)
     assert _sim_state(ramped) is SimState.SWITCHED_ON
-    assert (await _status(coasted)).output_rpm > MotorRpm(800)
+    assert coasted.shaft_rpm > MotorRpm(800)
 
     await _run_fed(coasted, coast_clock, Seconds(120.0))
-    assert (await _status(coasted)).output_rpm > MotorRpm(0), (
+    assert coasted.shaft_rpm > MotorRpm(0), (
         "the freewheel is still turning two minutes after the 'stop'"
     )
 
@@ -661,7 +709,7 @@ async def test_a_ramp_stop_can_be_taken_back_and_abandoned_mid_way() -> None:
     await _run_fed(abandoned, abandon_clock, Seconds(8.0))
     # 1104 * exp(-0.4) ~ 740: the ramp stopped ramping the moment the output
     # stage went away, and what was left of the speed is now coasting.
-    assert (await _status(abandoned)).output_rpm > MotorRpm(700), "coasting, not ramping"
+    assert abandoned.shaft_rpm > MotorRpm(700), "coasting, not ramping"
 
 
 async def test_a_ramp_stop_of_a_machine_at_rest_is_over_before_it_starts() -> None:
@@ -883,9 +931,9 @@ def test_an_alternative_code_table_is_actually_used() -> None:
 async def test_an_injected_fault_freewheels_and_says_so_in_the_register() -> None:
     """ObF drops the drive to freewheel - the commissioning notes say so.
 
-    So the centrifuge is coasting, uncontrolled, and the only field that admits
-    it is output_rpm: the status word is the same one a controlled ramp-down
-    reports.
+    So the centrifuge is coasting, uncontrolled, and no field the drive reports
+    admits it: the status word is the same one a controlled ramp-down reports,
+    and RFRD reads 0 with the stage off. Only the plant's ``shaft_rpm`` does.
     """
     clock = ManualClock()
     sim = await _spun_up(clock)
@@ -897,7 +945,8 @@ async def test_an_injected_fault_freewheels_and_says_so_in_the_register() -> Non
     assert _sim_state(sim) is SimState.FAULT_REACTION_FREEWHEEL
 
     await _run_fed(sim, clock, Seconds(60.0))
-    assert (await _status(sim)).output_rpm == pytest.approx(1380.0 * math.exp(-3.0), abs=2.0)
+    assert sim.shaft_rpm == pytest.approx(1380.0 * math.exp(-3.0), abs=2.0)
+    assert (await _status(sim)).output_rpm == MotorRpm(0)
     assert _sim_state(sim) is SimState.FAULT_REACTION_FREEWHEEL
 
 
@@ -1014,7 +1063,7 @@ async def test_a_coasting_centrifuge_draws_nothing_while_still_turning() -> None
     await _run_fed(sim, clock, Seconds(1.0))
 
     status = await _status(sim)
-    assert status.output_rpm > MotorRpm(1000)
+    assert sim.shaft_rpm > MotorRpm(1000)
     assert status.current == Amperes(0.0)
 
 
@@ -1277,8 +1326,8 @@ async def test_the_emergency_stop_is_the_fastest_stop_available_here() -> None:
 
     await _run_fed(ramped, ramp_clock, Seconds(11.0))
     await _run_fed(coasted, coast_clock, Seconds(11.0))
-    assert (await _status(ramped)).output_rpm == MotorRpm(0)
-    assert (await _status(coasted)).output_rpm > MotorRpm(700)
+    assert ramped.shaft_rpm == MotorRpm(0)
+    assert coasted.shaft_rpm > MotorRpm(700)
 
 
 def test_emergency_disable_needs_no_event_loop() -> None:
@@ -1501,7 +1550,7 @@ async def _check_invariants_with_commands(
         _ok(await sim.write_speed(MotorRpm(raw_setpoint)))
         await sim.write_command(words[word_index % len(words)])
         sim.advance(clock.advance(dt))
-        observed = (await _status(sim)).output_rpm
+        observed = sim.shaft_rpm
 
         assert abs(observed) <= DEFAULT_SIM_CONFIG.max_rpm
         assert abs(observed - previous) <= sim.ramp_rate * dt + 1.0, _sim_state(sim)

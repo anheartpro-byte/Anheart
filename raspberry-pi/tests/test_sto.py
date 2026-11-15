@@ -356,21 +356,24 @@ async def test_sto_cuts_torque_without_polling_and_never_restarts_on_closing() -
     assert isinstance(status, Ok)
     assert status.value.status_word == ETA_WORDS[SimState.SWITCH_ON_DISABLED]
     assert status.value.current == Amperes(0.0)
-    assert status.value.output_rpm == 900
+    # The shaft coasts on; RFRD, the output frequency, reads 0 with the stage off.
+    assert status.value.output_rpm == 0
+    assert drive.shaft_rpm == 900
     assert isinstance(await drive.write_speed(MotorRpm(1300)), Ok)
     clock.advance(Seconds(1))
     status = await drive.read_status()
     assert isinstance(status, Ok)
-    assert 0 < status.value.output_rpm < 900
+    assert status.value.output_rpm == 0
+    assert 0 < drive.shaft_rpm < 900
     assert status.value.current == Amperes(0.0)
-    coasting = status.value.output_rpm
+    coasting = drive.shaft_rpm
     chain.close(clock.monotonic())
     clock.advance(Seconds(1))
     status = await drive.read_status()
     assert isinstance(status, Ok)
     assert status.value.state is DriveState.SWITCH_ON_DISABLED
     assert status.value.current == Amperes(0.0)
-    assert status.value.output_rpm < coasting
+    assert drive.shaft_rpm < coasting
     assert isinstance(await drive.write_command(ControlWord.ENABLE_OPERATION), Err)
     await enable(drive)
     enabled = await drive.read_status()

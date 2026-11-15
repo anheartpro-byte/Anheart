@@ -301,7 +301,9 @@ class Rig:
         """Judge how the machine was left; an empty string means stopped and safe.
 
         The shaft is read from the simulator directly (a fresh probe, never the
-        silent runtime's link), after the plant has run on for 60 s.
+        silent runtime's link), after the plant has run on for 60 s. The probe
+        only proves the drive answers; the speed is the plant's own, because RFRD
+        reads 0 with the output stage off, a coasting shaft included.
         """
         self.run_on(RUN_ON_S)
         sim = self.simulator
@@ -311,8 +313,8 @@ class Rig:
         await sim.open()
         status = await sim.read_status()
         if isinstance(status, Ok):
-            if abs(status.value.output_rpm) >= 1:
-                problems.append(f"shaft still at {status.value.output_rpm} motor rpm")
+            if abs(sim.shaft_rpm) >= 1:
+                problems.append(f"shaft still at {sim.shaft_rpm} motor rpm")
         else:
             problems.append(f"drive did not answer the probe: {status.error!r}")
         runtime = self.panel.runtime

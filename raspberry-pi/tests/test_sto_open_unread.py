@@ -116,6 +116,23 @@ def state_of(scene: Scene) -> RuntimeState:
     return scene.runtime.state
 
 
+async def until_the_session_is_over(scene: Scene) -> None:
+    """Tick, with no read, through the RECOVERY that follows the stop, to FINISHED.
+
+    The stop ends at the tick that latches the opening: the stage is off, RFRD
+    reads 0 as on the ATV320, and the console takes the coasting shaft for
+    stopped (docs/securite.md, section 3). So the ending's RECOVERY runs on
+    after the stop instead of passing during a coast the console saw.
+    """
+    for _ in range(1000):
+        if state_of(scene) is RuntimeState.FINISHED:
+            return
+        await scene.step()
+        assert scene.runtime.applied_rpm == 0
+        assert scene.rig.simulator.commanded_setpoint == 0
+    raise AssertionError("the session never finished")
+
+
 def refused_until_read_since(scene: Scene) -> None:
     """At the end of the stop, the acknowledgement waits for a READY reading taken since.
 
@@ -157,6 +174,7 @@ async def test_a_short_opening_in_a_manual_session_latches_at_the_next_tick_unti
     assert_latched_unread(scene, opened)
     assert isinstance(runtime.set_manual_target(OutputRpm(3)), Err)  # no new target
     await until_the_stop_is_over(scene)
+    await until_the_session_is_over(scene)
     assert runtime.state is RuntimeState.FINISHED
     refused = await scene.start()
     assert isinstance(refused, Err)

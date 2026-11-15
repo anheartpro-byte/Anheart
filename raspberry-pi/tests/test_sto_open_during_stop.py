@@ -8,6 +8,12 @@ the output stage removed while this console holds the run command, and
 closed again (``TrainingRuntime._deduce_sto_open``). Every category of stop,
 on the real console with ``STO_SOURCE=drive_input``; the same scene with a
 simulated chain read at once gives the reference the stop writes must match.
+
+That tick also ends the stop. With the output stage off RFRD reads 0, as on
+the ATV320, so the console takes the shaft for stopped and removes the run
+command while it still coasts (docs/securite.md, section 3); the reads resume
+from the next tick on. Where a test waits for the shaft itself, it reads the
+plant's ``shaft_rpm``, as the bench waits for the arm by eye.
 """
 
 from __future__ import annotations
@@ -252,7 +258,11 @@ class Stopped:
 async def stop_with_an_opening(
     scene: Scene, monkeypatch: pytest.MonkeyPatch, category: str, reclosed: bool
 ) -> Stopped:
-    """Ask for the stop; open the chain during it; close it again 2 s later, or not."""
+    """Ask for the stop; open the chain during it; close it again 10 s later, or not.
+
+    The tick that latches the opening ends the stop: the stage is off, RFRD reads
+    0 and the console takes the shaft for stopped (module docstring).
+    """
     await scene.cruise()
     asked = scene.now
     attempts = scene.attempts()
@@ -261,9 +271,6 @@ async def stop_with_an_opening(
     assert stopping(scene.runtime)
     opened = scene.now
     scene.chain.open(scene.rig.clock.monotonic())
-    await scene.run(10)
-    if reclosed:
-        scene.chain.close(scene.rig.clock.monotonic())
     ended = None
     for _ in range(1000):
         await scene.step()
@@ -272,14 +279,19 @@ async def stop_with_an_opening(
             break
         await scene.read()  # refused by the guard: no attempt while the stop is under way
     assert ended is not None
+    assert ended - opened <= TICK + 1e-9
     assert scene.sto_open, "no sto_open verdict"
-    return Stopped(
+    stopped = Stopped(
         writes=tuple(write for write in scene.writes if asked <= write[0] <= ended),
         opened=opened,
         latched=scene.sto_open[0],
         ended=ended,
         attempts=(attempts, scene.attempts()),
     )
+    await scene.run(10)
+    if reclosed:
+        scene.chain.close(scene.rig.clock.monotonic())
+    return stopped
 
 
 @pytest.mark.parametrize("reclosed", [False, True], ids=["left_open", "closed_again"])
@@ -438,7 +450,9 @@ async def test_a_chain_opening_during_a_faulted_drive_s_coast_is_read_and_latche
     status = runtime.drive_status
     assert status is not None
     assert status.state is DriveState.FAULT
-    assert status.output_rpm > 0  # the shaft still coasts: no wait for the stop
+    # The shaft still coasts, no wait for the stop, and RFRD does not show it.
+    assert status.output_rpm == 0
+    assert scene.rig.simulator.shaft_rpm > 0
     assert scene.attempts() > attempts
     await scene.run(10)
     if reclosed:
@@ -540,11 +554,15 @@ class LosesTheReadAfterArming(Noted):
 
 
 async def until_at_rest(scene: Scene) -> None:
-    """Tick until the drive's RFRD shows the shaft stopped."""
+    """Tick until the shaft is stopped, as the bench waits for the arm, by eye.
+
+    The plant's own speed: a faulted drive's RFRD reads 0 through the whole
+    coast (docs/securite.md, section 3), and the simulated drive takes no
+    reset until its freewheel is over.
+    """
     for _ in range(1000):
         await scene.run(1)
-        status = scene.runtime.drive_status
-        if status is not None and status.output_rpm == 0:
+        if scene.rig.simulator.shaft_rpm == 0:
             return
     raise AssertionError("the shaft never stopped")
 
@@ -720,7 +738,8 @@ async def test_after_a_stop_only_a_reading_taken_since_lets_an_acknowledgement_t
     assert isinstance(scene.panel.surface.submit_end(operator=OPERATOR, reason="stop"), Ok)
     await scene.run(1)  # the tick takes the stop: no read from here
     scene.chain.open(scene.rig.clock.monotonic())
-    await scene.run(1)
+    # The tick that latches it also ends the stop (module docstring): no read yet.
+    await scene.step()
     verdict = standing(runtime)
     assert verdict is not None
     assert (verdict.rule, verdict.detail) == (RULE_STO_OPEN, STO_OPEN_DEDUCED)
@@ -734,7 +753,7 @@ async def test_after_a_stop_only_a_reading_taken_since_lets_an_acknowledgement_t
     assert isinstance(refused.error, StoNotReady)
     assert refused.error.state is StoState.UNKNOWN
     assert standing(runtime) == verdict
-    scene.chain.close(scene.rig.clock.monotonic())  # closed again before the stop is over
+    scene.chain.close(scene.rig.clock.monotonic())  # closed again before any read since
     ended = False
     for _ in range(1000):
         await scene.step()

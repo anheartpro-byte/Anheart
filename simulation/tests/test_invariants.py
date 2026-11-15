@@ -50,6 +50,14 @@ def _cruising(result: RunResult) -> int:
     return next(i for i, row in enumerate(rows) if row.t > 150.0)
 
 
+def _shaft_at(path: Path, index: int, rpm: int) -> RunResult:
+    """The run, with the plant's own shaft speed at row ``index`` replaced."""
+    result = run_file(path)
+    shaft = list(result.trace.shaft)
+    shaft[index] = rpm
+    return replace(result, trace=replace(result.trace, shaft=tuple(shaft)))
+
+
 def _edit(path: Path, index: int, **changes: object) -> RunResult:
     result = run_file(path)
     rows = list(result.trace.rows)
@@ -72,13 +80,19 @@ def test_a_non_finite_value_is_named() -> None:
     [
         ({"setpoint_motor_rpm": 30}, "setpoint_domain"),
         ({"setpoint_motor_rpm": 2000}, "setpoint_domain"),
-        ({"measured_motor_rpm": 2000}, "measured_bound"),
-        ({"measured_motor_rpm": -50}, "reverse"),
     ],
 )
 def test_the_domain_checks_fire(changes: dict[str, object], check: str) -> None:
     index = _cruising(run_file(MANUAL))
     assert check in _checks(_edit(MANUAL, index, **changes))
+
+
+@pytest.mark.parametrize(("rpm", "check"), [(2000, "measured_bound"), (-50, "reverse")])
+def test_the_shaft_checks_fire_on_the_plant_s_own_speed(rpm: int, check: str) -> None:
+    """Judged on ``Trace.shaft``: RFRD reads 0 through a coast, a planted RFRD is not judged."""
+    index = _cruising(run_file(MANUAL))
+    assert check in _checks(_shaft_at(MANUAL, index, rpm))
+    assert check not in _checks(_edit(MANUAL, index, measured_motor_rpm=rpm))
 
 
 def test_a_value_written_outside_the_domain_is_named() -> None:
@@ -114,7 +128,7 @@ def test_a_manual_g_rate_jump_is_named() -> None:
 def test_a_shaft_faster_than_the_drive_ramp_is_named() -> None:
     result = run_file(MANUAL)
     index = _cruising(result)
-    assert "measured_rate" in _checks(_edit(MANUAL, index, measured_motor_rpm=100))
+    assert "measured_rate" in _checks(_shaft_at(MANUAL, index, 100))
 
 
 def test_a_rise_under_a_verdict_is_named() -> None:

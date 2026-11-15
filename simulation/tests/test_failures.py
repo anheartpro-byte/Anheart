@@ -229,8 +229,10 @@ def test_sto_judge_detects_broken_safety_evidence() -> None:
     rows[at] = replace(rows[at], setpoint_motor_rpm=1, sim_state="OPERATION_ENABLED", current_a=1)
     bad = replace(result, trace=replace(result.trace, rows=tuple(rows)))
     assert {"sto_output", "sto_torque"} <= _checks(case, bad)
-    rows[at] = replace(result.trace.rows[at], measured_motor_rpm=9000)
-    bad = replace(result, trace=replace(result.trace, rows=tuple(rows)))
+    # The coast is judged on the plant's own speed: RFRD reads 0 with the stage off.
+    shaft = list(result.trace.shaft)
+    shaft[at] = 9000
+    bad = replace(result, trace=replace(result.trace, shaft=tuple(shaft)))
     assert "sto_coast" in _checks(case, bad)
     for changes in (
         {"lfrd_motor_rpm": 1},
