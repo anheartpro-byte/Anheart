@@ -619,6 +619,42 @@ export default defineSchema({
     .index("by_machine_and_revoked", ["machineId", "revokedAt"])
     .index("by_revoked_and_expiry", ["revokedAt", "expiresAt"]),
 
+  // A one-time pairing code of a machine (ANH-115, contract 1.17): a console
+  // that has no key yet trades it, with its Pi's serial number, for one
+  // (`POST /api/machine/pair`). The code itself is never stored.
+  machine_pairing_codes: defineTable({
+    machineId: v.id("machines"),
+    organizationId: v.id("organizations"),
+    // The registry's `serialPi` when the code was issued, as it is compared
+    // (convex/lib/machinePairing.ts): the one Pi the code serves.
+    serialPi: v.string(),
+    // scrypt of the code (convex/pairingCodes.ts), both in base 64.
+    salt: v.string(),
+    hash: v.string(),
+    createdBy: v.id("users"),
+    createdAt: v.number(),
+    expiresAt: v.number(),
+    // Wrong codes sent for this serial number while the code was open.
+    failures: v.number(),
+    // The code serves no more: claimed (`keyId`, the key it gave), replaced
+    // by a newer code of the machine, revoked from the site, or burned by
+    // its wrong codes. Unset while it is open; an open code past its expiry
+    // is expired.
+    closedAt: v.optional(v.number()),
+    closedAs: v.optional(
+      v.union(
+        v.literal("claimed"),
+        v.literal("replaced"),
+        v.literal("revoked"),
+        v.literal("burned"),
+      ),
+    ),
+    closedBy: v.optional(v.id("users")),
+    keyId: v.optional(v.id("machine_api_keys")),
+  })
+    .index("by_serial_and_closed", ["serialPi", "closedAt"])
+    .index("by_machine_and_closed", ["machineId", "closedAt"]),
+
   // The operators enabled on a machine's console (ANH-152): one row per
   // machine and member, enabled and disabled by an admin of the machine's
   // organisation (or the Anheart admin), the code set by the operator alone on

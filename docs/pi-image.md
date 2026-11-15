@@ -294,7 +294,14 @@ par sa ligne de commande, que tout utilisateur de la machine peut lire dans la
 liste des processus. `scripts/pi/preflight.sh` donne la clé de la machine à
 `curl` de la même façon. Le fichier créé a une clé de machine **vide** : la
 console d'un Pi neuf n'est reliée à aucun tableau de bord tant qu'une personne
-n'a pas écrit la clé.
+n'a pas écrit la clé, ou que la console ne l'a pas reçue par son code d'appairage
+(ANH-115). Elle l'écrit alors dans `/var/lib/anheart/data/machine.env`, au compte
+`anheart`, mode 600, avec l'adresse et l'identifiant de la machine, et dans rien
+d'autre : ce fichier-là ne peut régler aucune limite, et une clé, un autre
+identifiant ou une autre adresse écrits dans `/etc/anheart/anheart.env` le font
+laisser de côté, entier. Que le compte de la console
+puisse lire sa clé est acceptable : la console la tient et s'en sert de toute
+façon ([secrets.md, 3.1](secrets.md#31-clé-de-la-machine)).
 
 **Les clés du fichier.** Le fichier créé est une copie de `.env.pi.example`,
 qui ne porte que des clés lues par la console
@@ -1098,6 +1105,12 @@ variateur ni BITalino.
      `ECG_SOURCE=serial`, puis `MOTOR_PORT`, `BITALINO_MAC`, les rayons mesurés,
      `CONVEX_URL` et `MACHINE_API_KEY`
      ([deploiement.md](deploiement.md#74-configurer)) ;
+   - **`CONVEX_URL`, obligatoire avant la mise en service** : le fichier est créé
+     avec l'adresse du déploiement de développement (`.env.pi.example`) ; pour une
+     machine chez un client, y poser celle de la production. C'est la seule adresse
+     contre laquelle la console s'appaire : son écran de mise en service n'en
+     accepte aucune autre, et sans elle n'offre aucun appairage
+     ([raspberry-pi.md, 12.8](raspberry-pi.md#128-la-mise-en-service-par-code-dappairage-anh-115)) ;
    - appairer le BITalino : `bash scripts/pair_device.sh <adresse MAC>` ;
    - `sudo bash scripts/pi/preflight.sh` ;
    - `sudo systemctl restart anheart`, puis les constats de l'étape 5.

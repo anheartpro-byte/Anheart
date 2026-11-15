@@ -13,6 +13,7 @@ import * as records from "./recordHttp";
 import { receive as receiveClerkWebhook } from "./clerkWebhook";
 import {
   CONTRACT_VERSION,
+  contractUnsupported,
   machineErrorResponse,
   refusalOf,
   servedContract,
@@ -22,6 +23,7 @@ import {
 import {
   boundedText,
   limitMachine,
+  limitPairing,
   MAX_EVENTS_BYTES,
   MAX_HEARTBEAT_BYTES,
   MAX_PROFILES_BYTES,
@@ -40,6 +42,11 @@ import {
 } from "./lib/programmes";
 import { DEVICE_ACTOR_PREFIX } from "./lib/consoleAccess";
 import { CONFIG_HASH, MAX_REFUSAL_CHARS } from "./lib/machineConfig";
+import {
+  normalizedCode,
+  normalizedSerial,
+  PAIRING_MAX_BODY_BYTES,
+} from "./lib/machinePairing";
 
 const http = httpRouter();
 http.route({
@@ -1003,6 +1010,73 @@ http.route({
       events,
     });
     return json(200, result);
+  }),
+});
+
+/**
+ * POST /api/machine/pair {code, serialPi} (contract 1.17, ANH-115)
+ * -> 200 {machineId, apiKey, keyPrefix, convexUrl, server_contract_version}
+ *    401 {error: "pairing_refused", message}
+ *
+ * A console with no key trades a pairing code, with its Pi's serial number,
+ * for the machine's new key, the one time it is given (`Cache-Control:
+ * no-store`); every other key of the machine is revoked at once. The one
+ * machine route without a key (`machine_key_exempt_routes`): the global
+ * bucket first, before anything of the request is read (429), then the
+ * contract header (426), the size (413) and the form (400 `invalid_request`).
+ * Every other refusal is the same 401 after the same scrypt work
+ * (`pairingCodes.verifyPairing`). `convexUrl` is this deployment's address.
+ */
+http.route({
+  path: "/api/machine/pair",
+  method: "POST",
+  handler: httpAction(async (ctx, req) => {
+    const limited = await limitPairing(ctx);
+    if (limited) return limited;
+    if (servedContract(req) === null) return contractUnsupported();
+    const text = await boundedText(req, PAIRING_MAX_BODY_BYTES);
+    if (text === null) {
+      return payloadTooLarge(
+        `This route takes ${PAIRING_MAX_BODY_BYTES} bytes of body at most`,
+      );
+    }
+    const body = jsonObjectOf(text);
+    const code = normalizedCode(body?.code);
+    const serialPi = normalizedSerial(body?.serialPi);
+    if (code === null || serialPi === null) {
+      return refuse(
+        400,
+        "invalid_request",
+        "Expected {code, serialPi}: a pairing code of 8 characters and the Pi's serial number",
+      );
+    }
+    const outcome = await ctx.runAction(internal.pairingCodes.verifyPairing, {
+      code,
+      serialPi,
+    });
+    if (outcome.status !== "claimed") {
+      return refuse(
+        401,
+        "pairing_refused",
+        "No open pairing code of this Pi matches",
+      );
+    }
+    return new Response(
+      JSON.stringify({
+        machineId: outcome.machineId,
+        apiKey: outcome.apiKey,
+        keyPrefix: outcome.keyPrefix,
+        convexUrl: process.env.CONVEX_SITE_URL ?? new URL(req.url).origin,
+        server_contract_version: CONTRACT_VERSION,
+      }),
+      {
+        status: 200,
+        headers: {
+          "Content-Type": "application/json",
+          "Cache-Control": "no-store",
+        },
+      },
+    );
   }),
 });
 

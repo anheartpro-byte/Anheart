@@ -21,7 +21,7 @@ export const authenticatedMachine = v.union(
 );
 
 /** Whether the machine may authenticate at all: it exists, is not deleted, nor disabled. */
-function mayAuthenticate(
+export function mayAuthenticate(
   machine: Doc<"machines"> | null,
 ): machine is Doc<"machines"> {
   return (

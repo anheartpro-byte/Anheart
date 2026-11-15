@@ -407,6 +407,12 @@ export async function seedWorld(
   return { t, ...ids };
 }
 
+/** The key a machine was created with: every machine but one created `keyless` (ANH-115). */
+export function createdKey(created: { apiKey: string | null }): string {
+  if (created.apiKey === null) throw new Error("The machine was created without a key");
+  return created.apiKey;
+}
+
 export async function makeRiderReady(
   t: ReturnType<typeof backendOf>,
   userId: Id<"users">,
@@ -595,9 +601,9 @@ export async function seedMachineWorld(
     organizationId,
     patient,
     machine: first.machineId,
-    machineKey: first.apiKey,
+    machineKey: createdKey(first),
     otherMachine: second.machineId,
-    otherKey: second.apiKey,
+    otherKey: createdKey(second),
     profileId: "p1",
   };
 }

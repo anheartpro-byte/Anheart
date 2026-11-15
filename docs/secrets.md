@@ -124,6 +124,31 @@ gèrent sur la fiche de la machine, carte **Clés de la machine**, par l'admin
 Anheart ou l'admin de l'organisation de la machine ; un gestionnaire, même de
 la machine, n'y a pas accès.
 
+**Une console sans clé la reçoit par un code d'appairage** (ANH-115,
+[convex.md](convex.md#lappairage-dune-console-contrat-117-anh-115)) : un
+admin le demande pour la machine, dont le registre nomme le numéro de série du
+Pi, et le code donne la clé à ce Pi seulement. Le code est un secret pendant
+ses 30 minutes : le lire au technicien ou le lui montrer, jamais l'écrire dans
+un ticket, un message ou une capture ; le site ne le met dans aucune adresse.
+Il ne sert qu'une fois, et cinq codes faux le brûlent. La clé qu'il donne
+n'est montrée à personne : la console la reçoit et l'écrit dans
+`data/machine.env` (`/var/lib/anheart/data/machine.env` sur un Pi installé), au
+compte `anheart`, mode 600, avec l'adresse du déploiement et l'identifiant de la
+machine ; le site n'en montre que le préfixe. L'appairage révoque aussitôt toutes les
+autres clés de la machine : appairer une machine en service la coupe jusqu'à
+ce que le Pi appairé tourne. Il n'ajoute aucun secret au déploiement.
+
+**Où vit la clé d'une console appairée.** Après un appairage, la clé de la machine
+n'est plus seulement dans `/etc/anheart/anheart.env` (root, mode 600) : elle est
+dans `data/machine.env`, que le compte de la console peut lire et écrire. C'est
+acceptable : le processus de la console tient sa clé et s'en sert de toute façon,
+en mémoire, à chaque requête. Le fichier, lui, ne peut régler que trois clés
+(`MACHINE_API_KEY`, `CONVEX_URL`, `RECORD_MACHINE_ID`), lues par un analyseur
+strict, jamais une limite de sûreté, qui restent dans le fichier de root
+([raspberry-pi.md, 12.8](raspberry-pi.md#128-la-mise-en-service-par-code-dappairage-anh-115)).
+
+**Désappairer une console** : l'arrêter au repos, retirer `/var/lib/anheart/data/machine.env` (`raspberry-pi/data/machine.env` sur un poste de développement), la redémarrer (`sudo systemctl restart anheart`), puis **Révoquer** la clé sur la fiche de la machine, carte **Clés de la machine** : la console redémarre sans clé, sur son écran de mise en service, et la clé qu'elle tenait n'ouvre plus rien.
+
 Renouveler la clé sans couper la machine :
 
 1. Fiche de la machine, **Clés de la machine**, **Nouvelle clé**. Garder le

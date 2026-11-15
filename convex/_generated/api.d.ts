@@ -36,6 +36,7 @@ import type * as lib_machineConfig from "../lib/machineConfig.js";
 import type * as lib_machineHealth from "../lib/machineHealth.js";
 import type * as lib_machineHttpAuth from "../lib/machineHttpAuth.js";
 import type * as lib_machineKeys from "../lib/machineKeys.js";
+import type * as lib_machinePairing from "../lib/machinePairing.js";
 import type * as lib_machineRegistry from "../lib/machineRegistry.js";
 import type * as lib_medicalParameters from "../lib/medicalParameters.js";
 import type * as lib_memberships from "../lib/memberships.js";
@@ -54,6 +55,7 @@ import type * as machineConfigs from "../machineConfigs.js";
 import type * as machineHealth from "../machineHealth.js";
 import type * as machineKeys from "../machineKeys.js";
 import type * as machineLogbook from "../machineLogbook.js";
+import type * as machinePairing from "../machinePairing.js";
 import type * as machineRegistry from "../machineRegistry.js";
 import type * as machines from "../machines.js";
 import type * as medicalParameters from "../medicalParameters.js";
@@ -63,6 +65,7 @@ import type * as migrations_retireLegacyRecording from "../migrations/retireLega
 import type * as notificationEmails from "../notificationEmails.js";
 import type * as notifications from "../notifications.js";
 import type * as organizations from "../organizations.js";
+import type * as pairingCodes from "../pairingCodes.js";
 import type * as patientInvitations from "../patientInvitations.js";
 import type * as programmes from "../programmes.js";
 import type * as recordHttp from "../recordHttp.js";
@@ -112,6 +115,7 @@ declare const fullApi: ApiFromModules<{
   "lib/machineHealth": typeof lib_machineHealth;
   "lib/machineHttpAuth": typeof lib_machineHttpAuth;
   "lib/machineKeys": typeof lib_machineKeys;
+  "lib/machinePairing": typeof lib_machinePairing;
   "lib/machineRegistry": typeof lib_machineRegistry;
   "lib/medicalParameters": typeof lib_medicalParameters;
   "lib/memberships": typeof lib_memberships;
@@ -130,6 +134,7 @@ declare const fullApi: ApiFromModules<{
   machineHealth: typeof machineHealth;
   machineKeys: typeof machineKeys;
   machineLogbook: typeof machineLogbook;
+  machinePairing: typeof machinePairing;
   machineRegistry: typeof machineRegistry;
   machines: typeof machines;
   medicalParameters: typeof medicalParameters;
@@ -139,6 +144,7 @@ declare const fullApi: ApiFromModules<{
   notificationEmails: typeof notificationEmails;
   notifications: typeof notifications;
   organizations: typeof organizations;
+  pairingCodes: typeof pairingCodes;
   patientInvitations: typeof patientInvitations;
   programmes: typeof programmes;
   recordHttp: typeof recordHttp;

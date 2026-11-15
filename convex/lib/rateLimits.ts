@@ -14,6 +14,9 @@
  * cadences and batch sizes to: a console that works as designed never meets
  * them. Over the limit, a route answers 429
  * `{error: "rate_limited", message, retryAfterMs}` with `Retry-After`.
+ * Globally, for every caller together: `POST /api/machine/pair` (ANH-115),
+ * the one machine route without a key, under the bucket `global_limit` of
+ * `machine_pairing`, taken before anything else of the request is read.
  * Never rate limited: training/status (the stop), training/end (the end),
  * training/start (only writes for a pending launch, already bounded by
  * launchAutoSession; a 429 would stop an armed console from before 1.5),
@@ -69,6 +72,13 @@ export const rateLimiter = new RateLimiter(components.rateLimiter, {
   machineProfiles: bucket("POST /api/machine/profiles"),
   machineRecordCommit: bucket("POST /api/machine/records/commit"),
   machineConfigApplied: bucket("POST /api/machine/config/applied"),
+  /** Every pairing request, whoever sends it (ANH-115): one bucket for all. */
+  machinePairing: {
+    kind: "token bucket",
+    rate: machineApi.machine_pairing.global_limit.rate,
+    period: machineApi.machine_pairing.global_limit.period_ms,
+    capacity: machineApi.machine_pairing.global_limit.capacity,
+  },
   /** Remote launches by one account, auto and bench together: five a minute. */
   launchAutoSession: {
     kind: "token bucket",
@@ -138,6 +148,23 @@ export async function limitMachine(
 ): Promise<Response | null> {
   const status = await rateLimiter.limit(ctx, name, { key: machineId });
   return status.ok ? null : rateLimitedResponse(status.retryAfter);
+}
+
+/**
+ * Take a token of the pairing bucket, shared by every caller. Null when the
+ * request may go on, the 429 to answer otherwise.
+ */
+export async function limitPairing(ctx: ActionCtx): Promise<Response | null> {
+  const status = await rateLimiter.limit(ctx, "machinePairing");
+  if (status.ok) return null;
+  const retryAfterMs = waitOf(status.retryAfter);
+  return machineErrorResponse(
+    429,
+    "rate_limited",
+    "Too many pairing requests: retry later",
+    { retryAfterMs },
+    { "Retry-After": String(Math.ceil(retryAfterMs / 1000)) },
+  );
 }
 
 /** What an account over its limit is thrown. */

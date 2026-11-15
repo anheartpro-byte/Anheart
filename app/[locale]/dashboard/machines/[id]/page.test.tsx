@@ -62,6 +62,11 @@ vi.mock("@/components/machines/MachineConfigCard", async () => ({
     "MachineConfigCard",
   ),
 }));
+vi.mock("@/components/machines/MachinePairingCard", async () => ({
+  MachinePairingCard: (await import("@/test-support/pages")).standIn(
+    "MachinePairingCard",
+  ),
+}));
 vi.mock("@/components/machines/MachineRegistryCard", async () => ({
   MachineRegistryCard: (await import("@/test-support/pages")).standIn(
     "MachineRegistryCard",
@@ -464,6 +469,8 @@ describe("machine page: what each role may do", () => {
     expect(propsOf("LaunchRightsCard")).toEqual({ machineId, isAdmin: true });
     expect(propsOf("MachineKeysCard")).toEqual({ machineId, deleted: false });
     expect(propsOf("MachineConsoleAccessCard")).toEqual({ machineId });
+    // ANH-115: a pairing code gives a key: the card is the admins' too.
+    expect(propsOf("MachinePairingCard")).toEqual({ machineId });
     expect(screen.queryByRole("button", restoreButton)).toBeNull();
   });
 
@@ -479,6 +486,7 @@ describe("machine page: what each role may do", () => {
     expect(wasMounted("MachineKeysCard")).toBe(false);
     // ANH-152: the console's operators and tablets are its admins' too.
     expect(wasMounted("MachineConsoleAccessCard")).toBe(false);
+    expect(wasMounted("MachinePairingCard")).toBe(false);
   });
 
   it("lets the admin of a client organisation do the same, choosing among all the patients of the organisation, without restoring", async () => {
@@ -492,6 +500,8 @@ describe("machine page: what each role may do", () => {
     expect(propsOf("LaunchRightsCard")).toEqual({ machineId, isAdmin: true });
     expect(propsOf("MachineKeysCard")).toEqual({ machineId, deleted: false });
     expect(propsOf("MachineConsoleAccessCard")).toEqual({ machineId });
+    // ANH-115: a pairing code gives a key: the card is the admins' too.
+    expect(propsOf("MachinePairingCard")).toEqual({ machineId });
     expect(screen.queryByRole("button", restoreButton)).toBeNull();
   });
 
@@ -511,6 +521,7 @@ describe("machine page: what each role may do", () => {
       expect(wasMounted("LaunchRightsCard")).toBe(false);
       expect(wasMounted("MachineKeysCard")).toBe(false);
       expect(wasMounted("MachineConsoleAccessCard")).toBe(false);
+      expect(wasMounted("MachinePairingCard")).toBe(false);
       expect(wasMounted("MachineLiveCard")).toBe(true);
     },
   );
@@ -581,6 +592,7 @@ describe("machine page: a deleted machine", () => {
       deleted: true,
     });
     expect(wasMounted("MachineConsoleAccessCard")).toBe(false);
+    expect(wasMounted("MachinePairingCard")).toBe(false);
   });
 
   it("leaves the admin of a client organisation nothing to act on a deleted machine", async () => {

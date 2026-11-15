@@ -61,13 +61,16 @@ UNSIGNED_POSTS: Final[frozenset[str]] = frozenset(
     {
         "/api/access/sign-in",
         "/api/access/sign-out",
+        "/api/pairing",
         "/api/plan/preview",
         "/api/session/stop",
         "/api/session/estop",
     }
 )
 """The only routes that change something, or may, and take no operator: signing in and
-out, the dry run of a programme (it starts nothing), and the two stops."""
+out, the pairing of a console that has no key (ANH-115: no operator list exists before
+it, and it takes a code an admin issued on the site for this Pi), the dry run of a
+programme (it starts nothing), and the two stops."""
 
 READS: Final[frozenset[str]] = frozenset(
     {
@@ -81,6 +84,7 @@ READS: Final[frozenset[str]] = frozenset(
         "/api/config",
         "/api/ecg",
         "/api/feedback",
+        "/api/pairing",
         "/api/panel",
         "/api/preflight",
         "/api/profiles",

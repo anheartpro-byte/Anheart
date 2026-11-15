@@ -22,6 +22,7 @@ import {
 } from "./programmes.fixtures";
 import { CONTRACT_HEADER, CONTRACT_VERSION } from "./lib/contract";
 import { insertConfigRevision, MACHINE_CONFIG_BASE } from "./machineConfigs.fixtures";
+import { issuedCode, pair, withPiSerial } from "./machinePairing.fixtures";
 import {
   addSession,
   as,
@@ -220,6 +221,22 @@ async function key(w: World) {
   return await as(w.t, "admin").mutation(api.machineKeys.createMachineKey, {
     machineId: w.machine,
   });
+}
+/** The machine's open pairing code (ANH-115). */
+async function openPairing(
+  w: World,
+  machineId: Id<"machines"> = w.machine,
+): Promise<Id<"machine_pairing_codes">> {
+  const open = await w.t.run((ctx) =>
+    ctx.db
+      .query("machine_pairing_codes")
+      .withIndex("by_machine_and_closed", (q) =>
+        q.eq("machineId", machineId).eq("closedAt", undefined),
+      )
+      .unique(),
+  );
+  if (open === null) throw new Error("No open pairing code");
+  return open._id;
 }
 async function benchReview(w: World) {
   await registryRelease(w);
@@ -816,6 +833,88 @@ const SCENARIOS: Record<string, (w: World) => Promise<Doc<"audit_log">[]>> = {
           "operator",
           w.orgA,
         ),
+      ];
+    });
+  },
+  "machinePairing.storeIssuedCode": async (w) => {
+    await withPiSerial(w);
+    await issuedCode(w);
+    const first = await openPairing(w);
+    return observe(w, async () => {
+      const { expiresAt } = await issuedCode(w, "orgAdmin");
+      const details = { machineId: w.machine };
+      return [
+        site(w, "machine_pairing.revoked", first, "machine_pairing", "orgAdmin", w.orgA, details),
+        site(w, "machine_pairing.issued", await openPairing(w), "machine_pairing", "orgAdmin", w.orgA, {
+          ...details,
+          expiresAt,
+        }),
+      ];
+    });
+  },
+  "machinePairing.revokePairingCode": async (w) => {
+    await withPiSerial(w);
+    await issuedCode(w);
+    const open = await openPairing(w);
+    return observe(w, async () => {
+      await as(w.t, "orgAdmin").mutation(api.machinePairing.revokePairingCode, {
+        machineId: w.machine,
+      });
+      return [
+        site(w, "machine_pairing.revoked", open, "machine_pairing", "orgAdmin", w.orgA, {
+          machineId: w.machine,
+        }),
+      ];
+    });
+  },
+  "machinePairing.claimPairing": async (w) => {
+    // One code burned by its wrong codes, another claimed: two Pis, two machines.
+    await withPiSerial(w, w.machine, "synthetic-pi-burned");
+    await withPiSerial(w, w.otherMachine, "synthetic-pi-claimed");
+    const burned = await issuedCode(w, "admin", w.machine);
+    const claimed = await issuedCode(w, "admin", w.otherMachine);
+    const burnedId = await openPairing(w, w.machine);
+    const claimedId = await openPairing(w, w.otherMachine);
+    await as(w.t, "admin").mutation(api.machineKeys.createMachineKey, { machineId: w.otherMachine });
+    const held = await w.t.run((ctx) =>
+      ctx.db
+        .query("machine_api_keys")
+        .withIndex("by_machine_and_revoked", (q) =>
+          q.eq("machineId", w.otherMachine).eq("revokedAt", undefined),
+        )
+        .collect(),
+    );
+    const wrong = burned.code === "0000-0000" ? "1111-1111" : "0000-0000";
+    return observe(w, async () => {
+      for (let attempt = 0; attempt < 5; attempt += 1)
+        expect((await pair(w.t, { code: wrong, serialPi: "synthetic-pi-burned" })).status).toBe(401);
+      expect((await pair(w.t, { code: claimed.code, serialPi: "synthetic-pi-claimed" })).status).toBe(200);
+      const keyId = (await w.t.run((ctx) => ctx.db.get(claimedId)))?.keyId;
+      if (keyId === undefined) throw new Error("The claim gave no key");
+      const machine = (action: AuditAction, targetId: string, targetType: Expected["targetType"], details: Expected["details"]): Expected => ({
+        action,
+        targetId,
+        targetType,
+        source: "machine",
+        actorRole: "machine",
+        actorId: w.otherMachine,
+        organizationId: w.orgA,
+        details,
+      });
+      const details = { machineId: w.otherMachine };
+      return [
+        {
+          action: "machine_pairing.burned",
+          targetId: burnedId,
+          targetType: "machine_pairing",
+          source: "machine",
+          actorRole: "system",
+          organizationId: w.orgA,
+          details: { machineId: w.machine, count: 5 },
+        },
+        machine("machine_pairing.claimed", claimedId, "machine_pairing", details),
+        machine("machine_key.created", keyId, "machine_key", { ...details, count: held.length }),
+        ...held.map((row) => machine("machine_key.revoked", row._id, "machine_key", details)),
       ];
     });
   },

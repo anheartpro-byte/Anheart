@@ -34,6 +34,7 @@ import { notifyMachine } from "./lib/notifications";
 import { registryRelease, registryUpload } from "./machineRegistry.fixtures";
 import { addSecondAdmin, insertProgramme, JOG, SIGNOFF } from "./programmes.fixtures";
 import { insertConfigRevision, MACHINE_CONFIG_BASE } from "./machineConfigs.fixtures";
+import { issuedCode, withPiSerial } from "./machinePairing.fixtures";
 import {
   addSession,
   as,
@@ -1451,6 +1452,141 @@ export const MATRIX: Entry[] = [
         note: "a tablet of another organisation's machine does not exist for them",
       },
       { actor: "orgBManager", scope: "foreign", expect: refuse(UNAUTHORIZED), note: "not an admin" },
+    ],
+  },
+  {
+    id: "pairingCodes.issuePairingCode",
+    ref: api.pairingCodes.issuePairingCode,
+    kind: "action",
+    build: async (w) => {
+      await withPiSerial(w);
+      return { machineId: w.machine };
+    },
+    onSuccess: async (res, w) => {
+      const r = res as { code: string; expiresAt: number };
+      if (!/^[0-9A-HJKMNP-TV-Z]{4}-[0-9A-HJKMNP-TV-Z]{4}$/.test(r.code))
+        throw new Error("No one-time pairing code issued");
+      const rows = await w.t.run((ctx) =>
+        ctx.db
+          .query("machine_pairing_codes")
+          .withIndex("by_machine_and_closed", (q) =>
+            q.eq("machineId", w.machine).eq("closedAt", undefined),
+          )
+          .collect(),
+      );
+      if (rows.length !== 1 || rows[0].expiresAt !== r.expiresAt)
+        throw new Error("The code is not the machine's open one");
+      if (JSON.stringify(rows).includes(r.code.replace("-", "")))
+        throw new Error("The plain code is stored");
+    },
+    cases: [
+      { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
+      { actor: "patient", expect: refuse(UNAUTHORIZED), note: "not an admin" },
+      {
+        actor: "manager",
+        scope: "own",
+        expect: refuse(UNAUTHORIZED),
+        note: "a gestionnaire of the machine is not an admin: a code yields a key",
+      },
+      { actor: "admin", expect: ok, note: "admin issues" },
+      { actor: "orgAdmin", scope: "own", expect: ok, note: "admin of the machine's organisation" },
+      {
+        actor: "orgBAdmin",
+        scope: "foreign",
+        expect: refuse(/machine_not_found/),
+        note: "a machine of another organisation does not exist for them",
+      },
+      {
+        actor: "orgBManager",
+        scope: "foreign",
+        expect: refuse(UNAUTHORIZED),
+        note: "not an admin",
+      },
+    ],
+  },
+  {
+    id: "machinePairing.revokePairingCode",
+    ref: api.machinePairing.revokePairingCode,
+    kind: "mutation",
+    build: async (w) => {
+      await withPiSerial(w);
+      await issuedCode(w);
+      return { machineId: w.machine };
+    },
+    onSuccess: async (_res, w) => {
+      const rows = await w.t.run((ctx) =>
+        ctx.db
+          .query("machine_pairing_codes")
+          .withIndex("by_machine_and_closed", (q) => q.eq("machineId", w.machine))
+          .collect(),
+      );
+      if (rows.length !== 1 || rows[0].closedAs !== "revoked")
+        throw new Error("The open code is not revoked");
+    },
+    cases: [
+      { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
+      { actor: "patient", expect: refuse(UNAUTHORIZED), note: "not an admin" },
+      {
+        actor: "manager",
+        scope: "own",
+        expect: refuse(UNAUTHORIZED),
+        note: "a gestionnaire of the machine is not an admin",
+      },
+      { actor: "admin", expect: ok, note: "admin revokes" },
+      { actor: "orgAdmin", scope: "own", expect: ok, note: "admin of the machine's organisation" },
+      {
+        actor: "orgBAdmin",
+        scope: "foreign",
+        expect: refuse(/machine_not_found/),
+        note: "a machine of another organisation does not exist for them",
+      },
+      {
+        actor: "orgBManager",
+        scope: "foreign",
+        expect: refuse(UNAUTHORIZED),
+        note: "not an admin",
+      },
+    ],
+  },
+  {
+    id: "machinePairing.pairingState",
+    ref: api.machinePairing.pairingState,
+    kind: "query",
+    build: async (w) => {
+      await withPiSerial(w);
+      await issuedCode(w);
+      return { machineId: w.machine };
+    },
+    onSuccess: (res) => {
+      const r = res as Record<string, unknown> | null;
+      if (r === null || typeof r.expiresAt !== "number")
+        throw new Error("The open code is not said");
+      if (Object.keys(r).some((key) => ["code", "salt", "hash"].includes(key)))
+        throw new Error("The code, its salt or its hash is served");
+    },
+    cases: [
+      { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
+      { actor: "patient", expect: empty, note: "null for a user" },
+      {
+        actor: "manager",
+        scope: "own",
+        expect: empty,
+        note: "null even to a gestionnaire of the machine: the codes are the admins'",
+      },
+      { actor: "admin", expect: ok, note: "admin reads" },
+      { actor: "orgAdmin", scope: "own", expect: ok, note: "admin of the machine's organisation" },
+      {
+        actor: "orgBAdmin",
+        scope: "foreign",
+        expect: empty,
+        note: "null for a machine of another organisation",
+      },
+      {
+        actor: "orgBManager",
+        scope: "foreign",
+        expect: empty,
+        note: "null for a machine of another organisation",
+      },
     ],
   },
   {
@@ -4790,6 +4926,7 @@ export const ROUTE_COVERAGE: ReadonlyArray<{
   { method: "GET", path: "/api/machine/programmes", tests: "programmeCatalog.test.ts (signature verified with a test key, since, not configured); machineAuth.test.ts (machine key)" },
   { method: "GET", path: "/api/machine/operators", tests: "consoleAccess.test.ts (signature verified with a test key, disabled operator and revoked tablet left out, not configured); machineAuth.test.ts (machine key); rateLimitsRoutes.test.ts (never limited)" },
   { method: "GET", path: "/api/machine/config", tests: "machineConfigs.test.ts (signature verified with a test key, revision in force, level, not configured); machineAuth.test.ts (machine key); rateLimitsRoutes.test.ts (never limited)" },
+  { method: "POST", path: "/api/machine/pair", tests: "machinePairing.test.ts (no key, contract header, global bucket first, size, form, one claim, five failures burn, serial bound, uniform 401, every other key revoked, no plain key kept); contract.test.ts (pairing_refused)" },
   { method: "POST", path: "/api/machine/config/applied", tests: "machineConfigs.test.ts (applied, refused, unknown revision, other hash, draft, malformed body); machineAuth.test.ts (machine key); rateLimits.test.ts (limit per machine)" },
   { method: "POST", path: "/api/machine/profiles", tests: "httpRoutes.test.ts (malformed body)" },
   { method: "POST", path: "/api/machine/training/start", tests: "httpRoutes.test.ts (non-pending refused); contract.test.ts and armingRecheck.test.ts (409 with the arming refusal's code)" },

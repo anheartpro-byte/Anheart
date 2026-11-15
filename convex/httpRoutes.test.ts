@@ -14,6 +14,7 @@ import http from "./http";
 import { modules, NOW, seedMachineWorld } from "./test.setup";
 import type { Id } from "./_generated/dataModel";
 import { CONTRACT_HEADER, CONTRACT_VERSION } from "./lib/contract";
+import machineApi from "../contracts/machine-api.json";
 import { CURRENT_QUESTIONNAIRE } from "../lib/fitnessQuestionnaire";
 
 const world = () => seedMachineWorld(modules);
@@ -182,6 +183,10 @@ const bodyRoutes = http
   .filter(([path, method]) => path.startsWith("/api/machine/") && method === "POST")
   .map(([path]) => path)
   .sort();
+/** The body routes that take the machine's key: all but the pairing (`machine_key_exempt_routes`). */
+const keyedBodyRoutes = bodyRoutes.filter(
+  (path) => !(`POST ${path}` in machineApi.machine_key_exempt_routes),
+);
 
 /** Bodies no route takes: JSON that is not an object, and text that is not JSON. */
 const unreadable = [
@@ -290,7 +295,7 @@ describe("ANH-195 EX-3 a body a machine route cannot read is refused with 400", 
     await expectRefusedUnwritten(w, "/api/machine/heartbeat", '{"batteryLevel":1e999}');
   });
 
-  it.each(bodyRoutes)(
+  it.each(keyedBodyRoutes)(
     "%s judges the key, then the contract, then the body",
     async (path) => {
       const w = await world();

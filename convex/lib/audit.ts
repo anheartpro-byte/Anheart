@@ -37,6 +37,7 @@ export const AUDIT_TARGET_TYPES = [
   "user",
   "machine",
   "machine_key",
+  "machine_pairing",
   "machine_operator",
   "machine_device",
   "session",
@@ -90,6 +91,10 @@ export const AUDIT_ACTIONS = [
   "machine_key.created", // Admin or operator creates a key; target: machine key.
   "machine_key.revoked", // Admin or operator revokes a key; target: machine key.
   "machine_key.expired_revoked", // Cron revokes an expired key; target: machine key.
+  "machine_pairing.issued", // Admin issues a one-time pairing code, never the code (ANH-115); target: pairing code.
+  "machine_pairing.revoked", // Admin revokes a pairing code, or a newer one replaces it; target: pairing code.
+  "machine_pairing.burned", // A pairing code takes its last wrong code and serves no more; target: pairing code.
+  "machine_pairing.claimed", // A console trades a pairing code for its key, never the key; target: pairing code.
   "machine_operator.enabled", // Admin enables a member on a machine's console (ANH-152); target: operator row.
   "machine_operator.disabled", // Admin disables an operator of a machine's console; target: operator row.
   "machine_operator.code_set", // Operator sets their own console code, never the code; target: user.
@@ -162,6 +167,10 @@ export const AUDIT_ACTION_TARGET: Record<AuditAction, AuditTargetType> = {
   "machine_key.created": "machine_key",
   "machine_key.revoked": "machine_key",
   "machine_key.expired_revoked": "machine_key",
+  "machine_pairing.issued": "machine_pairing",
+  "machine_pairing.revoked": "machine_pairing",
+  "machine_pairing.burned": "machine_pairing",
+  "machine_pairing.claimed": "machine_pairing",
   "machine_operator.enabled": "machine_operator",
   "machine_operator.disabled": "machine_operator",
   "machine_operator.code_set": "user",
@@ -281,6 +290,17 @@ export const SENSITIVE_MUTATIONS: Readonly<
     "machine_key.revoked",
   ],
   "machineKeys.revokeKeyByOperator": ["machine_key.revoked"],
+  "machinePairing.storeIssuedCode": [
+    "machine_pairing.issued",
+    "machine_pairing.revoked",
+  ],
+  "machinePairing.revokePairingCode": ["machine_pairing.revoked"],
+  "machinePairing.claimPairing": [
+    "machine_pairing.claimed",
+    "machine_pairing.burned",
+    "machine_key.created",
+    "machine_key.revoked",
+  ],
   "consoleAccess.enableOperator": ["machine_operator.enabled"],
   "consoleAccess.disableOperator": ["machine_operator.disabled"],
   "consoleAccess.storeOperatorCode": ["machine_operator.code_set"],
@@ -355,6 +375,8 @@ export const NON_SENSITIVE_MUTATIONS: Readonly<Record<string, string>> = {
     "Rate-limits and checks the caller before their console code is hashed; writes no right.",
   "machineHealth.purge":
     "Cron removes expired heartbeat and machine health history samples.",
+  "machinePairing.prepareIssue":
+    "Rate-limits and checks the caller and the machine before a pairing code is drawn; writes no right.",
   "machineKeys.recordKeyUse":
     "Machine HTTP authentication refreshes the key-use timestamp, without a rights change.",
   "machineLogbook.backfillInterventionDue":

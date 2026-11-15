@@ -272,6 +272,10 @@ include = [
     # And the link that brings it at rest, applies it with a controlled restart, and
     # holds a safety key until an operator at the console confirms it.
     "src/config_sync.py",
+    # The pairing of a console that has no key (ANH-115): the file it writes, which
+    # the startup reads with a strict parser so that it can never set a safety key.
+    "src/pairing.py",
+    "src/pairing_view.py",
     # What that link has last heard of itself, as the state the operator reads
     # on the console: it must never say reachable of a dashboard that is not.
     "src/link_state.py",
@@ -352,6 +356,8 @@ safety_chain = [
     "src/operator_sync.py",
     "src/machine_config.py",
     "src/config_sync.py",
+    "src/pairing.py",
+    "src/pairing_view.py",
     "src/link_state.py",
     "src/record_uplink.py",
     "src/contract.py",

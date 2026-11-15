@@ -120,6 +120,13 @@ stricter rule than the dashboard's. A bench launch is never refused for it. A
 console before 1.16 reads the refusal as an unknown one: it never arms and
 sends no end.
 
+Since 1.17 a console with no key yet can receive it from a one-time pairing
+code (``POST /api/machine/pair``, ``machine_pairing`` of the shared file): the
+code an admin issued on the site and the Pi's serial number, the contract
+header and no key, answered with the machine's key and its Convex address, or
+``pairing_refused`` in the same words whatever the reason. A dashboard before
+1.17 answers 404.
+
 One exchange is outside this rule on purpose: **a stop**. It means the same
 under every contract, so the dashboard answers the status request whatever
 major the console announces, and the console ends its session on that answer
@@ -162,7 +169,7 @@ ErrorCode = NewType("ErrorCode", str)
 SoftwareVersion = NewType("SoftwareVersion", str)
 """What this build calls itself: a git tag such as ``pi-0.4.2``."""
 
-CONTRACT_VERSION: Final[ContractVersion] = ContractVersion("1.16")
+CONTRACT_VERSION: Final[ContractVersion] = ContractVersion("1.17")
 """The contract this console speaks. Pinned to ``contracts/machine-api.json``."""
 
 CONTRACT_HEADER: Final[str] = "X-Anheart-Contract"
@@ -212,6 +219,7 @@ STABLE_CODES: Final[frozenset[ErrorCode]] = frozenset(
     {
         CONTRACT_UNSUPPORTED,
         ErrorCode("unauthorized"),
+        ErrorCode("pairing_refused"),
         ErrorCode("invalid_request"),
         ErrorCode("session_not_found"),
         ErrorCode("session_not_pending"),
