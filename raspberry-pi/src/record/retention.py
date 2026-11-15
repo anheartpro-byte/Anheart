@@ -40,6 +40,7 @@ from typing import Final, Literal
 from pydantic import ConfigDict, TypeAdapter, ValidationError
 from pydantic.dataclasses import dataclass as validated
 
+from src.kept_file import read_kept
 from src.record.codec import IDENTIFIER
 from src.record.schema import RecordError
 from src.record.writer import create_private, describe_os_error
@@ -76,6 +77,9 @@ class Deposit:
 
 
 _DEPOSIT: Final[TypeAdapter[Deposit]] = TypeAdapter(Deposit)
+
+MARKER_MAX_BYTES: Final[int] = 4096
+"""A marker is a few dozen bytes of JSON: a larger file is not one this wrote."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -135,9 +139,12 @@ def confirm_deposit(record: Path, storage_id: str, at: UnixMillis) -> Result[Non
 
 
 def confirmed_deposit(record: Path) -> Deposit | None:
-    """The valid confirmation ``record`` carries, or ``None``: no doubt is given the benefit."""
+    """The valid confirmation ``record`` carries, or ``None``: no doubt is given the benefit.
+
+    The marker is read as a kept file (:func:`~src.kept_file.read_kept`): a link, a FIFO
+    or an oversize file is no confirmation, and the record is not purged."""
     try:
-        deposit = _DEPOSIT.validate_json(marker_of(record).read_bytes())
+        deposit = _DEPOSIT.validate_json(read_kept(marker_of(record), MARKER_MAX_BYTES))
         confirmed = datetime.fromisoformat(deposit.confirmed_at)
         current = _content_checksum(record)
     except (OSError, ValueError, ValidationError):

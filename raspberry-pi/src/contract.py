@@ -158,6 +158,8 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Final, NewType, cast
 
+from src.kept_file import read_kept
+
 _logger: logging.Logger = logging.getLogger(__name__)
 
 ContractVersion = NewType("ContractVersion", str)
@@ -262,6 +264,9 @@ UNKNOWN_SOFTWARE_VERSION: Final[SoftwareVersion] = SoftwareVersion("pi-unknown")
 """Reported when ``VERSION`` is missing or unreadable: never a guess."""
 
 VERSION_PATH: Final[Path] = Path(__file__).resolve().parent.parent / "VERSION"
+
+VERSION_FILE_MAX_BYTES: Final[int] = 1024
+"""A version is one short line: a larger file is not this build's ``VERSION``."""
 """``raspberry-pi/VERSION`` in a checkout, ``/app/VERSION`` in the image."""
 
 UNKNOWN_THEIRS: Final[str] = "inconnu"
@@ -396,12 +401,13 @@ def unsupported_refusal(supported: Sequence[str]) -> str:
 def read_software_version(path: Path = VERSION_PATH) -> SoftwareVersion:
     """This build's version, from ``VERSION``; :data:`UNKNOWN_SOFTWARE_VERSION` if it has none.
 
-    Read once at startup, never from the control loop. A missing, unreadable
-    or malformed file must not keep the console from starting: the dashboard
-    is told the version is unknown, which is true.
+    Read once at startup, never from the control loop, as a kept file
+    (:func:`~src.kept_file.read_kept`): a FIFO in its place cannot hang the start. A
+    missing, unreadable or malformed file must not keep the console from starting:
+    the dashboard is told the version is unknown, which is true.
     """
     try:
-        text = path.read_text(encoding="utf-8").strip()
+        text = read_kept(path, VERSION_FILE_MAX_BYTES).decode("utf-8").strip()
     except (OSError, UnicodeDecodeError) as error:
         _logger.warning("software version unreadable (%s): reporting it as unknown", error)
         return UNKNOWN_SOFTWARE_VERSION

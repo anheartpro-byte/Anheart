@@ -17,6 +17,7 @@ from typing import Final
 import pytest
 
 from src import service_state
+from src.contract import UNKNOWN_SOFTWARE_VERSION, VERSION_FILE_MAX_BYTES, read_software_version
 from src.health_counters import COUNTERS, COUNTERS_FILE_MAX_BYTES, Counters, load_counters
 from src.medical import (
     MEDICAL_FILE_MAX_BYTES,
@@ -27,7 +28,9 @@ from src.medical import (
     status_of,
 )
 from src.medical_unusable import MedicalParametersUnusableError
+from src.programme_catalog import PUBLIC_KEY_MAX_BYTES, read_public_key
 from src.record import cursor
+from src.record.retention import MARKER_MAX_BYTES, confirm_deposit, confirmed_deposit, marker_of
 from src.result import Err, Ok
 from src.training.plan import (
     PROFILES_FILE_MAX_BYTES,
@@ -37,6 +40,7 @@ from src.training.plan import (
     ProfileStore,
 )
 from tests.medical_support import write_signed
+from tests.test_record_retention import CONFIRMED, closed_record
 
 type Odd = Callable[[Path, bytes, int], None]
 
@@ -185,3 +189,39 @@ def test_a_signature_or_a_key_in_an_odd_file_is_missing_and_the_console_bench_on
     keyless = status_of(document, signature_path=files.signature, public_key_path=key)
     assert keyless.unsigned is not None
     assert keyless.unsigned.problem is SignatureProblem.PUBLIC_KEY_MISSING
+
+
+@pytest.mark.parametrize("odd", list(ODD))
+def test_a_catalogue_key_in_an_odd_file_is_none_and_nothing_is_signed(
+    tmp_path: Path, odd: str
+) -> None:
+    """Fail closed: no key, and no catalogue, configuration or operator list verifies."""
+    good = b"-----BEGIN PUBLIC KEY-----\nkey\n-----END PUBLIC KEY-----\n"
+    regular = tmp_path / "anheart_catalog.pub"
+    regular.write_bytes(good)
+    assert read_public_key(regular) == good
+    path = placed(tmp_path / "odd", regular.name, good, odd, PUBLIC_KEY_MAX_BYTES)
+    assert read_public_key(path) is None
+
+
+@pytest.mark.parametrize("odd", list(ODD))
+def test_a_version_in_an_odd_file_is_unknown(tmp_path: Path, odd: str) -> None:
+    good = b"pi-1.0.0\n"
+    regular = tmp_path / "VERSION"
+    regular.write_bytes(good)
+    assert read_software_version(regular) == "pi-1.0.0"
+    path = placed(tmp_path / "odd", "VERSION", good, odd, VERSION_FILE_MAX_BYTES)
+    assert read_software_version(path) == UNKNOWN_SOFTWARE_VERSION
+
+
+@pytest.mark.parametrize("odd", list(ODD))
+def test_a_deposit_marker_in_an_odd_file_confirms_nothing(tmp_path: Path, odd: str) -> None:
+    """No confirmation, so the record is never purged on it."""
+    record = closed_record(tmp_path)
+    assert isinstance(confirm_deposit(record, "kg2storage", CONFIRMED), Ok)
+    assert confirmed_deposit(record) is not None
+    marker = marker_of(record)
+    good = marker.read_bytes()
+    marker.unlink()
+    ODD[odd](marker, good, MARKER_MAX_BYTES)
+    assert confirmed_deposit(record) is None
