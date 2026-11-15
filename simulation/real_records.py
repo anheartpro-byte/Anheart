@@ -206,7 +206,7 @@ class _BoundedHeader(tarfile.TarInfo):
         if self.type in _EXTENSIONS and self.size > MAX_EXTENSION_BYTES:
             raise _ArchiveError("the archive holds an extension header above MAX_EXTENSION_BYTES")
         parent = cast(
-            "Callable[[tarfile.TarFile], tarfile.TarInfo]",
+            Callable[[tarfile.TarFile], tarfile.TarInfo],
             getattr(super(), "_proc_member"),  # noqa: B009  # absent from the stubs
         )
         return parent(tar)
@@ -226,7 +226,7 @@ class _BoundedHeader(tarfile.TarInfo):
         if any(keyword.startswith("GNU.sparse.") for keyword in pax_headers):
             raise _ArchiveError(_SPARSE)
         parent = cast(
-            "Callable[[Mapping[str, str], str, str], None]",
+            Callable[[Mapping[str, str], str, str], None],
             getattr(super(), "_apply_pax_info"),  # noqa: B009  # absent from the stubs
         )
         parent(pax_headers, encoding, errors)

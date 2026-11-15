@@ -425,13 +425,18 @@ def test_the_bound_holds_a_real_six_channel_record_of_the_longest_length() -> No
 def _closed_record(tmp_path: Path) -> Path:
     """A closed record, every file the reader reads whole on its disk."""
     recording = writer(tmp_path)
-    assert isinstance(recording.tick(row()), Ok)
-    assert isinstance(recording.event(Event(t=0.1, kind=EventKind.WARNING, detail="x")), Ok)
+    ticked = recording.tick(row())
+    assert isinstance(ticked, Ok)
+    noted = recording.event(Event(t=0.1, kind=EventKind.WARNING, detail="x"))
+    assert isinstance(noted, Ok)
     frame = DriveFrame(t=0.1, kind="write_request", register=8602, value=100, ok=True, latency_ms=0)
-    assert isinstance(recording.frame(frame), Ok)
+    framed = recording.frame(frame)
+    assert isinstance(framed, Ok)
     block = RawBlock(Header(0, 0.0, 1, ("ECG",)), ((7,),))
-    assert isinstance(recording.raw(block), Ok)
-    assert isinstance(recording.close(ManualClock(epoch_millis=UnixMillis(1)), "x"), Ok)
+    kept = recording.raw(block)
+    assert isinstance(kept, Ok)
+    closed = recording.close(ManualClock(epoch_millis=UnixMillis(1)), "x")
+    assert isinstance(closed, Ok)
     return recording.path
 
 
