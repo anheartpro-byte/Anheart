@@ -126,7 +126,8 @@ def test_ex1_a_recorded_manual_session_replays_tick_for_tick(bench: Path) -> Non
     assert recording.rows[0].t < 0.0
     assert any(row.hr_raw is not None for row in recording.rows)
     assert all(block.header.t_received is not None for block in recording.raw)
-    commands = [event.detail for event in recording.events if event.kind is not EventKind.PHASE]
+    told = (EventKind.PHASE, EventKind.STO)  # what the session did, not what it was asked
+    commands = [event.detail for event in recording.events if event.kind not in told]
     assert commands[:5] == [
         "attendant present=true",
         "confirm_estop_wiring",
