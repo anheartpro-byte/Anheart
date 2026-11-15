@@ -31,6 +31,7 @@ from pathlib import Path
 import pytest
 
 from src.clock import ManualClock
+from src.record import upload
 from src.record.cursor import (
     BASELINE_NAME,
     CURSOR_SUFFIX,
@@ -48,7 +49,7 @@ from src.record.cursor import (
 from src.record.logbook import ACTIVE, DIRECTORY, PREVIOUS
 from src.record.reader import read
 from src.record.retention import PurgeReport, confirm_deposit, purge
-from src.record.schema import EndObservation, Event, EventKind
+from src.record.schema import EndObservation, Event, EventKind, RecordError
 from src.record.upload import (
     INTERRUPTED,
     MAX_EVENT_DETAIL,
@@ -910,7 +911,16 @@ def test_one_reading_fails_when_only_the_last_tick_cannot_be_read(
     def refuse(_descriptor: int) -> object:
         raise OSError(5, "Input/output error")
 
-    monkeypatch.setattr("src.record.upload.os.fstat", refuse)
+    # The ticks are opened as a kept file (``open_kept``), which asks ``fstat`` too: only
+    # the tail's own size is refused, after the points were read.
+    real_tail = upload.read_last_tick_ms
+
+    def tail_refused(record: Path) -> Result[int | None, RecordError]:
+        with monkeypatch.context() as patched:
+            patched.setattr("src.record.upload.os.fstat", refuse)
+            return real_tail(record)
+
+    monkeypatch.setattr(upload, "read_last_tick_ms", tail_refused)
 
     found = read_batch(made.path, start_ms=START_MS, cursor=Cursor(), with_last_tick=True)
 

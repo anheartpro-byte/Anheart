@@ -43,7 +43,7 @@ from pydantic.dataclasses import dataclass as validated
 from src.kept_file import read_kept
 from src.record.codec import IDENTIFIER
 from src.record.schema import RecordError
-from src.record.writer import create_private, describe_os_error
+from src.record.writer import CHECKSUMS_MAX_BYTES, create_private, describe_os_error
 from src.result import Err, Ok, Result
 from src.units import UnixMillis
 
@@ -109,7 +109,8 @@ def marker_of(record: Path) -> Path:
 
 
 def _content_checksum(record: Path) -> str:
-    return hashlib.sha256((record / CHECKSUMS).read_bytes()).hexdigest()
+    """The SHA-256 of the record's checksums, read as a kept file. Raises ``OSError``."""
+    return hashlib.sha256(read_kept(record / CHECKSUMS, CHECKSUMS_MAX_BYTES)).hexdigest()
 
 
 def _stamp(at: UnixMillis) -> str:

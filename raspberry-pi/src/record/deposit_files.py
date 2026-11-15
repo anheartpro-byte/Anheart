@@ -7,11 +7,17 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Final, NewType
 
+from src.kept_file import open_kept, read_kept
 from src.record.containment import resolve_under
 from src.record.cursor import Cursor, load, store
 from src.record.retention import confirm_deposit, confirmed_deposit, records
 from src.record.schema import RecordError
-from src.record.writer import MANIFEST, describe_failure
+from src.record.writer import (
+    CHECKSUMS_MAX_BYTES,
+    MANIFEST,
+    MANIFEST_MAX_BYTES,
+    describe_failure,
+)
 from src.result import Err, Ok, Result
 from src.units import UnixMillis
 
@@ -89,7 +95,7 @@ def eligible_record(path: Path) -> Result[DepositRecord | None, RecordError]:
             or cursor.end != "sent"
         ):
             return Ok(None)
-        manifest = MANIFEST.validate_json((path / "manifest.json").read_bytes())
+        manifest = MANIFEST.validate_json(read_kept(path / "manifest.json", MANIFEST_MAX_BYTES))
         if manifest.local_ref != cursor.local_ref or manifest.ended_at is None:
             return Ok(None)
         files = manifest.files
@@ -108,7 +114,8 @@ def inventory(
     ):
         return Err(RecordError("read", "invalid_deposit_manifest"))
     checksums: dict[str, Sha256] = {}
-    for line in (path / "checksums.sha256").read_text(encoding="ascii").splitlines():
+    kept = read_kept(path / "checksums.sha256", CHECKSUMS_MAX_BYTES)
+    for line in kept.decode("ascii").splitlines():
         digest, name = line.split("  ", 1)
         if not re.fullmatch(r"[a-f0-9]{64}", digest) or name in checksums:
             return Err(RecordError("read", "invalid_checksums"))
@@ -133,7 +140,7 @@ def payload(record: DepositRecord, name: str) -> Result[FilePayload, RecordError
     if path is None:
         return Err(RecordError("read", "file_outside_record"))
     try:
-        with path.open("rb") as handle:
+        with open_kept(path) as handle:
             content = handle.read(MAX_FILE_BYTES + 1)
         if len(content) > MAX_FILE_BYTES:
             return Err(RecordError("read", "file_exceeds_upload_limit"))

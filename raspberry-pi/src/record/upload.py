@@ -49,6 +49,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Final, Literal, cast
 
+from src.kept_file import open_kept, read_kept
 from src.record import commands
 from src.record.commands import INPUT_KINDS
 from src.record.cursor import (
@@ -65,7 +66,13 @@ from src.record.cursor import (
 from src.record.retention import records
 from src.record.rows import JsonValue
 from src.record.schema import Profile, RecordError
-from src.record.writer import MANIFEST, TICK_COLUMNS, describe_failure, describe_os_error
+from src.record.writer import (
+    MANIFEST,
+    MANIFEST_MAX_BYTES,
+    TICK_COLUMNS,
+    describe_failure,
+    describe_os_error,
+)
 from src.result import Err, Ok, Result
 
 _logger: Final[logging.Logger] = logging.getLogger(__name__)
@@ -177,7 +184,7 @@ def reference_in(name: str) -> str | None:
 def read_head(record: Path) -> Result[Head, RecordError]:
     """The manifest of ``record``, for the dashboard. Blocking; never raises."""
     try:
-        manifest = MANIFEST.validate_json((record / "manifest.json").read_bytes())
+        manifest = MANIFEST.validate_json(read_kept(record / "manifest.json", MANIFEST_MAX_BYTES))
         start_ms = _millis(manifest.clocks.utc_start)
     except (OSError, ValueError) as error:
         return Err(RecordError("read", describe_failure(error)))
@@ -245,7 +252,7 @@ def _lines(path: Path, offset: int, chunk: int, *, mid: bool = False) -> _Lines:
     given (past its end, or in the middle of a line that is not being passed
     over), so it was not written about it.
     """
-    with path.open("rb") as handle:
+    with open_kept(path) as handle:
         if mid:
             if offset > os.fstat(handle.fileno()).st_size:
                 raise ValueError(MISALIGNED)
@@ -420,7 +427,7 @@ def read_last_tick_ms(record: Path, chunk: int = TAIL_CHUNK) -> Result[int | Non
     """
     path = record / "ticks.csv"
     try:
-        with path.open("rb") as handle:
+        with open_kept(path) as handle:
             size = os.fstat(handle.fileno()).st_size
             handle.seek(max(0, size - chunk))
             data = handle.read(chunk)
