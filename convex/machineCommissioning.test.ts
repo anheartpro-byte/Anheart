@@ -20,7 +20,9 @@ import {
   CLOCK_SKEW_MS,
   COMMISSIONING_REFUSALS,
   DRIVE_FIELDS,
+  MAX_AGE_MS,
   MAX_DATE_MS,
+  MIN_DATE_MS,
   REQUIRED_CONTROLS,
   commissioningPayload,
   findingsOf,
@@ -127,7 +129,13 @@ describe("ANH-115 EX-4 the report, checked to the contract", () => {
         Date.now(),
       );
     expect(SECTION.max_date_ms).toBe(8.64e15);
-    expect(at(0)).not.toBeNull();
+    expect([MIN_DATE_MS, MAX_AGE_MS]).toEqual([Date.UTC(2026, 0, 1), 10 * 60_000]);
+    expect(at(0)).toBeNull();
+    expect(at(Date.now() - MAX_AGE_MS)).not.toBeNull();
+    expect(at(Date.now() - MAX_AGE_MS - 1)).toBeNull();
+    // The attestation is per boot, hours before the end if need be, but not before the floor.
+    expect(at(Date.now(), MIN_DATE_MS)).not.toBeNull();
+    expect(at(Date.now(), MIN_DATE_MS - 1)).toBeNull();
     expect(at(Date.now() + CLOCK_SKEW_MS)).not.toBeNull();
     expect(at(Date.now() + CLOCK_SKEW_MS + 1)).toBeNull();
     expect(at(Date.now() - 1, Date.now())).toBeNull();
@@ -151,6 +159,18 @@ describe("ANH-115 EX-4 the report, checked to the contract", () => {
     ["a zero-width joiner", "\u200d"],
     ["the word joiner", "\u2060"],
     ["a byte order mark", "\ufeff"],
+    ["the left-to-right mark", "\u200e"],
+    ["the right-to-left mark", "\u200f"],
+    ["the Arabic letter mark", "\u061c"],
+    ["the soft hyphen", "\u00ad"],
+    ["the function application", "\u2061"],
+    ["the invisible times", "\u2062"],
+    ["the invisible separator", "\u2063"],
+    ["the invisible plus", "\u2064"],
+    ["the Mongolian vowel separator", "\u180e"],
+    ["the interlinear annotation anchor", "\ufff9"],
+    ["the language tag", "\u{e0001}"],
+    ["a tag letter", "\u{e0041}"],
   ];
   const fields: Array<[string, (r: CommissioningReport, s: string) => unknown]> = [
     ["the operator", (r, s) => ({ ...r, operator: `u${s}1` })],
@@ -170,6 +190,10 @@ describe("ANH-115 EX-4 the report, checked to the contract", () => {
   it("takes text beyond ASCII that hides nothing", () => {
     const r = judged(report("u"), "estop", "ok", "Pi a 41 °C, attesté à l'écran");
     expect(parseCommissioningReport(r, Date.now())).not.toBeNull();
+    // A grapheme joiner and a Hangul filler are letters' companions: they reorder nothing.
+    for (const kept of ["\u034f", "\u3164"])
+      expect(parseCommissioningReport(judged(report("u"), "estop", "ok", `a${kept}b`), Date.now())).not.toBeNull();
+    expect(SECTION.forbidden_categories).toEqual(["Cc", "Cf", "Zl", "Zp"]);
   });
 
   const bad: Array<[string, (r: CommissioningReport) => unknown]> = [
@@ -578,6 +602,8 @@ describe("ANH-115 EX-5 what is refused, nothing written", () => {
       { ...r, attestation: { ...r.attestation, at: r.ranAt + 1 } },
       { ...r, ranAt: Date.now() + 10 * CLOCK_SKEW_MS },
       { ...r, ranAt: MAX_DATE_MS + 1 },
+      { ...r, ranAt: Date.now() - 2 * MAX_AGE_MS },
+      { ...r, attestation: { ...r.attestation, at: MIN_DATE_MS - 1 } },
     ]) {
       const response = await send(w, key, body);
       expect(response.status).toBe(400);

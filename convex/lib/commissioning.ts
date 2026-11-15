@@ -99,6 +99,29 @@ export const MAX_DATE_MS: number = SECTION.max_date_ms;
  */
 export const CLOCK_SKEW_MS: number = SECTION.clock_skew_ms;
 
+/**
+ * How long before the server's clock the end of the checks may be
+ * (`max_age_ms`). There is no outbox: the console sends as soon as its checks
+ * end. Its run waits a minute at most, its link may hold a request five
+ * minutes behind a 429 (the console's `MAX_RATE_WAIT`), and its clock is
+ * within 5 s when trusted; ten minutes covers them all. What the card offers
+ * after a failure is a new commissioning, with its own end, never the old
+ * report sent again.
+ */
+export const MAX_AGE_MS: number = SECTION.max_age_ms;
+
+/**
+ * The earliest date of a report (`min_date_ms`), 2026-01-01 UTC, before any
+ * console of this software ran. The attestation is per boot and may be hours
+ * older than the end of the checks; one dated before this was given while the
+ * console's clock was not set (a Pi has no clock of its own), and says
+ * nothing of when.
+ */
+export const MIN_DATE_MS: number = SECTION.min_date_ms;
+
+/** The Unicode categories no text of a report holds (`forbidden_categories`). */
+export const FORBIDDEN_CATEGORIES: readonly string[] = SECTION.forbidden_categories;
+
 /** A value as a whole number of tenths, or null when it is not one (50.05, NaN). */
 export function tenthsOf(value: number): number | null {
   if (!Number.isFinite(value)) return null;
@@ -123,13 +146,16 @@ export function sheetParametersRefusal(parameters: DriveParameters): DriveField 
 }
 
 /**
- * What no text of a report holds: C0, DEL and C1 controls, the bidirectional
- * overrides and isolates, the line and paragraph separators, the zero-width
- * characters. A record is read by people: nothing in it may hide or reorder
- * what it shows.
+ * What no text of a report holds, by Unicode category: the controls (Cc), the
+ * format characters (Cf: the direction marks, overrides and isolates, the
+ * zero-width characters, the soft hyphen, the invisible operators, the tags),
+ * the line and paragraph separators (Zl, Zp). A record is read by people:
+ * nothing in it may hide or reorder what it shows.
  */
-export const FORBIDDEN_CHARS =
-  /[\u0000-\u001f\u007f-\u009f\u200b-\u200d\u2028\u2029\u202a-\u202e\u2060\u2066-\u2069\ufeff]/;
+export const FORBIDDEN_CHARS = new RegExp(
+  `[${FORBIDDEN_CATEGORIES.map((category) => `\\p{${category}}`).join("")}]`,
+  "u",
+);
 
 /** Text of 1 to `max` characters, none of `FORBIDDEN_CHARS`, no space at either end. */
 function text(max: number) {
@@ -141,7 +167,7 @@ function text(max: number) {
 }
 
 const short = text(SECTION.max_text_chars);
-const millis = z.number().int().nonnegative().max(MAX_DATE_MS);
+const millis = z.number().int().min(MIN_DATE_MS).max(MAX_DATE_MS);
 const read = z
   .number()
   .min(0)
@@ -181,9 +207,10 @@ const reportSchema = z.strictObject({
 export type CommissioningReport = z.infer<typeof reportSchema>;
 
 /**
- * The report a console sent, or null for a body that is not one: its
- * attestation given before the end of its checks, and that end no later than
- * `now`, the server's clock, plus `CLOCK_SKEW_MS`.
+ * The report a console sent, or null for a body that is not one: its dates
+ * from `MIN_DATE_MS`, its attestation given before the end of its checks, and
+ * that end within `MAX_AGE_MS` before `now`, the server's clock, and
+ * `CLOCK_SKEW_MS` after it.
  */
 export function parseCommissioningReport(
   body: unknown,
@@ -192,7 +219,9 @@ export function parseCommissioningReport(
   const parsed = reportSchema.safeParse(body);
   if (!parsed.success) return null;
   const report = parsed.data;
-  return report.attestation.at <= report.ranAt && report.ranAt <= now + CLOCK_SKEW_MS
+  return report.attestation.at <= report.ranAt &&
+    report.ranAt >= now - MAX_AGE_MS &&
+    report.ranAt <= now + CLOCK_SKEW_MS
     ? report
     : null;
 }

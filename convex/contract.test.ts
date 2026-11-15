@@ -896,9 +896,9 @@ describe("ANH-133 EX-5 every refusal is {error: <stable code>, message}", () => 
       code: "commissioning_refused",
       run: (w) =>
         post(w, "/api/machine/commissioning", {
-          ranAt: 0,
+          ranAt: Date.now(),
           operator: "nobody",
-          attestation: { operator: "nobody", statement: "TEST attestation", at: 0 },
+          attestation: { operator: "nobody", statement: "TEST attestation", at: Date.now() },
           stoSource: "drive_input",
           controls: [{ id: "estop", state: "ok", detail: "TEST" }],
           drive: null,

@@ -3977,16 +3977,27 @@ variateur relus (ou `null`), l'adresse du BITalino et les versions. Une mise
 en service rouge est envoyée aussi : elle est une preuve.
 
 - **Le rapport** (`parseCommissioningReport`). Chaque champ du contrat, rien
-  d'autre ; les dates sont des millisecondes entières de 0 à 8,64e15 (la plus
-  grande date que JavaScript tient) ; l'attestation ne suit pas la fin des
-  contrôles, et cette fin ne dépasse pas l'horloge du serveur de plus d'une
-  minute (`clock_skew_ms`) : la console envoie dès la fin, son horloge tenue
-  par un service de temps est à 5 s près (son contrôle `clock`, que le
-  rapport porte), et une minute couvre ce bord, la latence du lien et l'erreur
-  du serveur. Aucun texte ni identifiant ne porte un caractère de contrôle
-  (C0, DEL, C1), un contrôle de direction (U+202A à U+202E, U+2066 à
-  U+2069), U+2028, U+2029 ni un caractère de largeur nulle (U+200B à U+200D,
-  U+2060, U+FEFF) : une fiche est lue par des personnes, rien n'y cache ni n'y
+  d'autre. Les dates sont des millisecondes entières de `min_date_ms`
+  (2026-01-01 UTC, avant toute console de ce logiciel) à 8,64e15 (la plus
+  grande date que JavaScript tient). L'attestation, donnée une fois par
+  démarrage, peut précéder de plusieurs heures la fin des contrôles, mais
+  pas les suivre ; datée avant `min_date_ms`, elle a été donnée quand
+  l'horloge de la console n'était pas à l'heure (un Pi n'a pas d'horloge à
+  lui) et ne dit rien de quand. La fin des contrôles ne dépasse pas
+  l'horloge du serveur de plus d'une minute (`clock_skew_ms`) : celle de la console,
+  tenue par un service de temps est à 5 s près (son contrôle `clock`, que le
+  rapport porte), et une minute couvre ce bord, la latence du lien et
+  l'erreur du serveur. Elle n'est pas plus ancienne que dix minutes
+  (`max_age_ms`) : aucune file d'attente, la console envoie dès la fin ; la
+  passe attend une minute au plus, le lien peut retenir une requête cinq
+  minutes derrière un 429 (`MAX_RATE_WAIT` de la console), et ce que la
+  carte offre après un échec est une nouvelle mise en service, avec sa
+  propre fin, jamais l'ancien rapport renvoyé. Aucun texte ni identifiant
+  ne porte un caractère des catégories Unicode `forbidden_categories` : Cc
+  (les contrôles), Cf (les caractères de format : marques, remplacements et
+  isolats de direction, largeur nulle, trait d'union conditionnel,
+  opérateurs invisibles, étiquettes), Zl et Zp (les séparateurs de ligne et
+  de paragraphe) : une fiche est lue par des personnes, rien n'y cache ni n'y
   réordonne ce qu'elle montre. Sinon 400 `invalid_request`, rien d'écrit.
 
 - **La référence.** La fiche variateur courante du registre, son fichier
