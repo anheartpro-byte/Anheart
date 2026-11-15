@@ -856,7 +856,10 @@ l'enregistrement : chaque état et sa source à partir de l'instant de son
 enregistrement sans événement `sto` se rejoue sur une chaîne simulée prête,
 comme avant ; un événement `sto` dont le `detail` n'est pas exactement un état
 et une source de la console rend l'enregistrement non rejouable, avec la
-raison.
+raison. Ces événements comptent surtout là où le variateur ne montre rien : au
+repos, à un départ, ou quand la chaîne se lit inconnue. Une chaîne qui s'ouvre
+sur un bras qui tourne se rejoue aussi sans eux, le runtime déduisant
+l'ouverture de la coupure de couple que le variateur rapporte.
 
 Au démarrage, la console remet ces octets au journal, en mémoire. Le premier
 cycle du fil `record-journal` les écrit dans `config/<config_hash>.json` :
