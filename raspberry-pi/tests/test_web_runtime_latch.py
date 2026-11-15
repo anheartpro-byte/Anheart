@@ -24,7 +24,7 @@ import pytest
 
 from src.control_surface import Command
 from src.motor.simulated import SimState
-from src.motor.sto import DriveInputStoSource, StoState
+from src.motor.sto import STO_STALE_AFTER, DriveInputStoSource, StoState
 from src.presence.monitor import RULE_PRESENCE_CAMERA_LOST
 from src.result import Ok
 from src.training.runtime import RULE_STO_OPEN, RuntimeState
@@ -34,7 +34,7 @@ from src.web.schemas import StatusRow
 from tests.roster_support import RIDER_ID
 from tests.test_cooldown_freeze_console import START
 from tests.test_failure_rig import OPERATOR, SHORT_PROFILE, attest
-from tests.test_sto_open_during_stop import Scene, enabled, sim_state, standing
+from tests.test_sto_open_during_stop import TICK, Scene, enabled, sim_state, standing
 from tests.test_sto_open_unread import (
     PROGRAMME_DRIVE_INPUT,
     PROGRAMME_SIM_READY,
@@ -42,6 +42,7 @@ from tests.test_sto_open_unread import (
     assert_latched_unread,
     pulse,
     state_of,
+    until_the_session_is_over,
     until_the_stop_is_over,
 )
 from tests.test_web_api import parse, shown_digest
@@ -98,6 +99,7 @@ async def latched_at_rest(scene: Scene) -> SafetyVerdict:
     opened = await pulse(scene, across_a_tick=False)
     assert_latched_unread(scene, opened)
     await until_the_stop_is_over(scene)
+    await until_the_session_is_over(scene)
     assert state_of(scene) is RuntimeState.FINISHED
     runtime = scene.runtime
     latched = runtime.floor
@@ -128,7 +130,12 @@ async def test_a_start_under_the_runtime_s_own_latch_is_refused_at_once_until_ac
     latched = await latched_at_rest(scene)
     async with scene.rig.http() as session:
         if isinstance(scene.panel.sto, DriveInputStoSource):
-            # Before the next reading the surface refuses for the chain itself, as it always has.
+            # The stop ended at the tick that latched it, RFRD reading 0 with the stage off
+            # (docs/securite.md, section 3): the reading from before it is still fresh. Once
+            # it is stale, and before the next reading, the surface refuses for the chain
+            # itself, as it always has.
+            for _ in range(round(STO_STALE_AFTER / TICK) + 1):
+                await scene.step()
             unread = await session.post(path, json=await with_digest(session, path, body))
             assert unread.status_code == httpx.codes.PRECONDITION_FAILED, unread.text
             assert unread.json()["code"] == "sto_not_ready"

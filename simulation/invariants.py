@@ -114,18 +114,16 @@ def _check_domain(result: RunResult) -> list[Violation]:
     hsp = int(result.scenario.drive.hsp_motor_rpm)
     reverse_allowed = any(isinstance(a, DriveReverse) for a in result.scenario.actions)
     found: list[Violation] = []
-    for row in result.trace.rows:
+    for row, shaft in zip(result.trace.rows, result.trace.shaft, strict=True):
         sp = row.setpoint_motor_rpm
         if sp != 0 and not low <= sp <= high:
             found.append(
                 Violation("setpoint_domain", row.t, f"{sp} not in {{0}} U [{low}, {high}]")
             )
-        if abs(row.measured_motor_rpm) > hsp + SLACK_RPM:
-            found.append(
-                Violation("measured_bound", row.t, f"|{row.measured_motor_rpm}| > HSP {hsp}")
-            )
-        if row.measured_motor_rpm < -SLACK_RPM and not reverse_allowed:
-            found.append(Violation("reverse", row.t, f"shaft at {row.measured_motor_rpm} rpm"))
+        if abs(shaft) > hsp + SLACK_RPM:
+            found.append(Violation("measured_bound", row.t, f"|{shaft}| > HSP {hsp}"))
+        if shaft < -SLACK_RPM and not reverse_allowed:
+            found.append(Violation("reverse", row.t, f"shaft at {shaft} rpm"))
     for frame in result.trace.frames:
         if frame.get("kind") != FrameKind.SPEED.value:
             continue
@@ -183,15 +181,18 @@ def _check_slew(result: RunResult) -> list[Violation]:
 
 
 def _check_measured_rate(result: RunResult) -> list[Violation]:
-    """The shaft cannot beat the drive's own ramp: a sanity check on the trace itself."""
+    """The shaft cannot beat the drive's own ramp: a sanity check on the plant itself.
+
+    On the shaft's own speed, not RFRD: RFRD drops to 0 the instant the output
+    stage goes off, and a coast is no faster than the ramp.
+    """
     ramp = result.scenario.drive.hsp_motor_rpm / float(result.scenario.drive.acceleration_time)
     nominal = 1380.0 / float(result.scenario.drive.acceleration_time)
     limit = max(ramp, nominal) * DRIVE_RAMP_SLACK
     found: list[Violation] = []
-    for a, b in pairwise(result.trace.rows):
-        if not (a.measured_fresh and b.measured_fresh):
-            continue
-        rate = abs(b.measured_motor_rpm - a.measured_motor_rpm) / (b.t - a.t)
+    samples = zip(result.trace.rows, result.trace.shaft, strict=True)
+    for (a, shaft_a), (b, shaft_b) in pairwise(samples):
+        rate = abs(shaft_b - shaft_a) / (b.t - a.t)
         if rate > limit + SLACK_RPM / (b.t - a.t):
             found.append(
                 Violation("measured_rate", b.t, f"{rate:.0f} rpm/s > drive ramp {limit:.0f}")

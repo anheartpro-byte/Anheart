@@ -159,12 +159,19 @@ async def test_a_fault_reset_while_turning_is_refused_by_the_loop(tmp_path: Path
 
 
 async def test_a_fault_reset_on_a_coasting_faulted_drive_is_refused(tmp_path: Path) -> None:
+    """Refused, but not because the coast is seen: RFRD reads 0 with the stage off.
+
+    The shaft is the plant's own speed. What refuses here is the session still
+    ending and OCF, which the console never resets; a resettable fault reset once
+    the phase is DONE, the arm still coasting, is the limit docs/securite.md
+    states in section 3.
+    """
     from src.motor.drive import DriveFault  # noqa: PLC0415  # this case only
 
     rig = await cruising(tmp_path)
     rig.simulator.inject_fault(DriveFault.OVERCURRENT)
     await rig.tick(3.0)
-    assert abs(rig.panel.runtime.snapshot().measured.motor_rpm) > 1
+    assert abs(rig.simulator.shaft_rpm) > 1
     async with rig.http() as session:
         reset = await session.post("/api/drive/fault-reset", json={"operator": OPERATOR})
     await rig.tick(1.0)

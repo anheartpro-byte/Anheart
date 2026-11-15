@@ -728,6 +728,7 @@ class Session:
         "_runtime",
         "_scenario",
         "_sensor",
+        "_shaft",
         "_shutdown_detail",
         "_sim",
         "_sink",
@@ -833,6 +834,7 @@ class Session:
         self._last_measured: MotorRpm = MotorRpm(0)
         self._latency_until: Monotonic | None = None
         self._rows: list[Row] = []
+        self._shaft: list[int] = []
         self._sto_observations: list[StoObservation] = []
         # The idle ticks before the start, with their instants: they are inputs of
         # a replay (the DSP and the idle poll are warm when the session starts),
@@ -1047,6 +1049,7 @@ class Session:
         if record:
             row = self._row(now, snapshot)
             self._rows.append(row)
+            self._shaft.append(int(self._sim.shaft_rpm))
             self._sto_observations.append(
                 StoObservation(
                     at=elapsed(self._start_at, now),
@@ -1434,12 +1437,18 @@ class Session:
             self._sim.advance(clock.monotonic())
 
     async def _probe_shaft(self) -> MotorRpm | None:
-        """RFRD read by a fresh connection after teardown, as the e2e tests do."""
+        """The shaft's speed after teardown, once a fresh connection reaches the drive.
+
+        The connection is the e2e tests' probe: a drive that still does not
+        answer leaves the exit unknown. The speed is the plant's own, not the RFRD
+        that answer carries: with the output stage off RFRD reads 0, a coasting
+        shaft included.
+        """
         await self._sim.open()
         status = await self._sim.read_status()
         if isinstance(status, Err):
             return None
-        return status.value.output_rpm
+        return self._sim.shaft_rpm
 
     async def _result(self) -> RunResult:
         runtime = self._runtime
@@ -1464,6 +1473,7 @@ class Session:
         trace = Trace(
             meta=self.meta(),
             rows=tuple(self._rows),
+            shaft=tuple(self._shaft),
             preamble=tuple(replace(row, t=float(at) - origin) for at, row in self._preamble),
             frames=tuple(frame_to_json(frame, origin) for frame in self._drive.frames),
             events=tuple(self._events),

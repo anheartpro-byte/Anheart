@@ -75,7 +75,8 @@ async def test_a_mains_cut_at_nameplate_speed_coasts_about_145_s_to_standstill()
     for _ in range(round(UP_TO / STEP)):
         drive.advance(clock.advance(STEP))
         if a_minute_later is None and elapsed(cut, clock.monotonic()) >= 60.0:
-            a_minute_later = (await status_of(drive)).output_rpm
+            # The plant's own speed: RFRD reads 0 through a freewheel.
+            a_minute_later = drive.shaft_rpm
         if state_of(drive) is SimState.FAULT:
             coasted = elapsed(cut, clock.monotonic())
             break
@@ -87,4 +88,4 @@ async def test_a_mains_cut_at_nameplate_speed_coasts_about_145_s_to_standstill()
     law = DEFAULT_SIM_CONFIG.tau_coast * math.log(1380.0 / DEFAULT_SIM_CONFIG.standstill_rpm)
     assert law <= coasted < law + STEP
     assert round(coasted, 1) == 144.6  # the figure the docs quote, about 145 s
-    assert (await status_of(drive)).output_rpm == MotorRpm(0)
+    assert drive.shaft_rpm == MotorRpm(0)

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Never, cast
+from typing import Final, Never, cast
 
 import pytest
 
@@ -537,8 +537,29 @@ async def test_idle_standstill_open_and_close_only_gate_start(tmp_path: Path) ->
     await rig.panel.close()
 
 
+#: The real drive's limit, kept as a strict xfail until a guard covers it: a drive
+#: another master left turning, its stage dropped by the STO before the idle console's
+#: first read, reads RFRD 0 as on the ATV320. The idle judge sees no turning shaft and
+#: latches nothing, so a start is taken while the arm coasts (docs/securite.md,
+#: section 3, "Un départ sur un arbre qui tourne encore en roue libre n'est pas vu";
+#: section 9.6, wait for the arm to stop by eye). The simulator showed the coast in
+#: RFRD before, and the judge latched drive_precommanded on it.
+IDLE_COAST_UNSEEN: Final = pytest.mark.xfail(
+    strict=True,
+    raises=AssertionError,
+    reason="RFRD reads 0 with the stage off: the idle console does not see the coast "
+    "(docs/securite.md, section 3 and 9.6)",
+)
+
+
 @pytest.mark.parametrize(
-    "phase", [RuntimeState.IDLE, RuntimeState.RUNNING, RuntimeState.ENDING, RuntimeState.FINISHED]
+    "phase",
+    [
+        pytest.param(RuntimeState.IDLE, marks=IDLE_COAST_UNSEEN),
+        RuntimeState.RUNNING,
+        RuntimeState.ENDING,
+        RuntimeState.FINISHED,
+    ],
 )
 async def test_real_console_never_reactivates_after_close_without_acknowledgement(
     tmp_path: Path, phase: RuntimeState, monkeypatch: pytest.MonkeyPatch

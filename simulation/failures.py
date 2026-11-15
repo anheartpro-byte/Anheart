@@ -863,6 +863,14 @@ def _operator_cases() -> list[FailureCase]:
     ]
 
 
+#: The plant's run on after an STO opening, long enough for a whole coast from the
+#: nameplate speed (tau_coast ln 1380, 145 s on the provisional constants). RFRD
+#: reads 0 with the stage off, so the console takes the coasting shaft for stopped
+#: and may finish while it turns (docs/securite.md, section 3); the default 60 s
+#: would then judge the exit on a shaft still coasting, without torque.
+STO_COAST_TEARDOWN_S: Final[float] = 150.0
+
+
 def _sto_cases() -> list[FailureCase]:
     result: list[FailureCase] = []
     for kind, phases in (("auto", AUTO_PHASES), ("manual", MANUAL_PHASES)):
@@ -875,7 +883,9 @@ def _sto_cases() -> list[FailureCase]:
                     category=Category.STO,
                     description=f"STO opens during {kind} {phase}; torque is removed and latched.",
                     document=(
-                        _auto(name, actions, at=at) if kind == "auto" else _manual(name, actions)
+                        _auto(name, actions, at=at, teardown_s=STO_COAST_TEARDOWN_S)
+                        if kind == "auto"
+                        else _manual(name, actions, teardown_s=STO_COAST_TEARDOWN_S)
                     ),
                     end_reasons=(
                         frozenset({"operator_stop"})
@@ -1362,18 +1372,18 @@ def _check_stopped(case: FailureCase, result: RunResult) -> list[Violation]:
     if deadline is None:
         return []
     late = [
-        row
-        for row in result.trace.rows
-        if row.t >= deadline and not row.silent and abs(row.measured_motor_rpm) >= 1
+        (row, shaft)
+        for row, shaft in zip(result.trace.rows, result.trace.shaft, strict=True)
+        if row.t >= deadline and not row.silent and abs(shaft) >= 1
     ]
     if not late:
         return []
-    row = late[0]
+    row, shaft = late[0]
     return [
         Violation(
             "failure_still_turning",
             row.t,
-            f"still {row.measured_motor_rpm} motor rpm, {row.state}, not silent",
+            f"still {shaft} motor rpm, {row.state}, not silent",
         )
     ]
 
@@ -1463,15 +1473,16 @@ def _check_sto(case: FailureCase, result: RunResult) -> list[Violation]:
         found.append(
             Violation("sto_torque", first.t, "STO must disable the output stage with zero current")
         )
-    turning = [row for row in stopped if row.measured_motor_rpm > 1]
+    # The shaft's own speed: RFRD reads 0 through the whole coast.
+    turning = [
+        (row, shaft)
+        for row, shaft in zip(result.trace.rows, result.trace.shaft, strict=True)
+        if at - 1e-6 <= row.t < restart - 1e-6 and shaft > 1
+    ]
     tau = SimulatedDriveConfig().tau_coast
     if any(
-        abs(
-            after.measured_motor_rpm
-            - before.measured_motor_rpm * math.exp(-(after.t - before.t) / tau)
-        )
-        > 1
-        for before, after in pairwise(turning)
+        abs(after - before * math.exp(-(later.t - earlier.t) / tau)) > 1
+        for (earlier, before), (later, after) in pairwise(turning)
     ):
         found.append(
             Violation(

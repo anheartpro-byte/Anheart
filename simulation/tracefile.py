@@ -78,7 +78,9 @@ class FinalState:
     energised: bool
     lfrd_motor_rpm: int
     shaft_motor_rpm: int | None
-    """RFRD read by a probe after teardown; ``None`` if the drive still did not answer."""
+    """The shaft's own speed after teardown, once a probe has reached the drive again;
+    ``None`` if the drive still did not answer. Not RFRD, which reads 0 with the
+    output stage off however fast the shaft coasts."""
 
     shutdown_detail: str | None
 
@@ -145,6 +147,12 @@ class Trace:
     preamble: tuple[Row, ...] = ()
     """The idle ticks before the start command (``t`` <= 0), in the v2 record only:
     a replay needs them, the checks and the schema-1 exports never did."""
+
+    shaft: tuple[int, ...] = ()
+    """The shaft's own speed at each of :attr:`rows`, motor rpm, from the simulated
+    plant (``SimulatedDrive.shaft_rpm``). For the physics checks only, and never
+    written: a record carries RFRD, which reads 0 while the output stage is off,
+    a coast included, as the ATV320 does."""
 
     counters: ZoneCounters | None = None
     """The runtime's time in, above and below the zone after the last tick, as the

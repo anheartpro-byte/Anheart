@@ -625,9 +625,12 @@ Scénario `fault_drive_overcurrent_manual` : le variateur verrouille OCF
 * `Variateur` en rouge : `FAULT - FAULT_REACTION_FREEWHEEL` ;
 * `Securite` en rouge : `drive_fault : RAMP_DOWN` ;
 * `Phase / mode` : `cooldown / arret / ending` ;
-* sur la courbe de vitesse, la **mesurée** (bleu) décroît plus vite que la
-  **consigne** (gris) : en défaut, le moteur est en roue libre et ralentit
-  seul, la consigne descend encore en rampe ;
+* sur la courbe de vitesse, la **mesurée** (bleu) tombe à 0 au défaut, sous
+  la **consigne** (gris) qui descend encore en rampe : en défaut l'étage de
+  puissance est coupé, et RFRD lit 0 comme sur l'ATV320, alors que le moteur
+  ralentit seul en roue libre ([securite.md, section 3](../securite.md#3-ce-que-le-logiciel-ne-garantit-pas)).
+  Le visualiseur ne montre pas cette roue libre ; l'image ci-dessus date
+  d'avant ce changement et montre encore la mesurée qui décroît ;
 * la liste d'événements montre ce que l'opérateur a lu : `OCF (LFT 9):
   surintensite en sortie : declenchement instantane. Suspecter un blocage
   mecanique ou un bobinage en court-circuit ; ne pas rearmer sans

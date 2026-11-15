@@ -194,7 +194,7 @@ champs peuvent individuellement être `null` s'ils n'ont pas été observés :
 | `runtime_output_enabled` | autorisation de sortie lue dans le runtime |
 | `runtime_applied_rpm` | demande moteur appliquée lue dans le runtime |
 | `lfrd_motor_rpm` | référence tenue par le variateur, observée en tr/min moteur |
-| `shaft_motor_rpm` | vitesse de l'arbre réellement lue, tr/min moteur |
+| `shaft_motor_rpm` | vitesse de l'arbre, tr/min moteur : RFRD lu par la console, qui lit 0 étage coupé même sur un arbre en roue libre ; la vitesse propre de l'arbre du modèle en simulation |
 | `energised` | présence de couple connue du producteur ; `null` si elle n'est pas connue |
 | `silent` | état de silence du runtime observé |
 | `stop_reason` | motif d'arrêt du runtime, éventuellement absent |
@@ -223,12 +223,14 @@ console qui les écrit ([convex.md](convex.md#compteurs-de-zone-et-ordre-de-dép
 Le producteur appelle `Writer.close(clock, end_reason, observation)` avec
 cette valeur typée. Sans observation, la fermeture ne déduit rien du dernier
 tic. La simulation copie son bilan réel après la fenêtre de teardown : état
-du modèle, consigne tenue, lecture de vitesse par la sonde et état du runtime.
-Un échec de cette sonde reste `shaft_motor_rpm: null`. La console du Pi
-fournit les mêmes champs depuis ses propres observations : l'état du runtime,
-l'état du variateur de son dernier instantané, la consigne appliquée, LFRD et
-la vitesse de l'arbre du dernier statut lu **s'il est encore frais** (`null`
-sinon), le motif d'arrêt. `energised` y reste `null` : la console n'observe
+du modèle, consigne tenue, vitesse propre de l'arbre du modèle une fois que la
+sonde a de nouveau joint le variateur (pas RFRD, qui lit 0 étage coupé), et
+état du runtime. Un échec de cette sonde reste `shaft_motor_rpm: null`. La
+console du Pi fournit les mêmes champs depuis ses propres observations : l'état
+du runtime, l'état du variateur de son dernier instantané, la consigne
+appliquée, LFRD et le RFRD du dernier statut lu **s'il est encore frais**
+(`null` sinon ; 0 étage coupé, même sur un arbre en roue libre), le motif
+d'arrêt. `energised` y reste `null` : la console n'observe
 pas la présence de couple. Les compteurs de zone sont ceux de l'instantané
 avec lequel l'enregistrement se ferme, quand la phase passe à `DONE` ou à
 l'arrêt de la console ; la simulation écrit ceux du runtime après son dernier

@@ -378,16 +378,22 @@ async def test_a_faulted_drive_lets_the_reads_go_on_then_acknowledgement_and_res
         assert status is not None
         assert status.state is DriveState.FAULT
         assert not stopping_now(runtime)  # the shaft still turns, and no read waits
-        if status.output_rpm == 0:
+        # RFRD reads 0 through a faulted drive's coast, as on the ATV320: the coast is
+        # the plant's, and the reads go on through it all the same.
+        assert status.output_rpm == 0
+        if rig.simulator.shaft_rpm == 0:
             break
         coasted += 1
         before = source.attempts
         await source.poll()
         assert source.attempts == before + 1
     assert coasted > 10  # a coast, read all the way down
-    # Stopped, faulted, run command held: the ending waits for the reset alone.
-    assert state_now(runtime) is RuntimeState.ENDING
-    assert enabled_now(runtime)
+    # Stopped and faulted, the run command held: the ending waits for the reset alone.
+    # Unless the chain opened first: that stop ended at the tick that saw the stage off,
+    # RFRD reading 0 (docs/securite.md, section 3), and removed the run command then.
+    held = other != "sto_open"
+    assert (state_now(runtime) is RuntimeState.ENDING) is held
+    assert enabled_now(runtime) is held
     status = runtime.drive_status
     assert status is not None
     assert status.state is DriveState.FAULT

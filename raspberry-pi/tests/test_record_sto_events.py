@@ -55,9 +55,12 @@ async def test_the_record_tells_the_chain_once_then_at_its_change_never_at_each_
     async with recorded.rig.http() as session:
         await start_bench(recorded, session)
         await set_target(session, 5.0)
-        await recorded.tick(10.0)
-        source.chain.open(recorded.clock.monotonic())
+        # Twenty seconds READY first: the session ends soon after the opening, whose
+        # stop is over at the tick that sees the stage off, RFRD reading 0
+        # (docs/securite.md, section 3).
         await recorded.tick(20.0)
+        source.chain.open(recorded.clock.monotonic())
+        await recorded.tick(10.0)
     recording = recorded.recording()
     told = [
         (event.detail, event.actor) for event in recording.events if event.kind is EventKind.STO
