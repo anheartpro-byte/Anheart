@@ -2,6 +2,7 @@
 
 from collections.abc import Mapping
 from enum import StrEnum
+from types import MappingProxyType
 from typing import Annotated, Final, Literal, Self, assert_never
 
 from pydantic import BeforeValidator, ConfigDict, Field, PlainSerializer, model_validator
@@ -54,8 +55,12 @@ class EventKind(StrEnum):
     at the first tick, then one per change of state or source, never one per read."""
 
 
-_STO_STATES: Final[Mapping[str, StoState]] = {state.value: state for state in StoState}
-_STO_SOURCES: Final[Mapping[str, StoSourceKind]] = {kind.value: kind for kind in StoSourceKind}
+_STO_STATES: Final[Mapping[str, StoState]] = MappingProxyType(
+    {state.value: state for state in StoState}
+)
+_STO_SOURCES: Final[Mapping[str, StoSourceKind]] = MappingProxyType(
+    {kind.value: kind for kind in StoSourceKind}
+)
 
 
 def sto_detail(state: StoState, source: StoSourceKind) -> str:

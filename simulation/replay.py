@@ -370,7 +370,11 @@ def _orders(recording: Recording) -> Result[tuple[_Order, ...], str]:
 
 
 def _sto_changes(recording: Recording) -> Result[tuple[_StoChange, ...], str]:
-    """The ``sto`` events of the record, each its instant, state and source."""
+    """The ``sto`` events of the record, each its instant, state and source, in their order.
+
+    In the order of their instants, as the console writes them: one placed after a later
+    one would be read as current where it is not, and could hide an open chain.
+    """
     changes: list[_StoChange] = []
     for event in recording.events:
         if event.kind is EventKind.STO:
@@ -379,6 +383,8 @@ def _sto_changes(recording: Recording) -> Result[tuple[_StoChange, ...], str]:
                 return Err(
                     f"a sto event names no state and source of the console: {event.detail!r}"
                 )
+            if changes and event.t < changes[-1].t:
+                return Err(f"sto event {len(changes)} does not come after the one before it")
             changes.append(_StoChange(event.t, *read))
     return Ok(tuple(changes))
 

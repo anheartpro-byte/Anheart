@@ -97,6 +97,27 @@ def test_a_chain_the_record_says_opened_opens_in_the_replay_at_that_instant(
     assert "the runtime requested speed 0 motor rpm" in report.to_text()
 
 
+def test_a_sto_event_placed_after_a_later_one_makes_the_record_unreplayable(
+    turning: Path, tmp_path: Path
+) -> None:
+    """R2 of A1-20: the chain told open at 3 s, then a stray « ready » stamped 1 s placed
+    after it in the file. Taken as the latest, it would hide the opening and the tampered
+    record would replay as a match: refused, as ticks out of order are."""
+    stray = copy(turning, tmp_path)
+
+    def open_then_stray_ready(lines: list[Line]) -> list[Line]:
+        later = next(i for i, line in enumerate(lines) if float(str(line["t"])) > 3.0)
+        opening: Line = {"t": 3.0, "kind": "sto", "detail": "open (sim_ready)", "actor": "system"}
+        ready: Line = {"t": 1.0, "kind": "sto", "detail": "ready (sim_ready)", "actor": "system"}
+        return [*lines[:later], opening, ready, *lines[later:]]
+
+    edit_lines(stray, "events.jsonl", open_then_stray_ready)
+    reseal(stray)
+    refused = replay(stray)
+    assert isinstance(refused, Err), refused
+    assert "sto event 2 does not come after the one before it" in refused.error.detail
+
+
 def test_a_sto_event_the_console_could_not_have_written_is_not_replayed(
     opened: Path, tmp_path: Path
 ) -> None:
