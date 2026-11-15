@@ -196,6 +196,15 @@ describe("ANH-115 EX-4 the report, checked to the contract", () => {
     expect(SECTION.forbidden_categories).toEqual(["Cc", "Cf", "Zl", "Zp"]);
   });
 
+  it("counts a detail in code points, as the console cuts it: one beyond the BMP is one", () => {
+    const detail = `\u{1f600}${"x".repeat(SECTION.max_detail_chars - 1)}`;
+    expect([...detail]).toHaveLength(SECTION.max_detail_chars);
+    expect(detail.length).toBe(SECTION.max_detail_chars + 1);
+    expect(parseCommissioningReport(judged(report("u"), "estop", "ok", detail), Date.now())).not.toBeNull();
+    const over = `${detail}x`;
+    expect(parseCommissioningReport(judged(report("u"), "estop", "ok", over), Date.now())).toBeNull();
+  });
+
   const bad: Array<[string, (r: CommissioningReport) => unknown]> = [
     ["a field the contract does not name", (r) => ({ ...r, extra: 1 })],
     ["no controls", (r) => ({ ...r, controls: [] })],

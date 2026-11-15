@@ -3988,11 +3988,16 @@ en service rouge est envoyée aussi : elle est une preuve.
   tenue par un service de temps est à 5 s près (son contrôle `clock`, que le
   rapport porte), et une minute couvre ce bord, la latence du lien et
   l'erreur du serveur. Elle n'est pas plus ancienne que dix minutes
-  (`max_age_ms`) : aucune file d'attente, la console envoie dès la fin ; la
-  passe attend une minute au plus, le lien peut retenir une requête cinq
-  minutes derrière un 429 (`MAX_RATE_WAIT` de la console), et ce que la
-  carte offre après un échec est une nouvelle mise en service, avec sa
-  propre fin, jamais l'ancien rapport renvoyé. Aucun texte ni identifiant
+  (`max_age_ms`) : la console date la fin après sa passe et la relecture du
+  variateur, juste avant d'envoyer, et n'envoie qu'une fois, sans file
+  d'attente ni nouvel essai (une route que son lien retient après un 429 est
+  répondue aussitôt, rien n'est envoyé, ni alors ni plus tard), une requête
+  de 3 s au plus. L'âge est donc la latence de cette requête et l'erreur de
+  l'horloge de la console, quelques secondes avec une horloge tenue ; dix
+  minutes laissent de la marge à un lien lent et refusent un rapport gardé
+  puis envoyé plus tard. Une console dont l'horloge retarde de plus de dix
+  minutes sur celle du serveur est refusée. Ce que la carte offre après un
+  échec est une nouvelle mise en service, avec sa propre fin. Aucun texte ni identifiant
   ne porte un caractère des catégories Unicode `forbidden_categories` : Cc
   (les contrôles), Cf (les caractères de format : marques, remplacements et
   isolats de direction, largeur nulle, trait d'union conditionnel,

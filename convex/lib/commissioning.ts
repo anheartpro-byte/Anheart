@@ -101,12 +101,15 @@ export const CLOCK_SKEW_MS: number = SECTION.clock_skew_ms;
 
 /**
  * How long before the server's clock the end of the checks may be
- * (`max_age_ms`). There is no outbox: the console sends as soon as its checks
- * end. Its run waits a minute at most, its link may hold a request five
- * minutes behind a 429 (the console's `MAX_RATE_WAIT`), and its clock is
- * within 5 s when trusted; ten minutes covers them all. What the card offers
- * after a failure is a new commissioning, with its own end, never the old
- * report sent again.
+ * (`max_age_ms`). The console dates the end after its run and its drive read,
+ * just before it sends, and sends once: no outbox, no retry (a route its link
+ * holds after a 429 is answered at once, and nothing is sent, then or later),
+ * a request of at most 3 s. So the age is that request's latency plus the
+ * console's clock error, a few seconds with a trusted clock. Ten minutes
+ * leaves room for a slow link, and refuses a report kept and sent later; a
+ * console whose clock is more than ten minutes behind the server's is
+ * refused, and says so. What the card offers after a failure is a new
+ * commissioning, with its own end.
  */
 export const MAX_AGE_MS: number = SECTION.max_age_ms;
 
