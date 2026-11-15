@@ -282,6 +282,10 @@ include = [
     # the startup reads with a strict parser so that it can never set a safety key.
     "src/pairing.py",
     "src/pairing_view.py",
+    # The commissioning of a console (ANH-115): the pre-flight in commissioning mode, the
+    # drive read back at rest, a report that fits its route, the dashboard's answer.
+    "src/commissioning.py",
+    "src/commissioning_view.py",
     # What that link has last heard of itself, as the state the operator reads
     # on the console: it must never say reachable of a dashboard that is not.
     "src/link_state.py",
@@ -366,6 +370,8 @@ safety_chain = [
     "src/config_sync.py",
     "src/pairing.py",
     "src/pairing_view.py",
+    "src/commissioning.py",
+    "src/commissioning_view.py",
     "src/link_state.py",
     "src/record_uplink.py",
     "src/contract.py",

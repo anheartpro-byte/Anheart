@@ -4369,6 +4369,37 @@ Le code ([`src/pairing.py`](../raspberry-pi/src/pairing.py)) :
 
 **Désappairer une console** : l'arrêter au repos, retirer `/var/lib/anheart/data/machine.env` (`raspberry-pi/data/machine.env` sur un poste de développement), la redémarrer (`sudo systemctl restart anheart`), puis **Révoquer** la clé sur la fiche de la machine, carte **Clés de la machine** : la console redémarre sans clé, sur son écran de mise en service, et la clé qu'elle tenait n'ouvre plus rien.
 
+### 12.9 Les contrôles de mise en service (ANH-115, contrat 1.18)
+
+Une console appairée, qui juge son pré-vol, offre sa mise en service, page
+Pre-vol ([console-locale.md, section 17](console-locale.md#17-page--pre-vol--anh-142)) :
+`src/commissioning.py`, la carte et ses routes `src/web/commissioning_routes.py`.
+
+* **La liste.** `COMMISSIONING_CONTROLS` est `CONTROLS` du pré-vol, dans son
+  ordre, jugé au banc, avec l'horloge, le BITalino et les paramètres médicaux
+  rouges quand ils ne tiennent pas (`RAISED`). `src/training/preflight.py`
+  n'est pas modifié : ses règles du banc et son verrou « personne à bord »
+  restent les siennes, et `tests/test_commissioning.py` épingle sa liste
+  colonne par colonne. Trois contrôles de plus : `sto_source`, `sto_ready`
+  (`check_sto_ready`, ou un pont déclaré au banc), `drive_limits`
+  (`read_limits` puis `check_limits`, sous le plafond `max_motor_hz` de
+  l'armement). La liste porte chaque contrôle que le tableau de bord exige
+  (`required_controls` du contrat).
+* **Au repos.** La règle du contrôle `drive_state` : console en REPOS,
+  variateur ni en défaut ni en marche, moteur à 0. Le garde de roue libre
+  (`CoastDownHold`) s'y ajoutera par `CommissioningSetup.coasting`, qui ne dit
+  rien jusque-là (`never_coasting`).
+* **La lecture du variateur** passe par le `backend` de la console, celui du
+  runtime et de son enregistreur : une lecture des cinq registres, sérialisée
+  avec les autres échanges par le verrou du client ATV320, rien d'écrit.
+* **L'envoi** prend le transport du lien (`PacedTransport`), lié une fois le
+  lien construit (`CommissioningDesk.bind`), et seulement vers un tableau de
+  bord qui a annoncé 1.18 ou plus dans son dernier battement de cœur. Le
+  rapport, encodé comme le transport l'encode (`json.dumps`), tient dans
+  `MAX_BODY_BYTES` : les raisons sont raccourcies de même, de moitié à chaque
+  fois, jusqu'à ce qu'il tienne ; tout caractère que le tableau de bord refuse
+  y devient une espace (`FORBIDDEN_CHARS`).
+
 ---
 
 ## 13. Le contrat de code strict et la gate

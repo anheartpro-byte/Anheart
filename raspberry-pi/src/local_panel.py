@@ -186,6 +186,14 @@ from src.cloud_sync import (
     StartedSession,
     end_is_failure,
 )
+from src.commissioning import (
+    COMMISSIONING_PATH,
+    CommissioningDesk,
+    CommissioningSetup,
+    DashboardLink,
+    Facts,
+    attested,
+)
 from src.config_sync import (
     APPLIED_FILE,
     MACHINE_UNASSIGNED,
@@ -2674,7 +2682,7 @@ def build_ecg_client(config: LocalConfig, clock: Clock) -> EcgSide:
     raise assert_never(config.ecg_source)
 
 
-def build_panel(  # noqa: PLR0915  # one statement per wired part
+def build_panel(  # noqa: PLR0912, PLR0915  # one branch, one statement per wired part
     config: LocalConfig,
     *,
     clock: Clock,
@@ -2949,6 +2957,29 @@ def build_panel(  # noqa: PLR0915  # one statement per wired part
     )
     # A console with no key offers its first-power-up screen (ANH-115); one with a key, none.
     desk = PairingDesk(pairing) if pairing is not None and config.cloud is None else None
+    # One with a key and a pre-flight offers its commissioning (ANH-115), once linked below.
+    commissioning = (
+        None
+        if config.cloud is None or monitor is None
+        else CommissioningDesk(
+            CommissioningSetup(
+                clock=clock,
+                monitor=monitor,
+                attestation=lambda: attested(runtime.require_estop_confirmed()),
+                sto=lambda: sto.latest(clock.monotonic()),
+                # The runtime's own drive, tapped: a READ, serialised with its exchanges.
+                read_limits=backend.read_limits,
+                ceiling=RUNTIME_LIMITS.max_motor_hz,
+                facts=Facts(
+                    sto_source=config.sto_source,
+                    bitalino_address=config.bitalino_address,
+                    software_version=version,
+                    medical_version=config.medical.version,
+                    config_hash=None if applied is None else applied.revision.digest,
+                ),
+            )
+        )
+    )
     services = Services(
         clock=clock,
         sto=sto,
@@ -2975,6 +3006,7 @@ def build_panel(  # noqa: PLR0915  # one statement per wired part
         preflight=monitor,
         access=access,
         pairing=desk,
+        commissioning=commissioning,
         config_view=functools.partial(
             view_of,
             applied,
@@ -3111,6 +3143,14 @@ def build_panel(  # noqa: PLR0915  # one statement per wired part
             config_hash=None if applied is None else applied.revision.digest,
             counts_dir=profiles_path.parent,
         )
+        if commissioning is not None:
+            linked = cloud
+            commissioning.bind(
+                DashboardLink(
+                    post=lambda body: link.post(COMMISSIONING_PATH, body),
+                    announced=lambda: linked.server_contract,
+                )
+            )
         panel.attach_cloud(
             cloud=cloud,
             transport=owned,
