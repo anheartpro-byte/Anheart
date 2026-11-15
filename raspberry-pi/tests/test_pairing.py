@@ -19,7 +19,7 @@ import httpx
 import pytest
 from dotenv import dotenv_values
 
-from src import pairing
+from src import console_access, pairing
 from src.contract import CONTRACT_HEADER, CONTRACT_VERSION
 from src.pairing import (
     ALREADY_PAIRED,
@@ -198,7 +198,7 @@ def test_a_pipe_where_the_file_belongs_is_refused_at_once(tmp_path: Path) -> Non
     opened without waiting, it is judged on what was opened, and refused."""
     path = tmp_path / "machine.env"
     os.mkfifo(path)
-    assert read_paired(path) == Err("pas un fichier ordinaire")
+    assert read_paired(path) == Err("OSError:EINVAL")
 
 
 def test_a_file_the_disk_fails_once_opened_is_said_and_closed(
@@ -243,7 +243,7 @@ def test_a_failure_after_the_temporary_file_takes_it_away(
     def refuse(_path: Path) -> None:
         raise OSError(28, "No space left on device")
 
-    monkeypatch.setattr(pairing, "fsync_path", refuse)
+    monkeypatch.setattr(console_access, "fsync_path", refuse)
     path = tmp_path / "machine.env"
     assert write_paired(path, LINK) == Err("OSError:ENOSPC")
     assert list(tmp_path.iterdir()) == []
@@ -254,10 +254,10 @@ def test_what_is_not_a_small_ascii_file_of_the_three_keys_is_not_read(
 ) -> None:
     folder = tmp_path / "machine.env"
     folder.mkdir()
-    assert read_paired(folder) == Err("pas un fichier ordinaire")
+    assert read_paired(folder) == Err("OSError:EINVAL")
     big = tmp_path / "big.env"
     big.write_bytes(b"x" * (MAX_FILE_BYTES + 1))
-    assert read_paired(big) == Err("trop grand")
+    assert read_paired(big) == Err("OSError:EFBIG")
     latin = tmp_path / "latin.env"
     latin.write_bytes("CONVEX_URL=é\n".encode("latin-1"))
     assert read_paired(latin) == Err("pas du texte ASCII")

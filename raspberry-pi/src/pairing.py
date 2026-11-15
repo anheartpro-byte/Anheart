@@ -25,12 +25,9 @@ ticket fills in.
 
 from __future__ import annotations
 
-import contextlib
 import json
 import logging
-import os
 import re
-import stat
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -38,6 +35,7 @@ from typing import Final, assert_never, cast
 
 import httpx
 
+from src.console_access import read_kept, replace_file
 from src.contract import CONTRACT_HEADER, CONTRACT_VERSION
 from src.local_config import (
     KEY_CONVEX_URL,
@@ -47,7 +45,7 @@ from src.local_config import (
     UNASSIGNED,
 )
 from src.pairing_view import PairingDone, PairingView, PendingStep
-from src.record.writer import create_private, describe_os_error, fsync_path
+from src.record.writer import describe_os_error
 from src.result import Err, Ok, Result
 
 _logger = logging.getLogger(__name__)
@@ -191,32 +189,20 @@ def render_paired(link: PairedLink) -> bytes:
     return "".join(f"{key}={values[key]}\n" for key in PAIRED_KEYS).encode("ascii")
 
 
-def read_paired(path: Path) -> Result[PairedLink | None, str]:  # noqa: PLR0911  # one per refusal
+def read_paired(path: Path) -> Result[PairedLink | None, str]:
     """The file a pairing wrote, ``None`` when there is none, or why it is not read.
 
-    A link, anything but a regular file, a file larger than :data:`MAX_FILE_BYTES` or one
-    :func:`parse_paired` refuses is not read. Opened first, without following a link and
-    without waiting (a pipe swapped in would otherwise hold the startup), then judged on
-    what was opened. Never raises.
+    Read as every file the console keeps is (:func:`~src.console_access.read_kept`):
+    opened without following a link and without waiting, then judged on what was opened,
+    a regular file of at most :data:`MAX_FILE_BYTES`. Then ASCII, and the three keys of
+    :func:`parse_paired`. Never raises.
     """
     try:
-        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        raw = read_kept(path, MAX_FILE_BYTES)
     except FileNotFoundError:
         return Ok(None)
     except OSError as error:
         return Err(describe_os_error(error))
-    try:
-        status = os.fstat(descriptor)
-        if not stat.S_ISREG(status.st_mode):
-            return Err("pas un fichier ordinaire")
-        if status.st_size > MAX_FILE_BYTES:
-            return Err("trop grand")
-        with os.fdopen(descriptor, "rb", closefd=False) as handle:
-            raw = handle.read(MAX_FILE_BYTES + 1)
-    except OSError as error:
-        return Err(describe_os_error(error))
-    finally:
-        os.close(descriptor)
     try:
         text = raw.decode("ascii")
     except UnicodeDecodeError:
@@ -228,24 +214,17 @@ def read_paired(path: Path) -> Result[PairedLink | None, str]:  # noqa: PLR0911 
 
 
 def write_paired(path: Path, link: PairedLink) -> Result[None, str]:
-    """Write the file: a private temporary file, flushed, renamed over ``path``, then
-    the directory flushed. A link at ``path`` is refused. Never raises: a key the
-    dashboard issued and the console then lost to an exception would be lost for good."""
-    temporary = path.with_name(f".{path.name}.tmp")
+    """Write the file as every file the console keeps is
+    (:func:`~src.console_access.replace_file`): a private temporary file, flushed, renamed
+    over ``path``, then its directory flushed. A link at ``path`` is refused. Never raises:
+    a key the dashboard issued and the console then lost to an exception would be lost
+    for good."""
     try:
         if path.is_symlink():
             return Err("un lien est a la place du fichier")
-        path.parent.mkdir(parents=True, exist_ok=True)
-        temporary.unlink(missing_ok=True)
-        create_private(temporary, render_paired(link))
-        fsync_path(temporary)
-        temporary.replace(path)
-        fsync_path(path.parent)
+        return replace_file(path, render_paired(link))
     except (OSError, ValueError) as error:
-        with contextlib.suppress(OSError, ValueError):
-            temporary.unlink(missing_ok=True)
         return Err(describe_os_error(error) if isinstance(error, OSError) else type(error).__name__)
-    return Ok(None)
 
 
 def _given(env: Mapping[str, str], key: str) -> str | None:
