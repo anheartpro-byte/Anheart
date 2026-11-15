@@ -1362,6 +1362,20 @@ const SCENARIOS: Record<string, (w: World) => Promise<Doc<"audit_log">[]>> = {
       ];
     });
   },
+  "machineLogbook.addEntry": async (w) =>
+    observe(w, async () => {
+      await as(w.t, "orgAdmin").mutation(api.machineLogbook.addEntry, {
+        machineId: w.machine,
+        kind: "note",
+        summary: "synthetic-private-logbook-note",
+        details: "synthetic-private-logbook-details",
+      });
+      return [
+        site(w, "logbook.entry_added", w.machine, "machine", "orgAdmin", w.orgA, {
+          fields: ["note"],
+        }),
+      ];
+    }),
   "training.launchAutoSession": async (w) =>
     observe(w, async () => {
       const sessionId = await as(w.t, "manager").mutation(

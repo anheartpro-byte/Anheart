@@ -180,6 +180,18 @@ export const incidentKindValidator = v.union(
   v.literal("record_rejected"),
   v.literal("manual"),
 );
+/** What a machine logbook entry records (ANH-149, convex/lib/logbook.ts). */
+export const logbookKindValidator = v.union(
+  v.literal("intervention"),
+  v.literal("calibration"),
+  v.literal("part_replaced"),
+  v.literal("drive_parameter_change"),
+  v.literal("software_update"),
+  v.literal("config_change"),
+  v.literal("incident"),
+  v.literal("validation_review"),
+  v.literal("note"),
+);
 export const incidentSeverityValidator = v.union(
   v.literal("low"),
   v.literal("medium"),
@@ -943,6 +955,15 @@ export default defineSchema({
     closedAt: v.optional(v.number()),
     // The rejected file of a `record_rejected` incident.
     recordId: v.optional(v.id("session_record_files")),
+    // When a closed incident was last opened again (`join`): an intervention
+    // written before it no longer counts (ANH-149).
+    reopenedAt: v.optional(v.number()),
+    // On a `drive_fault`: true while it closes programmed sessions (a code the
+    // console cannot reset, not closed, or closed with no intervention written
+    // since it last opened), false once judged otherwise. Kept by
+    // `refreshInterventionDue` (convex/lib/logbook.ts). Absent on the other
+    // kinds, and on a drive fault never judged (written before ANH-149).
+    interventionDue: v.optional(v.boolean()),
   })
     // The blocking count reads the high ones only (`openHighIncidents`).
     .index("by_machine_and_status_and_severity", [
@@ -952,8 +973,44 @@ export default defineSchema({
     ])
     // A machine's incidents, most recently opened last (a gestionnaire's list).
     .index("by_machine", ["machineId"])
+    // Its drive faults by their judgement (ANH-149): those that close its
+    // programmed sessions, and those never judged.
+    .index("by_machine_and_kind_and_intervention_due", [
+      "machineId",
+      "kind",
+      "interventionDue",
+    ])
     .index("by_organization", ["organizationId"])
     .index("by_session", ["sessionId", "rule", "t"]),
+
+  // The machine logbook (ANH-149): one chronological line per machine, written
+  // by the mutations that change it (convex/lib/logbook.ts) and by hand by an
+  // admin (`machineLogbook.addEntry`). Never edited, never deleted. Identifiers
+  // only: who wrote it is a user id, and no entry names a person.
+  machine_logbook: defineTable({
+    machineId: v.id("machines"),
+    organizationId, // The machine's organisation when the entry was written
+    at: v.number(), // When it happened, the server's clock unless the admin dates it
+    kind: logbookKindValidator,
+    summary: v.string(), // One line, at most 200 characters
+    details: v.optional(v.string()), // At most 2000 characters
+    by: v.optional(v.id("users")), // Who wrote it; absent: written by the server
+    refs: v.object({
+      incidentId: v.optional(v.id("incidents")),
+      configRevision: v.optional(v.number()),
+      softwareVersion: v.optional(v.string()),
+      storageId: v.optional(v.id("_storage")),
+    }),
+  })
+    // A machine's line of time, oldest first.
+    .index("by_machine_and_at", ["machineId", "at"])
+    // Its entries of one kind (the last software updates).
+    .index("by_machine_and_kind_and_at", ["machineId", "kind", "at"])
+    // The interventions written for an incident (the drive fault rule).
+    .index("by_incident_and_kind", ["refs.incidentId", "kind"])
+    // An attachment is attached once.
+    .index("by_storage", ["refs.storageId"])
+    .index("by_organization", ["organizationId"]),
 
   machine_health_history: defineTable({
     machineId: v.id("machines"),

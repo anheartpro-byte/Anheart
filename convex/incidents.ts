@@ -29,6 +29,11 @@ import {
 import { audit, userActor } from "./lib/audit";
 import { refusal } from "./lib/errors";
 import { openHighIncidents } from "./lib/incidents";
+import {
+  incidentSummary,
+  refreshInterventionDue,
+  writeLogbook,
+} from "./lib/logbook";
 import { limitUser } from "./lib/rateLimits";
 import {
   incidentKindValidator,
@@ -317,6 +322,17 @@ export const close = mutation({
       closedBy: caller._id,
       closedAt: Date.now(),
     });
+    await writeLogbook(
+      ctx,
+      { _id: incident.machineId, organizationId: incident.organizationId },
+      {
+        kind: "incident",
+        summary: incidentSummary(incident, "clos"),
+        by: caller._id,
+        refs: { incidentId: incident._id },
+      },
+    );
+    await refreshInterventionDue(ctx, incident._id);
     await audit(ctx, {
       actor: userActor(caller),
       source: "site",

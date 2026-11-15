@@ -55,6 +55,7 @@ import { LaunchTrainingModal } from "@/components/modals/LaunchTrainingModal";
 import { LaunchBenchModal } from "@/components/modals/LaunchBenchModal";
 import { MachineLiveCard } from "@/components/training/MachineLiveCard";
 import { MachineHealthCard } from "@/components/machines/MachineHealthCard";
+import { MachineLogbookCard } from "@/components/machines/MachineLogbookCard";
 import { MachineKeysCard } from "@/components/machines/MachineKeysCard";
 import { MachineConsoleAccessCard } from "@/components/machines/MachineConsoleAccessCard";
 import { MachineRegistryCard } from "@/components/machines/MachineRegistryCard";
@@ -346,6 +347,10 @@ export default function MachineDetailPage({
       {/* Launch rights - admins and gestionnaires of this machine */}
       {canManage && !machine.isDeleted && (
         <MachineHealthCard machineId={machineId} />
+      )}
+      {/* The machine's logbook (ANH-149): the server says who reads and writes it. */}
+      {canManage && (
+        <MachineLogbookCard machineId={machineId} exportable={isAdmin} />
       )}
       {canManage && !machine.isDeleted && (
         <LaunchRightsCard

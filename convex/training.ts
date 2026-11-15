@@ -111,6 +111,8 @@ import {
   openIncidentOfEnd,
   openIncidentOfEvent,
 } from "./lib/incidents";
+// The machine logbook (ANH-149): the intervention a drive fault waits for.
+import { driveInterventionsDue } from "./lib/logbook";
 
 // ---------------------------------------------------------------------------
 // Physiology: mirrors raspberry-pi/src/training/plan.py. The Pi re-checks all
@@ -754,7 +756,7 @@ export const ARMING_REFUSALS = {
   // Auto launches only (ANH-145, contract 1.10), checked after the
   // organisation: a bench launch puts nobody on board.
   incident_open:
-    "a high-severity incident of the machine was open when it armed the launch",
+    "an incident of the machine closed its programmed sessions when it armed the launch: a high-severity incident open or analysed, or a drive fault waiting for its intervention",
   // Auto launches only (contract 1.12), checked last and by the start alone:
   // the machine says what it holds when it confirms (`programmeChanged`).
   programme_changed:
@@ -1019,6 +1021,10 @@ async function armingRefusal(
   }
   if ((await openHighIncidents(ctx, machine._id)) > 0)
     return refusalFor("incident_open");
+  // ANH-149: a drive fault the console cannot reset, not resolved. Said
+  // `incident_open` until contract 1.16 gives it a code of its own.
+  if ((await driveInterventionsDue(ctx, machine._id)).length > 0)
+    return refusalFor("incident_open");
   const rider = await riderStillAllowed(ctx, session, machine);
   if (rider === null) return refusalFor("right_revoked_before_start");
   const fitnessRefusal = await riderLaunchRefusal(
@@ -1235,6 +1241,10 @@ export const launchAutoSession = mutation({
     // ANH-145: a high incident open or analysed closes programmed sessions.
     if ((await openHighIncidents(ctx, args.machineId)) > 0)
       throw refusal("incident_open");
+    // ANH-149: a drive fault the console cannot reset keeps programmed sessions
+    // closed until its incident is closed and an intervention names it.
+    if ((await driveInterventionsDue(ctx, args.machineId)).length > 0)
+      throw refusal("drive_intervention_required");
     const medical = await currentMedicalParameters(ctx);
     if (medical === null) throw refusal("medical_parameters_unavailable");
     if (machine.medicalParametersVersion === null) {
