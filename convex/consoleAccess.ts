@@ -65,6 +65,43 @@ async function eligible(
   return role !== null && OPERATOR_ROLES.includes(role);
 }
 
+/** Whether one row of `machine_operators` is on the signed list (`operatorList`) now. */
+async function listed(
+  ctx: Ctx,
+  row: Doc<"machine_operators">,
+  organizationId: Id<"organizations"> | undefined,
+): Promise<boolean> {
+  return (
+    row.disabledAt === undefined &&
+    row.operatorCode !== undefined &&
+    organizationId !== undefined &&
+    (await eligible(ctx, row.userId, organizationId))
+  );
+}
+
+/**
+ * Whether the member is on the machine's signed operator list now: enabled,
+ * a console code set, an operator of the machine's organisation. A
+ * commissioning's operator and the author of its attestation must be
+ * (ANH-115).
+ */
+export async function onOperatorList(
+  ctx: QueryCtx,
+  machine: Pick<Doc<"machines">, "_id" | "organizationId">,
+  userId: Id<"users">,
+): Promise<boolean> {
+  const rows = await ctx.db
+    .query("machine_operators")
+    .withIndex("by_machine_and_user", (q) =>
+      q.eq("machineId", machine._id).eq("userId", userId),
+    )
+    .collect();
+  for (const row of rows) {
+    if (await listed(ctx, row, machine.organizationId)) return true;
+  }
+  return false;
+}
+
 /**
  * The machine whose console access the caller administers, with its
  * organisation; null when it does not exist, is deleted, has no organisation
@@ -490,17 +527,12 @@ export const operatorList = internalQuery({
       .collect();
     const operators = [];
     for (const row of rows) {
-      if (
-        row.disabledAt !== undefined ||
-        row.operatorCode === undefined ||
-        organizationId === undefined ||
-        !(await eligible(ctx, row.userId, organizationId))
-      )
-        continue;
+      const code = row.operatorCode;
+      if (code === undefined || !(await listed(ctx, row, organizationId))) continue;
       operators.push({
         userId: row.userId,
         name: shownName(nameOf(await ctx.db.get(row.userId)), row.userId),
-        code: row.operatorCode,
+        code,
       });
     }
     const devices = (

@@ -158,6 +158,9 @@
       },
       "logbook": {
         "entry_added": "Logbook entry added"
+      },
+      "commissioning": {
+        "recorded": "Commissioning recorded by the machine"
       }
     },
     "targets": {
@@ -409,6 +412,7 @@
     "unknown_software_version": "This Pi software version is not registered.",
     "unknown_medical_parameters_version": "This medical parameters version is not registered.",
     "invalid_registry_file": "The attachment is missing, invalid, too old or already used.",
+    "invalid_drive_parameters": "Drive values refused: tenths inside the drive's ranges (tFr 10 to 599 Hz, HSP and LSP 0 to 599 Hz, ACC and dEC 0 to 999.9 s), with LSP ≤ HSP ≤ tFr.",
     "validation_level_not_next": "A review must grant exactly the next validation level.",
     "validation_level_not_lower": "The requested level must be lower than the current level.",
     "downgrade_reason_required": "Lowering validation requires a reason of 3 to 500 characters.",

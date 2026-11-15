@@ -21,6 +21,11 @@ import { v } from "convex/values";
 import { MACHINE_VALIDATION_LEVELS } from "./lib/releaseValidation";
 import { machineConfigFields } from "./lib/machineConfig";
 import {
+  commissioningFindingValidator,
+  commissioningVerdictValidator,
+  driveParametersValidator,
+} from "./lib/commissioning";
+import {
   machineHealthValidator,
   healthMeasurementsValidator,
 } from "./lib/machineHealth";
@@ -104,6 +109,10 @@ export const driveParameterSheetValidator = v.object({
   at: v.number(),
   attachedBy: v.id("users"),
   attachedAt: v.number(),
+  // The sheet's tFr, HSP, LSP (Hz), ACC and dEC (s), typed with it (ANH-115):
+  // what a commissioning compares the drive's values with. Absent on a sheet
+  // attached without them, against which no commissioning is recorded.
+  parameters: v.optional(driveParametersValidator),
 });
 export const machineValidationValidator = v.object({
   level: machineValidationLevelValidator,
@@ -191,6 +200,7 @@ export const logbookKindValidator = v.union(
   v.literal("incident"),
   v.literal("validation_review"),
   v.literal("note"),
+  v.literal("commissioning"),
 );
 export const incidentSeverityValidator = v.union(
   v.literal("low"),
@@ -1046,6 +1056,27 @@ export default defineSchema({
     .index("by_incident_and_kind", ["refs.incidentId", "kind"])
     // An attachment is attached once.
     .index("by_storage", ["refs.storageId"])
+    .index("by_organization", ["organizationId"]),
+
+  // The commissioning records of each machine (ANH-115, contract 1.18): what
+  // its console judged and read at rest, compared with the registry. Written
+  // once by `machineCommissioning.record`, never changed. `payload` is the
+  // canonical text (convex/lib/commissioning.ts), `signature` its Ed25519
+  // signature on the catalogue's channel, null without a usable key. Who ran
+  // it and who attested the emergency stop are user ids.
+  machine_commissioning: defineTable({
+    machineId: v.id("machines"),
+    organizationId, // The machine's organisation when it was recorded
+    recordedAt: v.number(),
+    operator: v.id("users"),
+    attestedBy: v.id("users"),
+    verdict: commissioningVerdictValidator,
+    findings: v.array(commissioningFindingValidator),
+    payload: v.string(),
+    signature: v.union(v.string(), v.null()),
+  })
+    // A machine's records, oldest first.
+    .index("by_machine_and_recorded_at", ["machineId", "recordedAt"])
     .index("by_organization", ["organizationId"]),
 
   machine_health_history: defineTable({

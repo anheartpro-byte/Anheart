@@ -127,6 +127,13 @@ header and no key, answered with the machine's key and its Convex address, or
 ``pairing_refused`` in the same words whatever the reason. A dashboard before
 1.17 answers 404.
 
+Since 1.18 a console sends the result of its commissioning checks
+(``POST /api/machine/commissioning``, ``machine_commissioning`` of the shared
+file): what it judged and read at rest, with the emergency-stop attestation and
+who gave it. The dashboard compares it with the machine's registry, records it
+signed, and answers the verdict and each finding, or ``commissioning_refused``
+with nothing written. A dashboard before 1.18 answers 404.
+
 One exchange is outside this rule on purpose: **a stop**. It means the same
 under every contract, so the dashboard answers the status request whatever
 major the console announces, and the console ends its session on that answer
@@ -171,7 +178,7 @@ ErrorCode = NewType("ErrorCode", str)
 SoftwareVersion = NewType("SoftwareVersion", str)
 """What this build calls itself: a git tag such as ``pi-0.4.2``."""
 
-CONTRACT_VERSION: Final[ContractVersion] = ContractVersion("1.17")
+CONTRACT_VERSION: Final[ContractVersion] = ContractVersion("1.18")
 """The contract this console speaks. Pinned to ``contracts/machine-api.json``."""
 
 CONTRACT_HEADER: Final[str] = "X-Anheart-Contract"
@@ -222,6 +229,7 @@ STABLE_CODES: Final[frozenset[ErrorCode]] = frozenset(
         CONTRACT_UNSUPPORTED,
         ErrorCode("unauthorized"),
         ErrorCode("pairing_refused"),
+        ErrorCode("commissioning_refused"),
         ErrorCode("invalid_request"),
         ErrorCode("session_not_found"),
         ErrorCode("session_not_pending"),

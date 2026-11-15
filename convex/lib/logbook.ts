@@ -10,7 +10,10 @@
  * - a drive parameter sheet attached (`machineRegistry.attachDriveParameterSheet`):
  *   `drive_parameter_change`, the sheet in `refs.storageId`;
  * - a software version the heartbeat says changed (`machines.recordHeartbeat`):
- *   `software_update`, the new version in `refs.softwareVersion`.
+ *   `software_update`, the new version in `refs.softwareVersion`;
+ * - a commissioning recorded (`machineCommissioning.record`, ANH-115):
+ *   `commissioning`, its verdict and findings, the version the console runs in
+ *   `refs.softwareVersion`.
  * And by hand, by an admin (`machineLogbook.addEntry`): an intervention, a
  * calibration, a part replaced, a note; an org_admin writes notes only.
  *

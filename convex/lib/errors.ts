@@ -243,6 +243,8 @@ export const DASHBOARD_ERRORS = {
     "The medical parameters version is not registered.",
   invalid_registry_file:
     "The attachment is missing, invalid, too old or already referenced.",
+  invalid_drive_parameters:
+    "A drive sheet's values are not whole tenths inside the keypad's ranges, or LSP <= HSP <= tFr does not hold (ANH-115).",
   validation_level_not_next:
     "A review must grant exactly the next validation level.",
   validation_level_not_lower:

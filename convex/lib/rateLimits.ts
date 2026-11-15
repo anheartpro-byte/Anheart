@@ -8,7 +8,8 @@
  * only an accepted one takes a token.
  *
  * Per machine: heartbeat, training/poll, telemetry, events, local, profiles,
- * records/upload-url and commit (ANH-228). Their limits and their body
+ * records/upload-url and commit (ANH-228), config/applied (ANH-141) and
+ * commissioning (ANH-115). Their limits and their body
  * sizes are read from the shared contract (`contracts/machine-api.json`,
  * `rate_limits` and `max_body_bytes`), which the Pi's tests pin its own
  * cadences and batch sizes to: a console that works as designed never meets
@@ -72,6 +73,7 @@ export const rateLimiter = new RateLimiter(components.rateLimiter, {
   machineProfiles: bucket("POST /api/machine/profiles"),
   machineRecordCommit: bucket("POST /api/machine/records/commit"),
   machineConfigApplied: bucket("POST /api/machine/config/applied"),
+  machineCommissioning: bucket("POST /api/machine/commissioning"),
   /** Every pairing request, whoever sends it (ANH-115): one bucket for all. */
   machinePairing: {
     kind: "token bucket",
@@ -100,7 +102,8 @@ export type MachineLimit =
   | "machineLocalSession"
   | "machineProfiles"
   | "machineRecordCommit"
-  | "machineConfigApplied";
+  | "machineConfigApplied"
+  | "machineCommissioning";
 
 /** The limits of an account. */
 export type UserLimit = "launchAutoSession" | "userWrite";
@@ -111,6 +114,7 @@ export const MAX_TELEMETRY_BYTES = sizeOf(
 );
 export const MAX_EVENTS_BYTES = sizeOf("POST /api/machine/training/events");
 export const MAX_PROFILES_BYTES = sizeOf("POST /api/machine/profiles");
+export const MAX_COMMISSIONING_BYTES = sizeOf("POST /api/machine/commissioning");
 /** Programmes in one list of `POST /api/machine/profiles` (ANH-228), as the contract says. */
 export const MAX_PROFILES_PER_PUSH: number =
   machineApi.max_body_bytes.max_programmes;

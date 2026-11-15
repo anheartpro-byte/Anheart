@@ -19,6 +19,7 @@ const ROUTES = [
   "POST /api/machine/profiles",
   "POST /api/machine/records/commit",
   "POST /api/machine/config/applied",
+  "POST /api/machine/commissioning",
 ] as const;
 
 function substitute(
@@ -28,6 +29,7 @@ function substitute(
     "POST /api/machine/training/telemetry": 222,
     "POST /api/machine/training/events": 333,
     "POST /api/machine/profiles": 444,
+    "POST /api/machine/commissioning": 555,
   },
 ) {
   vi.resetModules();
@@ -87,6 +89,7 @@ describe("ANH-166 the limits are read from contracts/machine-api.json", () => {
         "machineProfiles",
         "machineRecordCommit",
         "machineConfigApplied",
+        "machineCommissioning",
       ] as const
     ).entries()) {
       expect(limits.rateLimiter.limits?.[name]).toEqual({
@@ -101,7 +104,8 @@ describe("ANH-166 the limits are read from contracts/machine-api.json", () => {
       limits.MAX_TELEMETRY_BYTES,
       limits.MAX_EVENTS_BYTES,
       limits.MAX_PROFILES_BYTES,
-    ]).toEqual([111, 222, 333, 444]);
+      limits.MAX_COMMISSIONING_BYTES,
+    ]).toEqual([111, 222, 333, 444, 555]);
   });
 
   it("refuses to load without a limit for a route it limits", async () => {

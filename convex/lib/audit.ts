@@ -126,6 +126,7 @@ export const AUDIT_ACTIONS = [
   "machine_config.applied", // Machine says it applied a revision; target: revision.
   "machine_config.refused", // Machine refuses a revision, without its reason; target: revision.
   "logbook.entry_added", // Admin or org_admin writes a logbook entry by hand, its kind only; target: machine.
+  "commissioning.recorded", // Machine sends a commissioning, recorded with its verdict only (ANH-115); target: machine.
 ] as const;
 export type AuditAction = (typeof AUDIT_ACTIONS)[number];
 export const auditActionValidator = v.union(
@@ -202,6 +203,7 @@ export const AUDIT_ACTION_TARGET: Record<AuditAction, AuditTargetType> = {
   "machine_config.applied": "machine_config",
   "machine_config.refused": "machine_config",
   "logbook.entry_added": "machine",
+  "commissioning.recorded": "machine",
 };
 
 const detailRoleValidator = v.union(
@@ -277,6 +279,7 @@ export const SENSITIVE_MUTATIONS: Readonly<
   "incidents.analyze": ["incident.analyzed"],
   "incidents.close": ["incident.closed"],
   "machineLogbook.addEntry": ["logbook.entry_added"],
+  "machineCommissioning.record": ["commissioning.recorded"],
   "fitness.signConsent": ["consent.signed"],
   "fitness.withdrawConsent": ["consent.withdrawn"],
   "machineKeys.createMachineKey": [

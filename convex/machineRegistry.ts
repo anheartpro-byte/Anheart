@@ -44,6 +44,10 @@ import {
   machineValidationLevelValidator,
   machineValidationValidator,
 } from "./schema";
+import {
+  driveParametersValidator,
+  sheetParametersRefusal,
+} from "./lib/commissioning";
 import { endedBeforeStart } from "./sessionReports";
 import { configurationStatusOf } from "./lib/machineConfig";
 import { rejectLocksAbove } from "./machineConfigs";
@@ -108,7 +112,12 @@ function canRead(user: CurrentUser, machine: Doc<"machines">): boolean {
   );
 }
 
-async function readableMachine(ctx: QueryCtx, machineId: Id<"machines">) {
+/**
+ * The machine and its reader when the caller may read its registry, and its
+ * commissioning records (ANH-115): the Anheart admin, or an org_admin of its
+ * organisation while it is not deleted. Null otherwise.
+ */
+export async function readableMachine(ctx: QueryCtx, machineId: Id<"machines">) {
   const user = await getCurrentUserOrThrow(ctx);
   const machine = await ctx.db.get(machineId);
   return machine !== null && canRead(user, machine) ? { user, machine } : null;
@@ -720,7 +729,11 @@ export const recordRadii = mutation({
   },
 });
 
-/** Attaches a checked upload while retaining every replaced drive sheet. */
+/**
+ * Attaches a checked upload while retaining every replaced drive sheet. Its
+ * drive values, when typed with it (ANH-115), are whole tenths inside the
+ * keypad's ranges, LSP <= HSP <= tFr: what a commissioning compares with.
+ */
 export const attachDriveParameterSheet = mutation({
   args: {
     machineId: v.id("machines"),
@@ -728,10 +741,13 @@ export const attachDriveParameterSheet = mutation({
     version: v.string(),
     signedBy: v.string(),
     at: v.number(),
+    parameters: v.optional(driveParametersValidator),
   },
   returns: v.null(),
   handler: async (ctx, args) => {
     const state = await editableMachine(ctx, args.machineId);
+    if (args.parameters !== undefined && sheetParametersRefusal(args.parameters) !== null)
+      throw refusal("invalid_drive_parameters");
     const sheet = {
       storageId: args.storageId,
       contentType: await registryFile(ctx, args.storageId),
@@ -740,6 +756,7 @@ export const attachDriveParameterSheet = mutation({
       at: timestamp(args.at),
       attachedBy: state.admin._id,
       attachedAt: Date.now(),
+      parameters: args.parameters,
     };
     const history = state.registry?.driveParameterSheetHistory ?? [];
     if (state.registry?.driveParameterSheet !== undefined)
