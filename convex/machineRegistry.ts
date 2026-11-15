@@ -310,7 +310,7 @@ async function statusOf(
 }
 
 /** Counts readable sessions conservatively, excluding only known pre-start failures. */
-async function alertsOf(
+export async function alertsOf(
   ctx: QueryCtx,
   { machine, user }: { machine: Doc<"machines">; user: CurrentUser },
   registry: Doc<"machine_registry"> | null,
@@ -332,21 +332,19 @@ async function alertsOf(
       count: 1,
       mostRecentAt: null,
     });
-  const query = ctx.db
-    .query("sessions")
-    .withIndex("by_machine_and_started", (q) => q.eq("machineId", machine._id))
-    .order("desc");
-  // Apply read access before the limit so foreign sessions cannot hide readable ones.
+  const all = ctx.db.query("sessions");
+  // Read access is the index range: a foreign session is never scanned, nor hides a readable one.
   const readable =
     user.role === "admin"
-      ? query
-      : query.filter((q) =>
-          q.and(
-            q.neq(q.field("organizationId"), undefined),
-            q.eq(q.field("organizationId"), user.organizationId),
-          ),
+      ? all.withIndex("by_machine_and_started", (q) =>
+          q.eq("machineId", machine._id),
+        )
+      : all.withIndex("by_organization_and_machine_and_started", (q) =>
+          q
+            .eq("organizationId", user.organizationId)
+            .eq("machineId", machine._id),
         );
-  const sessions = await readable.take(50);
+  const sessions = await readable.order("desc").take(50);
   const unvalidated = sessions.filter((session) => {
     if (session.status === "pending") return false;
     // Exclude only known pre-start endings; every other ending counts (fail closed).
