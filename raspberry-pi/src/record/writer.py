@@ -13,6 +13,7 @@ from typing import Final, Literal
 from pydantic import TypeAdapter
 
 from src.clock import Clock
+from src.kept_file import open_kept, refuse_link
 from src.record.codec import ACTOR, Privacy, document, encode, validate_manifest
 from src.record.ecg import RawBlock, encode_block
 from src.record.rows import JsonScalar, Row, finite
@@ -23,6 +24,15 @@ from src.sensors.base import SensorReading
 MANIFEST: Final[TypeAdapter[Manifest]] = TypeAdapter(Manifest)
 EVENT: Final[TypeAdapter[Event]] = TypeAdapter(Event)
 FRAME: Final[TypeAdapter[DriveFrame]] = TypeAdapter(DriveFrame)
+
+MANIFEST_MAX_BYTES: Final[int] = 2 * 1024 * 1024
+"""The largest ``manifest.json`` a record holds, what the deposit accepts: never read
+further (:func:`src.kept_file.read_kept`)."""
+
+CHECKSUMS_MAX_BYTES: Final[int] = 4_994_048
+"""The largest ``checksums.sha256`` a record holds: a line of at most 128 bytes per raw
+block and per other file of the longest record, ``(MAX_RAW_BLOCKS + 16) * 128``
+(:data:`src.record.reader.MAX_RAW_BLOCKS`, whose tests pin it). Never read further."""
 TICK_COLUMNS: Final = tuple(field.name for field in fields(Row))
 SENSOR_COLUMNS: Final = ("t", "channel", "quality", "metric", "value", "unit")
 DEFAULT_PRIVACY: Final = Privacy()
@@ -279,6 +289,8 @@ class Writer:
         if self.closed:
             return Err(RecordError("close", "closed"))
         try:
+            # A linked ecg_raw is not walked: its blocks would be left out of the index.
+            refuse_link(self.path / "ecg_raw")
             ended = (
                 datetime.fromtimestamp(clock.unix_millis() / 1000, UTC)
                 .isoformat()
@@ -309,7 +321,9 @@ class Writer:
                 final_manifest.replace(self.path / "manifest.json")
             lines: list[str] = []
             for path in sorted(path for path in self.path.rglob("*") if path.is_file()):
-                digest = hashlib.sha256(path.read_bytes()).hexdigest()
+                # A kept open, hashed as it is read: a planted link refuses the close.
+                with open_kept(path) as content:
+                    digest = hashlib.file_digest(content, "sha256").hexdigest()
                 lines.append(f"{digest}  {path.relative_to(self.path).as_posix()}\n")
                 if pulse is not None:
                     pulse()

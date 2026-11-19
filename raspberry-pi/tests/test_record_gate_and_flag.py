@@ -22,12 +22,14 @@ from __future__ import annotations
 import logging
 import shutil
 from collections.abc import Callable
+from io import BufferedReader
 from pathlib import Path
 from typing import Final
 
 import pytest
 
 from src.clock import ManualClock
+from src.kept_file import open_kept
 from src.local_panel import describe_record_storage, describe_start_refusal
 from src.record import journal as journal_module
 from src.record.codec import Privacy
@@ -77,11 +79,12 @@ class SlowDisk:
         self.journal: Journal | None = None
 
     def install(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """From here on, reading a file back is slow: what indexing a record does."""
-        real = Path.read_bytes
+        """From here on, opening a file to read it back is slow: what indexing a record
+        does (the close opens each file as a kept file, ``open_kept``)."""
+        real = open_kept
         disk = self
 
-        def slow(path: Path) -> bytes:
+        def slow(path: Path) -> BufferedReader:
             disk.clock.advance(disk.step)
             disk.refusals.append(disk.gate())
             journal = disk.journal
@@ -89,7 +92,7 @@ class SlowDisk:
                 disk.activities.append(journal.activity)
             return real(path)
 
-        monkeypatch.setattr(Path, "read_bytes", slow)
+        monkeypatch.setattr("src.record.writer.open_kept", slow)
 
 
 def doing(journal: Journal) -> Activity:

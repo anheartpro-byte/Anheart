@@ -19,10 +19,13 @@ Le volume et ses sous-dossiers root ne sont jamais donnés au compte de la
 console. Le durcissement existant ne parcourt que `/var/lib/anheart`.
 
 Les fichiers que la console garde ou embarque, lus au démarrage ou au repos,
-passent par `src.kept_file.read_kept` (ANH-149) : jamais à travers un lien
-symbolique, jamais en attendant sur une FIFO, jamais lus en entier au-delà de
-leur borne. Un tel fichier est illisible, et chaque lecteur garde son chemin
-habituel pour un fichier illisible. Ce sont exactement ceux-ci :
+et ceux de ses enregistrements, lus par les fils de travail qui les envoient,
+les déposent ou les purgent, passent par `src.kept_file` (ANH-149) :
+`read_kept` pour un fichier lu en entier, `open_kept` pour un fichier lu par
+morceaux. Jamais à travers un lien symbolique, jamais en attendant sur une
+FIFO, jamais lus en entier au-delà de leur borne. Un tel fichier est illisible,
+et chaque lecteur garde son chemin habituel pour un fichier illisible. Ce sont
+exactement ceux-ci :
 
 | Fichier | Borne | Illisible |
 |---|---|---|
@@ -40,13 +43,43 @@ habituel pour un fichier illisible. Ce sont exactement ceux-ci :
 | signature et clé publique des paramètres médicaux | 4 Kio | non signés : banc seulement, personne à bord |
 | `anheart_catalog.pub` | 4 Kio | aucune clé : rien de ce qu'elle vérifie (catalogue, configuration, liste des opérateurs) n'est pris pour signé |
 | `VERSION` | 1 Kio | version inconnue, dite au tableau de bord |
+| `manifest.json` d'un enregistrement | 2 Mio | `upload.read_head` : rien de l'enregistrement n'est envoyé au tableau de bord, il est laissé au démarrage suivant ; `deposit_files.eligible_record` : pas déposé ; `reader.read` (relecture, import) : refusé |
+| `checksums.sha256` d'un enregistrement | 4 994 048 octets | `retention` : aucune confirmation de dépôt écrite, et celle d'avant ne tient plus, l'enregistrement n'est jamais purgé ; `deposit_files.inventory` : pas déposé ; `reader.read` : refusé |
+| `ticks.csv`, `events.jsonl` lus pour le tableau de bord | un morceau à la fois (`open_kept`) | `upload.read_points`, `read_events`, `read_last_tick_ms` : erreur de lecture, rien du fichier n'est envoyé, l'enregistrement est laissé au démarrage suivant ; la fin d'une séance qui vient de finir part quand même, de mémoire, après `CLOSE_GRACE` (`_end_from_memory`) |
+| un fichier d'enregistrement à déposer | 16 Mio (`MAX_FILE_BYTES`) | `deposit_files.payload` : non envoyé, aucune confirmation. Il lit le chemin que `resolve_under` rend, liens suivis et gardés dans l'enregistrement : ce qu'un lien désigne est ouvert comme un fichier gardé et jugé par son empreinte |
+| les autres fichiers d'un enregistrement relus en entier (`ticks.csv`, `sensors.csv`, `events.jsonl`, `drive_frames.jsonl`, blocs ECG) | celles de `FILE_BOUNDS` et `LARGEST_BLOCK_FILE` (`src/record/reader.py`) | `reader.read` : refusé. Il les juge déjà par `lstat` avant d'en lire un octet ; la lecture gardée ferme la fenêtre entre ce contrôle et la lecture. Chaque fichier que `checksums.sha256` liste est haché par morceaux (`open_kept`), au plus à la borne de son nom (la sienne, celle d'un bloc sous `ecg_raw/`, la plus grande pour un autre) : un lien est refusé, une FIFO, qui n'est pas un fichier, est dite manquante sans être ouverte |
+| un document de configuration gardé sous son empreinte (`config/<sha>.json`) | 64 Kio (`MAX_CONFIG_BYTES`) | `configuration.persist`, sur le fil du journal : un avertissement de la séance, le document n'est pas remplacé |
+| chaque fichier d'un enregistrement, à sa fermeture | haché par morceaux (`open_kept`) | `Writer.close`, sur le fil du journal : un lien planté fait échouer la fermeture (aucun `checksums.sha256` : l'enregistrement n'est pas pris pour fermé ni déposé) ; une FIFO n'est ni listée ni ouverte |
 
-Ne passent **pas** par `read_kept`, à faire : les fichiers d'un enregistrement
-sous `data/records/`, lus par `src/record/reader.py` (manifeste, membres),
-`src/record/upload.py` (manifeste), `src/record/deposit_files.py` (manifeste,
-`checksums.sha256`) et `src/record/retention.py` (`checksums.sha256`, pour
-l'empreinte que le marqueur de dépôt vérifie). Une FIFO à leur place bloque le
-fil de travail qui les lit, pas le démarrage.
+`O_NOFOLLOW` ne garde que le dernier élément d'un chemin. Un enregistrement dont
+le répertoire, ou son `ecg_raw`, est un lien est donc refusé à part, par
+`lstat` (`kept_file.refuse_link`) : à la fermeture (`Writer.close`, qui sinon
+laisserait les blocs ECG hors de son manifeste et de ses empreintes), à la liste
+(`retention.records`), au dépôt (`deposit_files.eligible_record` et `inventory`,
+répertoire et `ecg_raw`, et `payload` juste avant chaque ouverture, puisqu'un
+dépôt dure des minutes), à la confirmation et à la purge (`retention`), à
+l'en-tête lu pour le tableau de bord (`upload.read_head`) et à la relecture
+(`reader.read`, refus `linked_directory`).
+
+Ce contrôle et l'ouverture qui le suit restent deux appels : un répertoire
+remplacé entre les deux est suivi. La fenêtre est courte, mais elle se gagne,
+la revue l'a gagnée en échangeant le répertoire d'un enregistrement dans une
+boucle serrée, et un dépôt relit chaque fichier à chaque essai. Il faut pour
+cela écrire sous `data/records/`, c'est-à-dire les droits du compte de la
+console. La correction complète ouvrirait le répertoire de l'enregistrement
+avec `O_DIRECTORY | O_NOFOLLOW`, puis chaque fichier relativement à lui
+(`openat`, `dir_fd`), sans plus jamais suivre son chemin : elle n'est pas faite.
+
+Reste ouvert : l'export d'un enregistrement (`export.build_archive`, sur le fil
+que l'opérateur lance depuis la console) refuse un enregistrement dont le
+répertoire est un lien (`export.locate`), mais `tarfile` ouvre chaque fichier
+sans `O_NONBLOCK` après son propre `lstat`. Une FIFO mise à la place d'un
+fichier entre les deux bloque ce fil d'export, borné par `RecordIo`, pas la
+console.
+
+Sous Windows (un poste de développement), `O_NOFOLLOW` et `O_NONBLOCK`
+n'existent pas : les liens y sont suivis. La menace est propre au Pi, où ces
+drapeaux s'appliquent. Les fichiers y sont ouverts en binaire (`O_BINARY`).
 
 ## Mise en service, console et Docker arrêtés
 
