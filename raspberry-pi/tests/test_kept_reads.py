@@ -37,7 +37,7 @@ from src.programme_catalog import PUBLIC_KEY_MAX_BYTES, read_public_key
 from src.record import cursor, reader, upload
 from src.record.configuration import DIRECTORY, WARNING_PREFIX, persist
 from src.record.containment import resolve_under
-from src.record.deposit_files import MAX_FILE_BYTES, eligible_record, payload
+from src.record.deposit_files import MAX_FILE_BYTES, eligible_record, inventory, payload
 from src.record.retention import (
     MARKER_MAX_BYTES,
     confirm_deposit,
@@ -622,3 +622,42 @@ def test_a_checksummed_file_is_hashed_within_the_bound_of_its_name(tmp_path: Pat
     refused = reader.read(record)
     assert isinstance(refused, Err)
     assert refused.error.detail == reader.FILE_ABOVE_ITS_BOUND
+
+
+def linked_ecg_raw(record: Path, outside: Path) -> None:
+    """``record``'s ``ecg_raw`` made a link to ``outside``, which holds its blocks."""
+    raw = record / "ecg_raw"
+    shutil.copytree(raw, outside)
+    shutil.rmtree(raw)
+    raw.symlink_to(outside, target_is_directory=True)
+
+
+def test_a_linked_ecg_raw_refuses_the_close_never_an_index_without_its_blocks(
+    tmp_path: Path,
+) -> None:
+    """The index does not walk a linked directory: closed, the record would leave its ECG
+    out of its manifest and its checksums. The close fails instead, as on any disk error."""
+    made = writer(tmp_path / "record")
+    linked_ecg_raw(made.path, tmp_path / "outside")
+    refused = made.close(ManualClock(), "operator_stop")
+    assert isinstance(refused, Err)
+    assert refused.error.operation == "close"
+    assert not (made.path / "checksums.sha256").exists()
+
+
+def test_a_linked_ecg_raw_is_neither_selected_nor_inventoried_for_the_deposit(
+    tmp_path: Path,
+) -> None:
+    """Deposited and confirmed without its ECG otherwise: ``eligible_record`` refuses the
+    record, and so does ``inventory`` asked directly."""
+    record = ready_record(tmp_path / "records")
+    eligible = eligible_record(record)
+    assert isinstance(eligible, Ok)
+    selected = eligible.value
+    assert selected is not None
+    linked_ecg_raw(record, tmp_path / "outside")
+    refused = eligible_record(record)
+    assert isinstance(refused, Err)
+    assert refused.error.detail == "OSError:ELOOP"
+    with pytest.raises(OSError, match="a link in a directory's place"):
+        inventory(record, selected.session_id, selected.files)

@@ -84,8 +84,10 @@ def next_record(
 
 def eligible_record(path: Path) -> Result[DepositRecord | None, RecordError]:
     try:
-        # Listed as a directory (``records``), and maybe swapped for a link since.
+        # Listed as a directory (``records``), and maybe swapped for a link since; its
+        # ecg_raw too, whose blocks would otherwise be missing from what is deposited.
         refuse_link(path)
+        refuse_link(path / "ecg_raw")
         if confirmed_deposit(path) is not None:
             return Ok(None)
         cursor = load(path)
@@ -116,6 +118,7 @@ def inventory(
     ):
         return Err(RecordError("read", "invalid_deposit_manifest"))
     refuse_link(path)
+    refuse_link(path / "ecg_raw")
     checksums: dict[str, Sha256] = {}
     kept = read_kept(path / "checksums.sha256", CHECKSUMS_MAX_BYTES)
     for line in kept.decode("ascii").splitlines():

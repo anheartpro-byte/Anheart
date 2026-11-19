@@ -13,7 +13,7 @@ from typing import Final, Literal
 from pydantic import TypeAdapter
 
 from src.clock import Clock
-from src.kept_file import open_kept
+from src.kept_file import open_kept, refuse_link
 from src.record.codec import ACTOR, Privacy, document, encode, validate_manifest
 from src.record.ecg import RawBlock, encode_block
 from src.record.rows import JsonScalar, Row, finite
@@ -289,6 +289,8 @@ class Writer:
         if self.closed:
             return Err(RecordError("close", "closed"))
         try:
+            # A linked ecg_raw is not walked: its blocks would be left out of the index.
+            refuse_link(self.path / "ecg_raw")
             ended = (
                 datetime.fromtimestamp(clock.unix_millis() / 1000, UTC)
                 .isoformat()

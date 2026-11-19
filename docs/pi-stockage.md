@@ -53,13 +53,22 @@ exactement ceux-ci :
 
 `O_NOFOLLOW` ne garde que le dernier élément d'un chemin. Un enregistrement dont
 le répertoire, ou son `ecg_raw`, est un lien est donc refusé à part, par
-`lstat` (`kept_file.refuse_link`) : à la liste (`retention.records`), au
-dépôt (`deposit_files.eligible_record`, `inventory`, et `payload` juste avant
-chaque ouverture, puisqu'un dépôt dure des minutes), à la confirmation et à la
-purge (`retention`), à l'en-tête lu pour le tableau de bord (`upload.read_head`)
-et à la relecture (`reader.read`, refus `linked_directory`). Il reste une
-fenêtre entre ce contrôle et l'ouverture qui le suit, de l'ordre de la
-microseconde.
+`lstat` (`kept_file.refuse_link`) : à la fermeture (`Writer.close`, qui sinon
+laisserait les blocs ECG hors de son manifeste et de ses empreintes), à la liste
+(`retention.records`), au dépôt (`deposit_files.eligible_record` et `inventory`,
+répertoire et `ecg_raw`, et `payload` juste avant chaque ouverture, puisqu'un
+dépôt dure des minutes), à la confirmation et à la purge (`retention`), à
+l'en-tête lu pour le tableau de bord (`upload.read_head`) et à la relecture
+(`reader.read`, refus `linked_directory`).
+
+Ce contrôle et l'ouverture qui le suit restent deux appels : un répertoire
+remplacé entre les deux est suivi. La fenêtre est courte, mais elle se gagne,
+la revue l'a gagnée en échangeant le répertoire d'un enregistrement dans une
+boucle serrée, et un dépôt relit chaque fichier à chaque essai. Il faut pour
+cela écrire sous `data/records/`, c'est-à-dire les droits du compte de la
+console. La correction complète ouvrirait le répertoire de l'enregistrement
+avec `O_DIRECTORY | O_NOFOLLOW`, puis chaque fichier relativement à lui
+(`openat`, `dir_fd`), sans plus jamais suivre son chemin : elle n'est pas faite.
 
 Reste ouvert : l'export d'un enregistrement (`export.build_archive`, sur le fil
 que l'opérateur lance depuis la console) refuse un enregistrement dont le
