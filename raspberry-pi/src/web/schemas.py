@@ -605,7 +605,8 @@ class SnapshotRow:
     * ``measured`` is a separate field from ``setpoint``. The page is required
       to use ``measured`` as its "is it stopped" indicator, because a commanded
       zero on a coasting mass is not a measured zero and the difference is
-      minutes of rotation.
+      minutes of rotation. Nor is a measured zero with the stage off: RFRD
+      reads 0 through a coast, and ``coast_hold_s`` is what says so.
     """
 
     at: float
@@ -639,6 +640,10 @@ class SnapshotRow:
     manual: ManualRow | None
 
     sto: StoRow
+
+    coast_hold_s: float | None = None
+    """How long starts and fault resets are still refused by the coast-down hold
+    (ANH-92); ``None``: no hold."""
 
     instance: str = ""
     """Which run of the console wrote this (:attr:`~src.web.deps.Services.instance`).
@@ -682,6 +687,7 @@ class SnapshotRow:
             mode=snapshot.mode.value,
             manual=ManualRow.of(snapshot.manual),
             sto=StoRow.of(snapshot.sto, now),
+            coast_hold_s=_finite(snapshot.coast_hold),
         )
 
 

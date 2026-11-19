@@ -996,6 +996,11 @@ class TelemetrySnapshot:
     )
     """The local STO observation, never added to the dashboard heartbeat."""
 
+    coast_hold: Seconds | None = None
+    """How long the coast-down hold still refuses starts and resets (ANH-92): the output
+    stage dropped on a shaft last read turning, which RFRD no longer shows. ``None``:
+    no hold."""
+
     @property
     def sto_age(self) -> Seconds | None:
         """Age of the last successful STO read; None when none has succeeded."""

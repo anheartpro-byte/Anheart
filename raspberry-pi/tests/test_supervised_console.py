@@ -219,13 +219,16 @@ class Machine:
     ticks: Ticks
     records: Path | None = None
     """Where the consoles keep their records and their restart state; ``None``: nowhere."""
+    coast_tau: str | None = None
+    """``COAST_TAU_S`` of the consoles; ``None``: the default, 40 s."""
 
     def boot(self) -> Console:
         """A new process on this machine. Nothing of the previous one is handed to it."""
         link = Link(self.sim)
         journal = None if self.records is None else Journal(self.records, self.clock)
+        env = BENCH_ENV if self.coast_tau is None else {**BENCH_ENV, "COAST_TAU_S": self.coast_tau}
         panel = build_panel(
-            config_of(BENCH_ENV),
+            config_of(env),
             clock=self.clock,
             profiles_path=self.root / "profiles.json",
             treat=no_dsp,
@@ -908,6 +911,8 @@ async def test_ex2_three_restarts_after_unclean_stops_take_the_console_out_of_se
 ) -> None:
     records = machine.root / "records"
     machine.records = records
+    # The hold the unclean stops leave, the longest coast, is then 36 s (5 ln 1380).
+    machine.coast_tau = "5"
     manager = ServiceManager(machine)
     console = machine.boot()
     for death in range(THRESHOLD):
@@ -956,8 +961,25 @@ async def test_ex2_three_restarts_after_unclean_stops_take_the_console_out_of_se
     kept = load(records / STATE_NAME)
     assert isinstance(kept, Stored)
     assert not kept.out_of_service
+    # In service again: what refuses a start now is the coast-down hold the unclean stops
+    # left (ANH-92), the longest coast from the first read, no longer the service state.
     surface = console.panel.surface
+    hub = console.panel.hub.subscribe()
     assert isinstance(surface.attest_estop_wiring(OPERATOR), Ok)
+    assert isinstance(surface.submit_start_manual(occupancy=Occupancy.BENCH, operator=OPERATOR), Ok)
+    await until(lambda: surface.counters[1] >= 1, 10.0, "the loop's answer")
+    said = await refusals(hub)
+    assert [line.split(" : attendre")[0] for line in said] == [
+        "demarrage refuse : arbre peut-etre encore en roue libre (etage de puissance coupe, "
+        "RFRD a 0)"
+    ]
+    # Once the hold has run out, a start is a start again.
+    runtime = console.panel.runtime
+    await until(
+        lambda: runtime.coast_hold_remaining(machine.clock.monotonic()) is None,
+        45.0,
+        "the hold over",
+    )
     assert isinstance(surface.submit_start_manual(occupancy=Occupancy.BENCH, operator=OPERATOR), Ok)
     await until(lambda: state_of(console) is RuntimeState.RUNNING, 5.0, "a session, in service")
     assert await end(console) == EXIT_OK

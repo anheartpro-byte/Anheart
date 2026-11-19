@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Final, Never, cast
+from typing import Never, cast
 
 import pytest
 
@@ -33,6 +34,7 @@ from src.training.runtime import (
     RULE_DRIVE_PRECOMMANDED,
     RULE_STO_OPEN,
     RULE_STO_UNREADABLE,
+    CoastDownHold,
     EndReason,
     RuntimeState,
     SafetyStanding,
@@ -46,6 +48,7 @@ from tests import test_cloud_sync as dashboard_tests
 from tests.roster_support import RIDER_ID
 from tests.sto_support import ready_sto
 from tests.test_failure_rig import PROGRAMME_ENV, attest, make_rig, start_manual
+from tests.test_failure_rig import Rig as FailureRig
 from tests.test_runtime import GEOMETRY, LIMITS, OPERATOR, FakeDrive, Rig
 from tests.test_runtime import sto_rig as _rig
 from tests.test_sto import RegisterPort
@@ -537,33 +540,25 @@ async def test_idle_standstill_open_and_close_only_gate_start(tmp_path: Path) ->
     await rig.panel.close()
 
 
-#: The real drive's limit, kept as a strict xfail until a guard covers it: a drive
-#: another master left turning, its stage dropped by the STO before the idle console's
-#: first read, reads RFRD 0 as on the ATV320. The idle judge sees no turning shaft and
-#: latches nothing, so a start is taken while the arm coasts (docs/securite.md,
-#: section 3, "Un départ sur un arbre qui tourne encore en roue libre n'est pas vu";
-#: section 9.6, wait for the arm to stop by eye). The simulator showed the coast in
-#: RFRD before, and the judge latched drive_precommanded on it.
-IDLE_COAST_UNSEEN: Final = pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="RFRD reads 0 with the stage off: the idle console does not see the coast "
-    "(docs/securite.md, section 3 and 9.6)",
-)
+async def wait_out_the_coast_hold(rig: FailureRig) -> None:
+    """Tick through the coast-down hold, if one stands: only time lifts it (ANH-92)."""
+    left = rig.panel.runtime.snapshot().coast_hold
+    if left is not None:
+        await rig.tick(left + 0.4)
+    assert rig.panel.runtime.snapshot().coast_hold is None
 
 
 @pytest.mark.parametrize(
-    "phase",
-    [
-        pytest.param(RuntimeState.IDLE, marks=IDLE_COAST_UNSEEN),
-        RuntimeState.RUNNING,
-        RuntimeState.ENDING,
-        RuntimeState.FINISHED,
-    ],
+    "phase", [RuntimeState.IDLE, RuntimeState.RUNNING, RuntimeState.ENDING, RuntimeState.FINISHED]
 )
-async def test_real_console_never_reactivates_after_close_without_acknowledgement(
+async def test_real_console_never_reactivates_after_close_until_acknowledged_and_unheld(
     tmp_path: Path, phase: RuntimeState, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """After the STO closes, no start until the verdict is acknowledged and the coast-down
+    hold is over. At rest (IDLE), a drive another master ran, its stage dropped by the STO
+    before the console's first read, reads RFRD 0: nothing is latched, and the hold from
+    ``|LFRD|`` alone refuses the start until it runs out (ANH-92). That case was the strict
+    xfail ``IDLE_COAST_UNSEEN`` until that hold."""
     rig, _ = make_rig(tmp_path)
     async with rig.http() as client:
         if phase is RuntimeState.IDLE:
@@ -597,8 +592,19 @@ async def test_real_console_never_reactivates_after_close_without_acknowledgemen
         assert chain is not None
         chain.open(rig.clock.monotonic())
         await rig.tick(0.2)
-        assert rig.panel.runtime.standing is not None
-        assert rig.panel.runtime.applied_rpm == rig.simulator.commanded_setpoint == 0
+        idle = phase is RuntimeState.IDLE
+        if idle:
+            assert rig.panel.runtime.standing is None
+            hold = rig.panel.runtime.snapshot().coast_hold
+            assert hold is not None
+            assert hold == pytest.approx(40.0 * math.log(100.0) - 0.2, abs=0.3)
+        else:
+            assert rig.panel.runtime.standing is not None
+        # At rest the console writes nothing: LFRD stays as the other master left it, and
+        # its own start writes LFRD = 0 before any other word.
+        left_at = 100 if idle else 0
+        assert rig.panel.runtime.applied_rpm == 0
+        assert rig.simulator.commanded_setpoint == left_at
         refused_ack = await client.post(
             "/api/safety/acknowledge", json={"operator": OPERATOR, "estop_released": True}
         )
@@ -620,16 +626,19 @@ async def test_real_console_never_reactivates_after_close_without_acknowledgemen
         monkeypatch.setattr(SimulatedDrive, "write_command", command)
         monkeypatch.setattr(SimulatedDrive, "write_speed", speed)
         await rig.tick(150)
-        assert rig.panel.runtime.applied_rpm == rig.simulator.commanded_setpoint == 0
+        assert rig.panel.runtime.applied_rpm == 0
+        assert rig.simulator.commanded_setpoint == left_at
         assert ControlWord.ENABLE_OPERATION not in words
         assert all(rpm == 0 for rpm in speeds)
         result = await rig.panel.runtime.start_manual(Occupancy.BENCH, OPERATOR, MotorRpm(276))
         assert isinstance(result, Err)
-        assert isinstance(result.error, SafetyStanding)
-        acknowledged = await client.post(
-            "/api/safety/acknowledge", json={"operator": OPERATOR, "estop_released": True}
-        )
-        assert acknowledged.status_code == 200
+        assert isinstance(result.error, CoastDownHold if idle else SafetyStanding)
+        if not idle:
+            acknowledged = await client.post(
+                "/api/safety/acknowledge", json={"operator": OPERATOR, "estop_released": True}
+            )
+            assert acknowledged.status_code == 200
+        await wait_out_the_coast_hold(rig)
         await rig.tick(0.4)
         assert rig.panel.runtime.applied_rpm == 0
         assert ControlWord.ENABLE_OPERATION not in words

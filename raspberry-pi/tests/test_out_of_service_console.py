@@ -27,13 +27,14 @@ from src import local_panel
 from src.clock import ManualClock
 from src.control_surface import EventKind
 from src.local_panel import OUT_OF_SERVICE, DriveSide, build_panel, open_service
+from src.motor.coast import DEFAULT_COAST_TAU, hold_cap
 from src.motor.simulated import SimulatedDrive, SimulatedDriveConfig
 from src.record import logbook
 from src.record.journal import Journal
 from src.result import Ok
 from src.service_state import STATE_NAME, THRESHOLD, WINDOW, Stored, load, store
 from src.training.runtime import RuntimeState
-from src.units import Monotonic, UnixMillis
+from src.units import Monotonic, MotorRpm, UnixMillis
 from src.web.app import create_app
 from src.web.deps import WebConfig
 from src.web.schemas import PanelRow, ServiceRow, StatusRow
@@ -256,6 +257,11 @@ async def test_ex2_a_named_operator_puts_the_console_back_in_service_and_nothing
         # Lifting it starts nothing: no session, no frame.
         assert state_of(rig) is RuntimeState.IDLE
         assert rig.simulator.sim_state not in ENERGISED
+        # The unclean stops left the longest coast from the first read (ANH-92): waited out.
+        await rig.tick(hold_cap(DEFAULT_COAST_TAU, MotorRpm(1)))
+        recorder = rig.panel.recorder
+        assert recorder is not None
+        recorder.journal.drain()  # its thread's work meanwhile: the disk measured again
         # And a start is a start again: attested, asked for, armed.
         await attest(session)
         asked = await session.post(

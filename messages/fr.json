@@ -390,6 +390,7 @@
       "MOTOR_MAX_RPM": "Plafond moteur (tr/min)",
       "ARM_RADIUS_M": "Rayon de l'occupant (m)",
       "LEG_TIP_RADIUS_M": "Rayon de la pointe du pied (m)",
+      "COAST_TAU_S": "Constante de roue libre (s)",
       "PROGRAMS_ENABLED": "Séances programmées",
       "OCCUPANCY_OCCUPIED_ENABLED": "Personne à bord"
     },

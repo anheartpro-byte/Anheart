@@ -1007,18 +1007,13 @@ Vérifié en cherchant `xfail(strict=True)` et `known_defect` dans le code :
 * **aucun** scénario de `simulation/scenarios/` ne porte `known_defect` ;
 * **aucun** cas de `failures.py` n'a de `known_defect` (les deux derniers,
   `ecg_dsp_corrupted` et `ecg_dsp_gaps`, ont été corrigés) ;
-* **un seul** xfail dans `raspberry-pi/tests/` : `IDLE_COAST_UNSEEN`
-  (`test_sto_runtime.py`), sur le cas `IDLE` de
-  `test_real_console_never_reactivates_after_close_without_acknowledgement`.
-  Raison : RFRD lit 0 étage coupé, la console au repos ne voit pas la roue
-  libre ([securite.md, section 3](securite.md#3-ce-que-le-logiciel-ne-garantit-pas)
-  et [9.6](securite.md#96-essai-au-banc--procédure-non-faite)). Un variateur
-  qu'un autre maître a laissé tourner, son étage coupé par le STO avant la
-  première lecture de la console au repos : rien ne se verrouille. Le test
-  bascule, et la marque doit tomber, quand la règle de démarrage et de repos
-  de la temporisation de roue libre arrive (une première lecture étage coupé
-  avec LFRD non nul ouvre une attente depuis |LFRD|). Les commentaires « was
-  a strict xfail » y marquent d'anciens défauts corrigés ;
+* **aucun** xfail dans `raspberry-pi/tests/`. Le dernier, `IDLE_COAST_UNSEEN`
+  (ANH-92, le cas `IDLE` de
+  `test_real_console_never_reactivates_after_close_until_acknowledged_and_unheld`),
+  a basculé avec l'attente de roue libre : une première lecture étage coupé
+  avec LFRD non nul ouvre une attente depuis |LFRD| ([securite.md, section 2](securite.md#2-ce-que-le-logiciel-garantit)),
+  et la marque a été retirée. Les commentaires « was a strict xfail » y
+  marquent d'anciens défauts corrigés ;
 * côté simulation, **un seul** reste : le couple de cohorte **S07 × jog AUTO**
   (`KNOWN_VASOVAGAL_ONSET` dans `simulation/cohort/battery.py`) ;
 * depuis l'intégration d'ANH-130, le scénario d'endurance exige le dépôt

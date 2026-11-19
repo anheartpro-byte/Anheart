@@ -1212,6 +1212,25 @@ sur les pages Seance et Securite seulement ; depuis le 11 octobre 2026 elle n'es
 pas un bras qui s'arrête. Un STOP, lui, fait baisser la vitesse même quand la pastille
 Securite dit `freeze` (§13.5).
 
+**Après une roue libre, ni départ ni reset tant que le bras peut tourner (ANH-92).**
+Quand l'étage de puissance du variateur tombe sur un arbre lu tournant (ouverture du
+STO, défaut en roue libre), RFRD lit 0 alors que le bras tourne encore sur son élan :
+la vitesse mesurée n'est plus la preuve de l'arrêt. Un bandeau rouge le dit en haut
+de toutes les pages, **ARBRE PEUT-ETRE ENCORE EN ROUE LIBRE**, suivi de
+`etage de puissance coupe, RFRD a 0 : depart et reset refuses encore N s. Ne pas approcher du bras avant son arret, vu a l'oeil`,
+N étant le compte à rebours de la console elle-même. Pendant ce temps, un départ est
+refusé (`demarrage refuse : arbre peut-etre encore en roue libre (etage de puissance coupe, RFRD a 0) : attendre encore N s`),
+un reset de défaut aussi, et la séance reste en `cooldown`. Aucun acquittement ne lève
+cette attente : seul le temps. Sa durée vient de `COAST_TAU_S` (40 s par défaut, à
+mesurer au banc) et de la dernière vitesse lue : environ 215 s depuis 3 tr/min au bras.
+Elle est gardée à travers un redémarrage de la console. Après un arrêt non propre
+(console tuée, figée, plantée, coupure de courant), ou une sortie avec l'étage de
+puissance peut-être encore en marche (un arrêt de la console pendant une séance, même
+propre : `systemctl stop`, un redémarrage), la console relancée tient l'attente la plus
+longue, depuis la plaque, dès sa première lecture qui montre l'étage coupé : 289 s avec
+40 s, 72 s avec 10 s, même si le bras ne tournait pas. Terminer la séance (STOP, puis la
+fin de la descente) avant d'arrêter la console : le redémarrage n'attend alors rien.
+
 **Pendant un gel, un programme fait quand même son retour au calme.** Un gel `freeze`
 tient la vitesse d'un programme pendant `warmup` et `hold`. Quand le programme arrive à
 sa phase `cooldown`, la vitesse commandée se met à baisser, sur la rampe douce des
@@ -2507,9 +2526,9 @@ la console d'abord (voir §3.4 et §14).
 | case `moteur désaccouplé` puis `Armer` | rien : il arme l'outil, sans quoi `Activer` et une consigne sont refusés (409 `console non armee`) |
 | curseur de vitesse puis `Envoyer` | LFRD à la vitesse demandée, bornée à `--max-rpm`, relue sur LFRD ; ensuite, armé et activé, la même consigne à chaque lecture (maintien du ttO) |
 | `1. Activer (LFRD=0, 6→7→15)` | LFRD=0 relu d'abord, puis CMD=6, 7, 15, chaque pas vérifié sur ETA ; rien de plus si LFRD=0 n'est pas confirmé. Rien du tout sur un variateur déjà activé, un arbre que RFRD ne lit pas à 0, ou sans état lu à cet instant (`enable: ECHEC: activation refusee (...)`) : le 6 couperait l'étage de puissance d'un variateur en marche, et le 7 et le 15 remettraient sous tension un arbre qui tourne. La page grise le bouton tant que le variateur se dit activé ou que l'arbre tourne |
-| `2. Arrêt en rampe` | LFRD=0 et CMD=7 (rampe dEC), puis CMD=6 seulement une fois l'arbre lu à l'arrêt (RFRD=0) ; sinon jamais CMD=6, et l'échec est dit |
+| `2. Arrêt en rampe` | LFRD=0 (rampe dEC sous couple), l'état relu jusqu'à l'arbre lu à l'arrêt étage en marche (RFRD=0), puis CMD=7 et CMD=6 ; sinon jamais CMD=6, et l'échec est dit, un étage coupé pendant l'arrêt compris. Un arrêt confirmé ainsi ne laisse aucune attente de roue libre |
 | `ARRÊT D'URGENCE` | désarme tout de suite, puis LFRD=0 et CMD=7 (rampe dEC) ; jamais CMD=6 |
-| `Acquitter défaut` | CMD=128 puis CMD=6, et seulement sur un variateur en défaut, arbre lu à l'arrêt (RFRD=0), défaut nommé que la console peut acquitter |
+| `Acquitter défaut` | CMD=128 puis CMD=6, et seulement sur un variateur en défaut, arbre lu à l'arrêt (RFRD=0), défaut nommé que la console peut acquitter, hors de l'attente de roue libre |
 
 `Acquitter défaut` suit la règle de la console : sinon rien n'est écrit et la dernière
 action le dit, `fault_reset: ECHEC: reset refuse (...)`, avec la raison (aucun défaut,
@@ -2525,6 +2544,36 @@ défaut et RFRD à 0 ; le refus de l'outil reste la barrière. Limite, la même 
 console : en défaut l'étage de puissance est coupé et RFRD est la fréquence de sortie,
 qui lit 0 même sur un arbre qui tourne encore sur son élan. « Arbre lu à l'arrêt » veut
 dire RFRD à 0 ; l'opérateur regarde l'arbre.
+
+**L'attente de roue libre (ANH-92).** Comme la console, l'outil retient la dernière
+vitesse lue étage de puissance en marche : dès qu'une lecture montre l'étage coupé
+après elle, `1. Activer` et `Acquitter défaut` sont refusés pendant `COAST_TAU_S` ×
+ln(v), v étant cette vitesse plus une période de lecture de la rampe la plus rapide
+(172,5 tr/min moteur, l'outil lit toutes les 0,5 s), bornée par la plaque. La dernière
+action le dit, `ECHEC: activation refusee (arbre peut-etre encore en roue libre (etage
+coupe, RFRD a 0): attendre encore N s)`, la page affiche le compte à rebours et grise les
+deux boutons. Avec la valeur par défaut, 40 s, depuis 3 tr/min au bras (149 tr/min
+moteur) : environ 231 s. Ce que l'outil tente d'écrire compte aussi, répondu ou non,
+même quand ses lectures d'état échouent entre deux : dès que `1. Activer` est tenté,
+l'étage est en marche pour l'attente, confirmé ou non, qu'une lecture l'ait vu ou non,
+et l'attente part de la plus grande de cette vitesse et de LFRD, lu à ces lectures ou
+tenté par le curseur entre elles (une consigne de 300 dont la relecture se perd, puis
+remise à 0, entre deux lectures perdues, compte pour 300). Après un
+`2. Arrêt en rampe` confirmé, rien n'est attendu. `COAST_TAU_S` est lu dans l'environnement de l'outil, comme la
+console le lit ; une valeur que la console refuse (hors de [5, 300] s, ou qui n'est pas
+un nombre) fait refuser le démarrage de l'outil aussi, code 2, avec
+`configuration refusee: COAST_TAU_S: ...`. Une sortie dont l'arrêt n'est pas confirmé
+(code 4, ou `sortie: ATTENTION`), une sortie avec l'étage peut-être encore en marche
+(bras entraîné à la dernière lecture : l'arrêt du pilote lit RFRD, qui lit 0 aussi sur
+un étage coupé pendant cet arrêt), ou pendant une attente, laisse un marqueur,
+`raspberry-pi/data/bench_coast_hold.json`, et la dernière ligne le dit
+(`Le prochain demarrage refusera Activer et Acquitter N s depuis sa premiere lecture: l'arbre peut encore tourner en roue libre.`).
+Le démarrage suivant de l'outil tient alors cette attente dès sa première lecture qui
+montre l'étage coupé : la plus longue (289 s avec 40 s, 72 s avec 10 s) après une sortie
+non confirmée ou bras entraîné, sinon ce qui restait de l'attente en cours. Un SIGKILL ou une
+coupure de courant ne laissent pas de marqueur, et la console ne lit pas celui de
+l'outil : après eux, ou avant de lancer la console après l'outil, attendre l'arrêt du
+bras, vu à l'œil.
 
 **Quand le variateur n'est pas là.** Le bandeau en haut de la page de l'outil dit
 pourquoi : `LIAISON MODBUS PERDUE.` quand plus rien ne se lit, ou `Variateur pas
@@ -2571,7 +2620,8 @@ Sa dernière ligne, `sortie: ...`, dit comment la machine a été laissée :
 
 Son code de sortie : 0 après un Ctrl+C reçu quand la page était servie (130 s'il est
 reçu pendant le démarrage), 143 après SIGTERM, 129 après SIGHUP, 4 quand l'arrêt
-n'avait pas fini au bout de l'attente, et 3 quand la page n'a pas pu démarrer. Un 1
+n'avait pas fini au bout de l'attente, 3 quand la page n'a pas pu démarrer, et 2 pour
+un argument ou un `COAST_TAU_S` refusé, avant que rien ne soit ouvert. Un 1
 est une erreur ordinaire, que la dernière ligne décrit ; il ne dit rien de l'arrêt.
 Lancé sans sortie d'erreur (`2>&-`), l'outil sort avec les mêmes codes.
 

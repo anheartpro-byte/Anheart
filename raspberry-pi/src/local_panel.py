@@ -139,6 +139,7 @@ import contextlib
 import functools
 import importlib
 import logging
+import math
 import os
 import signal
 from abc import abstractmethod
@@ -218,6 +219,7 @@ from src.ecg_pipeline import (
 )
 from src.health import HealthContext, HealthWatch
 from src.health_system import cpu_temperature
+from src.kept_coast_hold import COAST_HOLD_FILE, HoldKeeper, kept_hold
 from src.link_state import NOT_CONFIGURED, LinkHealth
 from src.local_config import (
     KEY_DEVICE_TOKEN,
@@ -243,6 +245,7 @@ from src.motor.atv320 import (
     AuxiliaryRegisterReads,
     serial_master,
 )
+from src.motor.coast import longest_hold
 from src.motor.drive import DriveBackend, LogicInput, RegisterMap
 from src.motor.simulated import SimulatedDrive, SimulatedDriveConfig
 from src.motor.sto import (
@@ -357,6 +360,8 @@ from src.training.preflight import (
 )
 from src.training.runtime import (
     AlreadyStarted,
+    CoastDownHeld,
+    CoastDownHold,
     DriveInFault,
     DriveParameterRefused,
     DrivePrecommanded,
@@ -480,6 +485,13 @@ RUNTIME_LIMITS: Final[RuntimeLimits] = RuntimeLimits(
 """The machine's commissioning slew (15 motor rpm/s), for a programme's control law.
 
 A manual session moves at the motion limits instead (``config/medical_parameters.json``)."""
+
+
+def runtime_limits(config: LocalConfig) -> RuntimeLimits:
+    """:data:`RUNTIME_LIMITS` with this machine's ``COAST_TAU_S``: what the runtime runs on,
+    and what its records say it ran on."""
+    return replace(RUNTIME_LIMITS, coast_tau=config.coast_tau)
+
 
 PROGRAMS_DISABLED: Final[str] = (
     "seances programmees desactivees (PROGRAMS_ENABLED=false, jalon M5) : utiliser MANUEL"
@@ -1210,6 +1222,7 @@ class LocalPanel:
         "_catalog",
         "_clock",
         "_cloud",
+        "_coast_keeper",
         "_config",
         "_drive",
         "_ecg",
@@ -1272,8 +1285,10 @@ class LocalPanel:
         roster: Roster | None = None,
         sto: StoSource,
         preflight: PreflightMonitor | None = None,
+        coast_keeper: HoldKeeper,
     ) -> None:
         self._clock: Clock = clock
+        self._coast_keeper: HoldKeeper = coast_keeper
         self._preflight: PreflightMonitor | None = preflight
         self._sto: StoSource = sto
         self._sto_gate: StoReadGate = StoReadGate(
@@ -1561,6 +1576,9 @@ class LocalPanel:
         self._record(now, snapshot)
         self._observe_preflight(snapshot)
         self._surface.publish(snapshot)
+        # The hold, kept on the disk across a restart (ANH-92): on the keeper's own
+        # thread, never waited on, so no tick waits on a disk.
+        self._coast_keeper.keep(self._runtime, self._clock, now)
         self._watch_end()
         match self._runtime.state:
             case RuntimeState.IDLE | RuntimeState.FINISHED:
@@ -1904,6 +1922,10 @@ class LocalPanel:
 
     def preflight_remote_start(self, launch: Launch) -> Result[None, str]:
         """Run the panel's start gates without submitting a command or arming."""
+        # The coast-down hold refuses the arming (ANH-92): never confirm a launch it would.
+        held = self._runtime.coast_hold_remaining(self._clock.monotonic())
+        if held is not None:
+            return Err(self._start_refused(CoastDownHold(held)))
         match launch:
             case AutoLaunch():
                 return self._preflight_programme(launch)
@@ -2427,6 +2449,11 @@ class LocalPanel:
             self._record_command(record_commands.Shutdown())
             report = await self._runtime.shutdown("console exit")
             detail = report.detail
+        # ANH-92: a stage that may still be on, or that dropped unseen during this exit's
+        # own stop (RFRD reads 0 either way), leaves the next start the longest coast.
+        if self._runtime.coast_possible:
+            self._runtime.expect_coast("the console exited with the output stage maybe on")
+        self._coast_keeper.keep(self._runtime, self._clock, self._clock.monotonic())
         recorder = self._recorder
         if recorder is not None:
             recorder.finish(self._clock.monotonic(), self._runtime, detail)
@@ -2440,6 +2467,10 @@ class LocalPanel:
             await self._cloud.close()
         if self._transport is not None:
             await self._transport.close()
+        if not self._coast_keeper.close():
+            # The next start would hold nothing: it must take this stop for an unclean one.
+            self._stalled_at_stop = True
+            _logger.error("coast-down hold not kept for the next start: not a clean stop")
         return detail
 
 
@@ -2799,7 +2830,7 @@ def build_panel(  # noqa: PLR0915  # one statement per wired part
         sto=sto,
         drive=backend,
         geometry=config.geometry,
-        limits=RUNTIME_LIMITS,
+        limits=runtime_limits(config),
         safety=safety,
         motion=motion,
         limit_radius=config.leg_tip_radius,
@@ -2813,6 +2844,24 @@ def build_panel(  # noqa: PLR0915  # one statement per wired part
             else ESTOP_ATTESTATION
         ),
     )
+
+    # A hold the process before this one left, kept across the restart; and after an
+    # unclean stop, whose last reads nobody kept, the longest coast (ANH-92). Both from the
+    # first read that shows the stage off.
+    def clock_trusted() -> bool:
+        return watch is not None and is_trusted(watch.current())
+
+    hold_path = profiles_path.parent / COAST_HOLD_FILE
+    kept = kept_hold(
+        hold_path,
+        now=clock.unix_millis(),
+        trusted=clock_trusted(),
+        cap=longest_hold(RUNTIME_LIMITS.standstill_rpm),
+    )
+    if kept is not None:
+        runtime.expect_coast("kept from the process before this start", kept)
+    if service is not None and service.status().unclean_stop:
+        runtime.expect_coast("the process before this start did not stop cleanly")
     hub = TelemetryHub(clock=clock)
     ecg_side = build_ecg_client(config, clock)
     recorder = (
@@ -2938,6 +2987,7 @@ def build_panel(  # noqa: PLR0915  # one statement per wired part
         config=config,
         drive=drive,
         runtime=runtime,
+        coast_keeper=HoldKeeper(hold_path, clock_trusted),
         watchdog=watchdog,
         surface=surface,
         hub=hub,
@@ -3250,11 +3300,12 @@ def build_recorder(
     simulator = drive.simulator
     radius = config.geometry.radius
     leg_tip = config.leg_tip_radius
-    journal.configure(applied_configuration(config, RUNTIME_LIMITS, safety, motion))
+    limits = runtime_limits(config)
+    journal.configure(applied_configuration(config, limits, safety, motion))
     return SessionRecorder(
         clock=clock,
         journal=journal,
-        stamp=stamp_for(config, RUNTIME_LIMITS, safety, motion, software_version),
+        stamp=stamp_for(config, limits, safety, motion, software_version),
         radius=radius,
         leg_tip=radius if leg_tip is None else Metres(max(float(leg_tip), float(radius))),
         sim_state=None if simulator is None else _sim_state_of(simulator),
@@ -3339,7 +3390,17 @@ def _start_refusal_reason(  # noqa: PLR0911, PLR0912  # one return per refusal
             return refusal.detail
         case RestartPending():
             return RESTART_PENDING
+        case CoastDownHold(remaining=remaining):
+            return describe_coast_hold(remaining)
     raise assert_never(refusal)
+
+
+def describe_coast_hold(remaining: Seconds) -> str:
+    """The coast-down hold, for the operator: why, and how long still (ANH-92)."""
+    return (
+        "arbre peut-etre encore en roue libre (etage de puissance coupe, RFRD a 0) : "
+        f"attendre encore {math.ceil(remaining)} s"
+    )
 
 
 def describe_record_storage(refusal: RecordStorageLow) -> str:
@@ -3565,7 +3626,7 @@ def _held_by(by: Holding) -> str:
     raise assert_never(by)
 
 
-def describe_reset_refusal(refusal: FaultResetRefusal) -> str:
+def describe_reset_refusal(refusal: FaultResetRefusal) -> str:  # noqa: PLR0911  # one per refusal
     """One line for a refused fault reset."""
     match refusal:
         case ResetWhileCommanded():
@@ -3578,6 +3639,8 @@ def describe_reset_refusal(refusal: FaultResetRefusal) -> str:
         case NoFaultToReset(state=state):
             seen = "variateur non lu" if state is None else state.name.lower()
             return f"reset refuse : aucun defaut a acquitter ({seen})"
+        case CoastDownHeld(remaining=remaining):
+            return f"reset refuse : {describe_coast_hold(remaining)}"
         case ShaftStillTurning(output_rpm=rpm):
             return f"reset refuse : l'arbre tourne encore ({rpm} tr/min moteur)"
         case ResetForbidden(report=report):

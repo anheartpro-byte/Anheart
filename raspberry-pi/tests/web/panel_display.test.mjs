@@ -2739,6 +2739,7 @@ test("the STOP notice is in the stack every page shows, as an alarm, under that 
     "bridged-banner",
     "sto-banner",
     "medical-banner",
+    "coast-banner",
     "resume-banner",
   ]);
   assert.ok(/id="stop-unanswered" class="banner hidden" role="alert"/.test(html));
@@ -3025,6 +3026,27 @@ test("the resume banner is part of the stack every page shows, and is not an ala
   const stackMarkup = /<div id="banners"[\s\S]*?\n<\/div>/.exec(html)[0];
   assert.ok(stackMarkup.includes('id="resume-banner"'));
   assert.ok(/id="resume-banner" class="banner banner-warn hidden"/.test(html));
+});
+
+/* ================= the coast-down hold (ANH-92) ================= */
+
+const COAST = "ARBRE PEUT-ETRE ENCORE EN ROUE LIBRE";
+
+test("the coast-down hold is an alarm with the console's own countdown, and goes with the hold", () => {
+  // Given a console at rest with no hold.
+  const { frame, announced } = panel();
+  frame(snapshot({ at: 1, coast_hold_s: null }));
+  assert.equal(announced(COAST), false);
+  // When the stage has dropped on a shaft last read turning: the console's countdown, rounded up.
+  frame(snapshot({ at: 2, coast_hold_s: 214.3 }));
+  assert.equal(announced(COAST), true);
+  assert.equal(announced("depart et reset refuses encore 215 s"), true);
+  frame(snapshot({ at: 3, coast_hold_s: 0.4 }));
+  assert.equal(announced("depart et reset refuses encore 1 s"), true);
+  // Then it goes once the hold has run out, whatever this page's own clock says.
+  frame(snapshot({ at: 4, coast_hold_s: null }));
+  assert.equal(announced(COAST), false);
+  assert.ok(/id="coast-banner" class="banner hidden" role="alert"/.test(html));
 });
 
 /* ======== a console out of service and a latched stop on the same screen (ANH-162) ======== */

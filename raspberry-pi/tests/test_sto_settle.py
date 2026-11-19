@@ -97,7 +97,8 @@ async def test_sto_held_open_until_standstill_keeps_only_its_latch(
         await step()
         assert speeds[-1] == 0
         speeds.clear()
-        for _ in range(1100):
+        # 500 s: the coast-down hold keeps the ending in COOLDOWN (ANH-92), then its recovery.
+        for _ in range(2500):
             snapshot = await step()
             assert not runtime.silent
             assert snapshot.safety is not None

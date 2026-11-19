@@ -137,6 +137,8 @@ def main() -> int:
         report.note("served")
 
     patch.setattr(bench, "build_drive", build)
+    # The mark an exit leaves for the next start (ANH-92): next to the report, never the checkout's.
+    patch.setattr(bench, "COAST_MARK", Path(sys.argv[1]).with_name("bench_coast_hold.json"))
     if len(sys.argv) > 3 and sys.argv[3] != "-":
         patch.setattr(bench, "SHUTDOWN_JOIN_S", float(sys.argv[3]))
     http_port = sys.argv[4] if len(sys.argv) > 4 else "0"

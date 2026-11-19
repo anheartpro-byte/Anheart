@@ -1018,6 +1018,26 @@ function resumePossible(snapshot) {
     snapshot.manual.target.motor_rpm > snapshot.setpoint.motor_rpm;
 }
 
+/*
+  The coast-down hold (ANH-92): the drive's output stage dropped on a shaft last
+  read turning, and RFRD, its output frequency, reads 0 however fast the arm
+  still coasts. Starts and fault resets are refused until it runs out; the
+  countdown is the console's own (coast_hold_s), never this page's clock.
+*/
+function renderCoastBanner(snapshot) {
+  var left = snapshot.coast_hold_s;
+  var held = typeof left === "number" && left > 0;
+  var reworded = false;
+  if (held) {
+    var detail = el("coast-banner-detail");
+    var notice = "etage de puissance coupe, RFRD a 0 : depart et reset refuses encore " +
+      Math.ceil(left) + " s. Ne pas approcher du bras avant son arret, vu a l'oeil";
+    reworded = detail.textContent !== notice;
+    text(detail, notice);
+  }
+  showBanner(el("coast-banner"), held, reworded);
+}
+
 function renderResumeBanner(snapshot) {
   var possible = resumePossible(snapshot);
   var reworded = false;
@@ -1516,6 +1536,7 @@ function renderSnapshot(snapshot) {
   }
   renderEstopBanner();
   renderResumeBanner(snapshot);
+  renderCoastBanner(snapshot);
 
   /* --- heart rate, with its age carried alongside --------------------- */
   var hr = snapshot.heart_rate;

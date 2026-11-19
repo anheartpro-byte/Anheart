@@ -863,6 +863,16 @@ repos, à un départ, ou quand la chaîne se lit inconnue. Une chaîne qui s'ouv
 sur un bras qui tourne se rejoue aussi sans eux, le runtime déduisant
 l'ouverture de la coupure de couple que le variateur rapporte.
 
+Depuis l'attente de roue libre (ANH-92), la section `runtime` du document porte
+aussi `coast_tau`, la valeur de `COAST_TAU_S` sur laquelle la console calcule
+cette attente : l'empreinte de toute console change une fois, un nouveau
+document est écrit, et chaque enregistrement antérieur garde le sien. Le rejeu
+relit un document sans cette clé, avec la valeur par défaut, 40 s ; un rejeu
+antérieur refuse un document qui la porte (`extra="forbid"` sur cette section).
+Convex ne lit pas cette section. Le compte à rebours de l'attente
+(`coast_hold_s`) n'est que dans l'instantané de la page, pas dans
+l'enregistrement : rien d'autre n'y change.
+
 Au démarrage, la console remet ces octets au journal, en mémoire. Le premier
 cycle du fil `record-journal` les écrit dans `config/<config_hash>.json` :
 jamais dans un tic ni dans la boucle de contrôle, et sans attente du départ
@@ -1057,6 +1067,7 @@ valeur de `schema_version` :
 | commande `attendant_ping` | ANH-192 | le reader structurel relit l'événement, mais le rejeu déclare l'enregistrement non rejouable (commande inconnue, code 2) |
 | commande `presence_trip` | ANH-192 | même refus de commande inconnue par le rejeu antérieur ; ni kind ni champ de manifeste nouveau |
 | commande `latch_estop` | ANH-192 | même refus de commande inconnue par le rejeu antérieur ; le verrou immédiat de la surface est distinct de l'appel `estop` du runtime |
+| `coast_tau` dans la section `runtime` du document de configuration | ANH-92 (attente de roue libre) | le rejeu refuse le document (clé inconnue), donc l'enregistrement ; Convex ne lit pas cette section, aucun ordre de déploiement |
 | `sto_source` dans le manifeste | ANH-92 | le lecteur du Pi refuse le manifeste (clé inconnue) ; le dépôt Convex antérieur le refuse aussi ([convex.md](convex.md#source-sto-dans-le-manifeste-anh-92)) |
 | `zone_in_s`, `zone_above_s`, `zone_below_s` dans `end_observation` | ANH-234 | le lecteur du Pi refuse le manifeste (clé inconnue), même aux trois `null` d'une séance manuelle ; le dépôt Convex antérieur le refuse aussi ([convex.md](convex.md#compteurs-de-zone-et-ordre-de-déploiement-anh-234)) |
 | kind d'événement `sto` | A1-20 | le lecteur du Pi refuse la ligne (kind inconnu), donc l'enregistrement : un rejeu ou un import antérieurs ne le lisent pas ; aucun ne le lit autrement qu'en entier. Convex ne lit pas les kinds strictement : son dépôt ne lit pas `events.jsonl`, son résumé ne regarde que les `warning`, et la route des événements accepte tout kind en minuscules ; aucun ordre de déploiement. Un enregistrement antérieur, sans `sto`, se rejoue sur une chaîne prête, comme avant |

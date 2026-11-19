@@ -130,6 +130,7 @@ def test_every_key_has_a_family_and_the_safety_ones_are_the_ticket_s() -> None:
         "MOTOR_MAX_RPM",
         "ARM_RADIUS_M",
         "LEG_TIP_RADIUS_M",
+        "COAST_TAU_S",
         "PROGRAMS_ENABLED",
         "OCCUPANCY_OCCUPIED_ENABLED",
     }

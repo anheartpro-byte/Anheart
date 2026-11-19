@@ -960,6 +960,7 @@ EXPECTED_FIELDS: Final[tuple[tuple[type, tuple[tuple[str, str], ...]], ...]] = (
             ("mode", "RunMode"),
             ("manual", "ManualView | None"),
             ("sto", "StoReading"),
+            ("coast_hold", "Seconds | None"),
         ),
     ),
 )

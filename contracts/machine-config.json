@@ -34,6 +34,7 @@
     "MOTOR_MAX_RPM": { "family": "safety", "env": "MOTOR_MAX_RPM", "type": "integer", "min": 0, "max": 1380, "nullable": false, "default": 300 },
     "ARM_RADIUS_M": { "family": "safety", "env": "ARM_RADIUS_M", "type": "number", "min_exclusive": 0, "max": 5, "nullable": false, "default": null },
     "LEG_TIP_RADIUS_M": { "family": "safety", "env": "LEG_TIP_RADIUS_M", "type": "number", "min_key": "ARM_RADIUS_M", "max": 5, "nullable": true, "default": null },
+    "COAST_TAU_S": { "family": "safety", "env": "COAST_TAU_S", "type": "number", "min": 5, "max": 300, "nullable": false, "default": 40.0 },
     "PROGRAMS_ENABLED": { "family": "safety", "env": "PROGRAMS_ENABLED", "type": "boolean", "nullable": false, "default": false, "requires_level": "auto" },
     "OCCUPANCY_OCCUPIED_ENABLED": { "family": "safety", "env": "OCCUPANCY_OCCUPIED_ENABLED", "type": "boolean", "nullable": false, "default": false, "requires_level": "occupied" }
   },

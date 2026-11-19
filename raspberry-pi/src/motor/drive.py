@@ -1119,7 +1119,9 @@ class DriveStatus:
     Note what a status does NOT tell you. ``state`` is the drive's control
     state, not the shaft's: FAULT, NOT_READY and COMM_LOST are all compatible
     with a centrifuge still turning. ``output_rpm`` is the field that speaks
-    about motion.
+    about motion, while the output stage drives the shaft: it is the output
+    frequency, and with the stage off it reads 0 however fast the shaft still
+    coasts (:mod:`src.motor.coast`).
 
     There is no constructor here for "comms lost", and that omission is
     deliberate: it would have to invent values for the speed fields, and a

@@ -96,6 +96,7 @@ from src.motor.atv320 import (
     DEFAULT_TIMEOUT,
     SerialSettings,
 )
+from src.motor.coast import DEFAULT_COAST_TAU, MAX_COAST_TAU, MIN_COAST_TAU
 from src.motor.drive import LogicInput, RegisterMap
 from src.motor.ftdi_link import SCHNEIDER_CABLE_URL, Parity
 from src.motor.sto import StoSourceKind
@@ -139,6 +140,7 @@ KEY_BITALINO_ADDRESS: Final[str] = "BITALINO_ADDRESS"
 KEY_BITALINO_MIN_BATTERY_PCT: Final[str] = "BITALINO_MIN_BATTERY_PCT"
 KEY_ARM_RADIUS_M: Final[str] = "ARM_RADIUS_M"
 KEY_GEAR_RATIO: Final[str] = "GEAR_RATIO"
+KEY_COAST_TAU_S: Final[str] = "COAST_TAU_S"
 KEY_UI_HOST: Final[str] = "UI_HOST"
 KEY_UI_PORT: Final[str] = "UI_PORT"
 KEY_DEVICE_TOKEN: Final[str] = "DEVICE_TOKEN"  # noqa: S105  # a key NAME, not a secret
@@ -383,6 +385,10 @@ class LocalConfig:
     """``BITALINO_MIN_BATTERY_PCT``: below it the pre-flight refuses a person on board
     and warns at the bench (ANH-142)."""
 
+    coast_tau: Seconds = DEFAULT_COAST_TAU
+    """``COAST_TAU_S``: the coast time constant the coast-down hold is computed on
+    (:mod:`src.motor.coast`), to be measured at the bench (docs/securite.md, 9.6)."""
+
     machine_config: MachineConfigRef | None = None
     """The dashboard's revision the keys came from (``data/config.applied.json``,
     :mod:`src.config_sync`); ``None``: they are the ``.env``'s."""
@@ -486,6 +492,21 @@ def _min_battery(env: Mapping[str, str]) -> Result[Percent, ConfigProblem]:
     if not 0.0 <= value.value <= 100.0:  # noqa: PLR2004  # a percentage
         return Err(ConfigProblem(KEY_BITALINO_MIN_BATTERY_PCT, f"{value.value} % hors de [0, 100]"))
     return Ok(Percent(value.value))
+
+
+def coast_tau(env: Mapping[str, str]) -> Result[Seconds, ConfigProblem]:
+    """``COAST_TAU_S``: the shaft's coast time constant the coast-down hold is computed on."""
+    text = _text(env, KEY_COAST_TAU_S, f"{DEFAULT_COAST_TAU:g}")
+    value = _finite_float(text, KEY_COAST_TAU_S)
+    if isinstance(value, Err):
+        return value
+    if not MIN_COAST_TAU <= value.value <= MAX_COAST_TAU:
+        return Err(
+            ConfigProblem(
+                KEY_COAST_TAU_S, f"{value.value} s hors de [{MIN_COAST_TAU}, {MAX_COAST_TAU}]"
+            )
+        )
+    return Ok(Seconds(value.value))
 
 
 def _link_numbers(
@@ -1030,6 +1051,7 @@ def load_local_config(
     record = _record(env)
     motion = _medical_values(status)
     battery = _min_battery(env)
+    tau = coast_tau(env)
 
     problems = (
         tuple(
@@ -1049,6 +1071,7 @@ def load_local_config(
                 presence,
                 leg_tip,
                 battery,
+                tau,
             )
             if isinstance(result, Err)
         )
@@ -1078,6 +1101,7 @@ def load_local_config(
         or isinstance(leg_tip, Err)
         or isinstance(motion, Err)
         or isinstance(battery, Err)
+        or isinstance(tau, Err)
     ):
         return Err(problems)
     return Ok(
@@ -1102,5 +1126,6 @@ def load_local_config(
             leg_tip_radius=leg_tip.value,
             record=record.value,
             bitalino_min_battery=battery.value,
+            coast_tau=tau.value,
         )
     )

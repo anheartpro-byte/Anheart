@@ -54,6 +54,7 @@ from src.training.runtime import (
     RULE_DISABLE_REFUSED,
     RULE_STO_OPEN,
     STO_OPEN_DEDUCED,
+    CoastDownHold,
     RuntimeState,
     SafetyStanding,
     TrainingRuntime,
@@ -335,6 +336,12 @@ async def test_a_chain_opening_during_any_stop_latches_at_the_next_tick_until_ac
     assert scene.rig.simulator.commanded_setpoint == 0
     assert isinstance(surface.acknowledge(OPERATOR, estop_released=True), Ok)
     assert runtime.standing is None
+    # The stage dropped on a turning shaft: no start until the hold has run out (ANH-92).
+    refused = await scene.start()
+    assert isinstance(refused, Err)
+    assert isinstance(refused.error, CoastDownHold)
+    await until_the_hold_is_over(scene)
+    await until_finished(scene)  # the ending's COOLDOWN lasted the hold
     assert isinstance(await scene.start(), Ok)
     await scene.panel.close()
 
@@ -553,22 +560,41 @@ class LosesTheReadAfterArming(Noted):
         return await self.inner.read_status()
 
 
+#: Ticks a wait may take: past the longest coast-down hold (289 s) and any recovery.
+LONGEST_WAIT: Final[int] = 2500
+
+
+def coasting(scene: Scene) -> bool:
+    """Whether the coast-down hold still refuses starts and resets (ANH-92)."""
+    return scene.runtime.snapshot().coast_hold is not None
+
+
 async def until_at_rest(scene: Scene) -> None:
-    """Tick until the shaft is stopped, as the bench waits for the arm, by eye.
+    """Tick until the shaft is stopped, as the bench waits for the arm, by eye, and until
+    the coast-down hold that the stage dropping at speed started has run out.
 
     The plant's own speed: a faulted drive's RFRD reads 0 through the whole
     coast (docs/securite.md, section 3), and the simulated drive takes no
-    reset until its freewheel is over.
+    reset until its freewheel is over. Nor does the console, until its hold is.
     """
-    for _ in range(1000):
+    for _ in range(LONGEST_WAIT):
         await scene.run(1)
-        if scene.rig.simulator.shaft_rpm == 0:
+        if scene.rig.simulator.shaft_rpm == 0 and not coasting(scene):
             return
     raise AssertionError("the shaft never stopped")
 
 
+async def until_the_hold_is_over(scene: Scene) -> None:
+    """Tick, reads included, until the coast-down hold has run out: only time lifts it."""
+    for _ in range(LONGEST_WAIT):
+        if not coasting(scene):
+            return
+        await scene.run(1)
+    raise AssertionError("the coast-down hold never ran out")
+
+
 async def until_finished(scene: Scene) -> None:
-    for _ in range(1000):
+    for _ in range(LONGEST_WAIT):
         await scene.run(1)
         if scene.runtime.state is RuntimeState.FINISHED:
             return
