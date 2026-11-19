@@ -4386,33 +4386,35 @@ Pre-vol ([console-locale.md, section 17](console-locale.md#17-page--pre-vol--anh
   (`read_limits` puis `check_limits`, sous le plafond `max_motor_hz` de
   l'armement). La liste porte chaque contrôle que le tableau de bord exige
   (`required_controls` du contrat).
-* **Au repos.** D'abord la règle de la console (`at_rest`, la même que
-  `catalog_at_rest`, que gardent le catalogue, la liste d'opérateurs et la
-  configuration) : aucune séance, aucun départ attendu ni en cours d'armement,
-  aucun lancement du tableau de bord en main ; l'instantané seul reste en
-  REPOS pendant qu'un départ s'arme. Puis celle du contrôle `drive_state` :
-  console en REPOS, variateur ni en défaut ni en marche, moteur à 0. Les deux
-  sont demandées avant de partir, à chaque attente de la passe, juste avant
-  la lecture du variateur et juste avant l'envoi. Reste : une lecture qui
-  chevauche un armement commencé pendant elle, une lecture sans effet sous le
-  verrou du variateur. Le garde de roue libre (`CoastDownHold`) s'ajoutera par
-  `CommissioningSetup.coasting`, qui n'a pas de valeur par défaut :
-  `build_panel` passe `never_coasting` en le nommant. **Jusqu'à ce que le
-  garde arrive, une mise en service peut être enregistrée au repos pendant
-  que le bras roule encore en roue libre** après une coupure secteur ou une
-  ouverture du STO (RFRD lit 0 étage coupé). Elle ne fait que lire.
+* **Au repos.** D'abord l'attente de roue libre (`CoastDownHold`, ANH-92),
+  par `CommissioningSetup.coasting`, qui n'a pas de valeur par défaut :
+  `build_panel` donne celle du runtime et son temps restant (`coast_words`),
+  dans les mots d'un départ refusé. Elle passe la première, comme pour un
+  départ : une fin de séance dure l'attente, et l'attente est la raison.
+  **Une mise en service est refusée pendant l'attente de roue libre** : après
+  une coupure secteur ou une ouverture du STO, RFRD lit 0 étage coupé alors
+  que le bras peut encore tourner. Puis la règle de la console (`at_rest`, la
+  même que `catalog_at_rest`, que gardent le catalogue, la liste d'opérateurs
+  et la configuration) : aucune séance, aucun départ attendu ni en cours
+  d'armement, aucun lancement du tableau de bord en main ; l'instantané seul
+  reste en REPOS pendant qu'un départ s'arme. Puis celle du contrôle
+  `drive_state` : console en REPOS, variateur ni en défaut ni en marche,
+  moteur à 0. Les trois sont demandées avant de partir, à chaque attente de
+  la passe, juste avant la lecture du variateur et juste avant l'envoi.
+  Reste : une lecture qui chevauche un armement commencé pendant elle, une
+  lecture sans effet sous le verrou du variateur.
 * **La lecture du variateur** passe par le `backend` de la console, celui du
   runtime et de son enregistreur : une lecture des cinq registres, sérialisée
   avec les autres échanges par le verrou du client ATV320, rien d'écrit. Ces
   cinq lectures partent hors de l'ordonnancement de `StoReadGate` ; une
   lecture qui échoue peut verrouiller un FREEZE `loop_stall` au repos, comme
   tout échange qui échoue.
-* **La date de l'attestation** envoyée est l'horloge murale de la fin des
-  contrôles, moins le temps écoulé depuis l'attestation sur l'horloge
-  monotone (`attested_at`), jamais sa propre date : un Pi démarre sur
-  l'heure de son dernier arrêt (fake-hwclock), et une attestation donnée
-  avant que le service de temps règle l'horloge dirait cette heure, à des
-  jours près. Sur l'image, cette horloge restaurée rend rare le refus
+* **La date de l'attestation** envoyée est la fin des contrôles (`ranAt`),
+  moins le temps écoulé depuis l'attestation sur l'horloge monotone
+  (`attested_at`), donc jamais après elle, et jamais sa propre date : un Pi
+  démarre sur l'heure de son dernier arrêt (fake-hwclock), et une attestation
+  donnée avant que le service de temps règle l'horloge dirait cette heure, à
+  des jours près. Sur l'image, cette horloge restaurée rend rare le refus
   « horloge pas à l'heure » (`MIN_DATE_MS`) ; c'est le contrôle `clock`,
   rouge en mise en service, qui juge la date de la fin des contrôles.
 * **L'envoi** prend le transport du lien (`PacedTransport`), lié une fois le

@@ -2251,7 +2251,12 @@ du site ayant joint la fiche variateur avec ses cinq valeurs.
 anterieur au contrat 1.18 » : attendre que la console soit reliée, ou mettre à
 jour le tableau de bord. « arret d'urgence non atteste » : étape 2. « horloge
 de la console pas a l'heure » : attendre son service de temps (contrôle
-Horloge du pré-vol). « refusee par le tableau de bord : Aucune fiche
+Horloge du pré-vol). « refusee par le tableau de bord : invalid_request
+(HTTP 400) » une minute après le lancement, contrôle Horloge rouge : la
+console a démarré sur l'heure de son dernier arrêt (fake-hwclock), en retard
+de plusieurs jours ; attendre son service de temps (contrôle Horloge vert),
+puis relancer. « arbre peut-etre encore en roue libre » : attendre le temps
+dit, puis relancer. « refusee par le tableau de bord : Aucune fiche
 variateur avec ses valeurs » : l'admin joint la fiche avec ses valeurs.
 
 ## 14. Message affiché, ce qu'il veut dire, quoi faire

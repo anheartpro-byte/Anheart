@@ -21,7 +21,8 @@ console, and nothing of the machine's validation level.
 
 Refused before anything is read: one under way, a console not linked to a dashboard of
 1.18 or later, no emergency-stop attestation since this console started, a console not at
-rest. One that leaves rest while it runs is dropped, and nothing is sent.
+rest, its coast-down hold included. One that leaves rest while it runs is dropped, and
+nothing is sent.
 """
 
 from __future__ import annotations
@@ -131,9 +132,12 @@ CLOCK_UNSET: Final[str] = (
     "controle Horloge)"
 )
 ATTESTED_UNSET: Final[str] = (
-    "arret d'urgence atteste quand l'horloge de la console n'etait pas a l'heure : redonner "
+    "arret d'urgence atteste avant le 1er janvier 2026 selon l'horloge de la console : "
+    "attendre son service de temps (page Pre-vol, controle Horloge), ou redonner "
     "l'attestation, page Securite"
 )
+"""The attestation dated before :data:`MIN_DATE_MS` (:func:`attested_at`): the clock of now
+less the time since, so a clock barely past the floor, or a console up since before it."""
 UNATTESTED: Final[str] = (
     "arret d'urgence non atteste depuis le demarrage de la console : donner l'attestation, "
     "page Securite"
@@ -157,17 +161,6 @@ UNREADABLE_ANSWER: Final[str] = (
 STO_SOURCE_LABEL: Final[str] = "Source de la chaine STO"
 STO_READY_LABEL: Final[str] = "Chaine STO prete"
 DRIVE_LIMITS_LABEL: Final[str] = "Parametres du variateur relus (tFr, HSP, LSP, ACC, dEC)"
-
-
-def never_coasting() -> str | None:
-    """No coast hold to wait for.
-
-    The seam of the coast-hold guard (``CoastDownHold``, built apart on the runtime):
-    until it lands, "at rest" is :data:`_DRIVE_STATE`'s rule alone. Once it does, the
-    console says here why its shaft may still turn, and no commissioning starts or goes on
-    while it does: a zero reference with the stage off does not prove the shaft still.
-    """
-    return None
 
 
 def dropped(why: str) -> str:
@@ -475,8 +468,10 @@ class CommissioningSetup:
 
     facts: Facts
     coasting: Callable[[], str | None]
-    """Why the shaft may still turn; ``None``: nothing says so. No default: whoever builds a
-    desk says it, :func:`never_coasting` until the coast-hold guard lands."""
+    """Why the shaft may still turn, in the card's words; ``None``: nothing says so. No
+    default: whoever builds a desk says it. ``build_panel`` gives the runtime's coast-down
+    hold (``CoastDownHold``) and its time left: a zero reference with the stage off does
+    not prove the shaft still."""
 
     pause: Callable[[Seconds], Awaitable[None]] = _pause
 
@@ -497,9 +492,10 @@ def attested(confirmed: Result[EstopAttestation, MotionRefusal]) -> EstopAttesta
     return confirmed.value if isinstance(confirmed, Ok) else None
 
 
-def attested_at(attestation: EstopAttestation, clock: Clock) -> UnixMillis:
-    """When the attestation was given, on the wall clock of now: now, less the time since,
-    on the monotonic clock.
+def attested_at(attestation: EstopAttestation, clock: Clock, now: UnixMillis) -> UnixMillis:
+    """When the attestation was given, on the wall clock: ``now``, read off ``clock`` (the
+    end of the checks, in a report), less the time since on the monotonic clock. So never
+    after ``now``.
 
     Not its own wall clock: a Pi starts on the time it was shut down at (fake-hwclock), and
     an attestation given before the time service set the clock says that time, days off.
@@ -507,7 +503,7 @@ def attested_at(attestation: EstopAttestation, clock: Clock) -> UnixMillis:
     what the ``clock`` control judges, red when the time service does not hold it.
     """
     since = clock.monotonic() - attestation.at
-    return UnixMillis(clock.unix_millis() - round(since * 1000))
+    return UnixMillis(now - round(since * 1000))
 
 
 class CommissioningDesk:
@@ -538,14 +534,17 @@ class CommissioningDesk:
         )
 
     def _away(self) -> str | None:
-        """Why the console is not at rest now; ``None`` when it is: its own rule (a session, a
-        start waited for or armed, a launch in hand), then the drive's, then a coast."""
+        """Why the console is not at rest now; ``None`` when it is: a coast, then its own rule
+        (a session, a start waited for or armed, a launch in hand), then the drive's.
+
+        The coast first, as a start asks it: an ending lasts the hold, and the hold is why."""
+        coasting = self._setup.coasting()
+        if coasting is not None:
+            return coasting
         if not self._setup.at_rest():
             return NOT_AT_REST
         found = _DRIVE_STATE.check(self._setup.monitor.inputs())
-        if isinstance(found, Err):
-            return found.error.reason
-        return self._setup.coasting()
+        return found.error.reason if isinstance(found, Err) else None
 
     def _ready(  # noqa: PLR0911  # one return per refusal
         self,
@@ -561,9 +560,10 @@ class CommissioningDesk:
         if attestation is None:
             return Err(UNATTESTED)
         # The dashboard refuses a date before its floor: none is sent that it would refuse.
-        if self._setup.clock.unix_millis() < MIN_DATE_MS:
+        now = self._setup.clock.unix_millis()
+        if now < MIN_DATE_MS:
             return Err(CLOCK_UNSET)
-        if attested_at(attestation, self._setup.clock) < MIN_DATE_MS:
+        if attested_at(attestation, self._setup.clock, now) < MIN_DATE_MS:
             return Err(ATTESTED_UNSET)
         away = self._away()
         if away is not None:
@@ -608,7 +608,9 @@ class CommissioningDesk:
         body = report_body(
             ran_at=ran_at,
             operator=operator,
-            attestation=replace(attestation, wall_clock=attested_at(attestation, setup.clock)),
+            attestation=replace(
+                attestation, wall_clock=attested_at(attestation, setup.clock, ran_at)
+            ),
             controls=controls,
             limits=read.value if isinstance(read, Ok) else None,
             facts=setup.facts,

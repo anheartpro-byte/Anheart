@@ -2709,7 +2709,7 @@ Les codes d'un refus immédiat (`code` du corps 409 ou 412) : `start_pending`,
 | POST | `/api/preflight/run` | - | « Relancer » : une nouvelle passe, la batterie du BITalino relue au repos ; ne lance et ne refuse rien | 202, le même objet ; 409 sur une console sans pré-vol |
 | POST | `/api/preflight/acknowledge` | - | « Acquitter une seance perdue » (ANH-145) : l'opérateur connecté lève les seules séances perdues (refusées pour de bon, illisibles), écrites au journal de bord ; ne lance rien | 200, l'objet du pré-vol ; 401 `operator_required` ; 409 pendant une séance, quand aucune séance n'est perdue (une retenue qui se lèvera d'elle-même reste), avant la liste des enregistrements, ou console non reliée |
 | GET | `/api/commissioning` | - | la mise en service ([section 17](#17-page--pre-vol--anh-142)) : une en cours, pourquoi aucune ne peut partir maintenant, la dernière et ce que le tableau de bord en a dit ; `null` sur une console reliée à aucun tableau de bord | 200 `{running, refusal, last}` ou `null` |
-| POST | `/api/commissioning/run` | - | « Lancer la mise en service » (ANH-115), par l'opérateur connecté, nommé dans l'enregistrement : le pré-vol relancé, le variateur relu, la liste jugée, puis envoyée au tableau de bord ; répond quand il a répondu, après environ une minute | 200 `{running, refusal, last}` ; 401 `operator_required` sans opérateur connecté ; 409 avec la raison (au repos : la règle de la console et le contrôle du variateur ; jusqu'au garde de roue libre, une mise en service peut être enregistrée au repos pendant que le bras roule encore après une coupure secteur ou une ouverture du STO, elle ne fait que lire) (une en cours, pas de tableau de bord 1.18, aucune attestation de l'arrêt d'urgence, console pas au repos, console sortie du repos en cours de route : rien n'est envoyé) |
+| POST | `/api/commissioning/run` | - | « Lancer la mise en service » (ANH-115), par l'opérateur connecté, nommé dans l'enregistrement : le pré-vol relancé, le variateur relu, la liste jugée, puis envoyée au tableau de bord ; répond quand il a répondu, après environ une minute | 200 `{running, refusal, last}` ; 401 `operator_required` sans opérateur connecté ; 409 avec la raison, rien n'est envoyé : une en cours, pas de tableau de bord 1.18, aucune attestation de l'arrêt d'urgence, une horloge ou une attestation d'avant le 1er janvier 2026, console pas au repos (l'attente de roue libre et son temps restant, la règle de la console, le contrôle du variateur), console sortie du repos en cours de route |
 | POST | `/api/service/restore` | - | remet en service une console hors service, par l'opérateur connecté ; ne lance rien | 200 `{out_of_service, unclean_starts, threshold, window_s, unclean_stop, open_record, persisted}` (`persisted: false` : vaut jusqu'au prochain redémarrage seulement) ; 401 `operator_required` ; 409 (console en service, ou console qui ne garde pas d'état de redémarrage) |
 
 ### Enregistrements
@@ -3170,19 +3170,26 @@ Refusée avant toute lecture, avec la raison sous le bouton : une déjà en
 cours ; une console pas encore jointe à un tableau de bord du contrat 1.18 ;
 aucune attestation de l'arrêt d'urgence depuis le démarrage (`arret
 d'urgence non atteste depuis le demarrage de la console : donner
-l'attestation, page Securite`) ; une horloge de la console pas encore à
-l'heure, ou une attestation donnée avant qu'elle le soit (le tableau de bord
-ne prend aucune date d'avant le 1er janvier 2026 : un Pi n'a pas d'horloge à
-lui, et la sienne est quelconque avant son service de temps ; `arret
-d'urgence atteste quand l'horloge de la console n'etait pas a l'heure :
+l'attestation, page Securite`) ; une horloge de la console d'avant le 1er
+janvier 2026, pas encore à l'heure, ou une attestation que cette horloge,
+moins le temps écoulé depuis, daterait d'avant (le tableau de bord ne prend
+aucune date d'avant le 1er janvier 2026 : un Pi n'a pas d'horloge à lui, et
+la sienne est quelconque avant son service de temps ; l'attestation n'y tombe
+que sur une horloge à peine au delà, ou une console allumée depuis avant ;
+`arret d'urgence atteste avant le 1er janvier 2026 selon l'horloge de la
+console : attendre son service de temps (page Pre-vol, controle Horloge), ou
 redonner l'attestation, page Securite`) ; une console qui n'est pas au repos :
-une séance, un départ attendu ou en cours d'armement, un lancement du tableau
-de bord en main, ou le contrôle « Variateur ni en defaut ni en marche ».
-**Jusqu'au garde de roue libre, une mise en service peut être enregistrée au
-repos pendant que le bras roule encore** après une coupure secteur ou une
-ouverture du STO (le variateur lit 0, étage coupé) : elle ne fait que lire. Une mise en service qui
-quitte le repos en cours de route s'interrompt, et rien n'est envoyé (`mise
-en service interrompue, rien n'est envoye : ...`). Un refus du tableau de
+l'attente de roue libre, une séance, un départ attendu ou en cours
+d'armement, un lancement du tableau de bord en main, ou le contrôle
+« Variateur ni en defaut ni en marche ». **Une mise en service est refusée
+pendant l'attente de roue libre** (ANH-92) : après une coupure secteur ou une
+ouverture du STO, le variateur lit 0 étage coupé alors que le bras peut
+encore tourner ; la raison dit le temps restant, dans les mots d'un départ
+refusé (`console pas au repos : arbre peut-etre encore en roue libre (etage
+de puissance coupe, RFRD a 0) : attendre encore N s`). Une mise en service
+qui quitte le repos en cours de route s'interrompt, et rien n'est envoyé
+(`mise en service interrompue, rien n'est envoye : ...`), une attente de roue
+libre qui commence pendant elle comprise. Un refus du tableau de
 bord est dit tel qu'il l'écrit (`refusee par le tableau de bord : Aucune
 fiche variateur avec ses valeurs ...`), et la mise en service n'est pas
 enregistrée.
@@ -3198,9 +3205,7 @@ Ce qui reste : la carte ne garde que la dernière mise en service de cette
 exécution de la console ; l'enregistrement est celui du tableau de bord. Les
 paramètres ttO et SLL ne sont pas relus (leur adresse Modbus n'est pas
 vérifiée), ni le numéro de série du variateur. Une mise en service qui n'a pas
-pu partir est refaite : rien ne la garde pour plus tard. Le garde de roue
-libre (`CoastDownHold`) n'est pas encore là : quand il le sera, aucune mise en
-service ne partira ni ne continuera pendant qu'il retient l'arbre.
+pu partir est refaite : rien ne la garde pour plus tard.
 
 ## 18. Connexion de l'opérateur (ANH-152)
 

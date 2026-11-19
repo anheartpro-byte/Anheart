@@ -41,7 +41,7 @@ from src.commissioning_view import (
     Verdict,
 )
 from src.contract import ContractVersion
-from src.local_panel import CONTROL_PERIOD, build_panel
+from src.local_panel import CONTROL_PERIOD, build_panel, describe_coast_hold
 from src.motor.simulated import SimulatedDrive
 from src.result import Err, Ok, Result
 from src.training.plan import JsonValue
@@ -252,6 +252,58 @@ async def test_the_panel_runs_one_over_its_runtime_its_sto_and_its_link(tmp_path
     controls = cast("list[Mapping[str, str]]", body["controls"])
     assert {c["id"]: c["state"] for c in controls}["drive_limits"] == "ok"
     assert body["drive"] is not None
+    await panel.close()
+
+
+async def test_a_coast_down_hold_refuses_one_with_its_time_left_until_it_is_over(
+    tmp_path: Path,
+) -> None:
+    """The runtime's coast-down hold (ANH-92), started as the coast-hold tests start one: a
+    run is refused up front with the time left, dropped when a hold starts while it waits,
+    nothing sent, and accepted once the hold is over."""
+    dashboard = Dashboard()
+    clock = ManualClock(Monotonic(10.0), UnixMillis(1_800_000_000_000))
+    panel = build_panel(
+        config_of(),
+        clock=clock,
+        profiles_path=tmp_path / "p.json",
+        transport=lambda _config: dashboard,
+        preflight=True,
+    )
+    desk = panel.services.commissioning
+    assert isinstance(desk, CommissioningDesk)
+    clock.advance(Seconds(1.0))
+    await panel.cloud_step()
+    assert isinstance(panel.surface.attest_estop_wiring(OPERATOR_ID), Ok)
+    await panel.control_cycle()
+    assert desk.view().refusal is None
+    hold = Seconds(2.0)
+
+    async def through_the_hold() -> None:
+        while panel.runtime.coast_hold_remaining(clock.monotonic()) is not None:
+            clock.advance(CONTROL_PERIOD)
+            await panel.control_cycle()
+
+    panel.runtime.hold_coast(clock.monotonic(), hold, "a drop")
+    held = f"console pas au repos : {describe_coast_hold(hold)}"
+    assert held.endswith("attendre encore 2 s")
+    assert desk.view().refusal == held
+    assert await desk.run(OPERATOR_ID) == Err(held)
+    await through_the_hold()
+    assert desk.view().refusal is None
+    run = asyncio.create_task(desk.run(OPERATOR_ID))
+    await asyncio.sleep(0)  # under way, waiting for its pre-flight run
+    panel.runtime.hold_coast(clock.monotonic(), hold, "a drop while it waits")
+    assert await run == Err(dropped(describe_coast_hold(hold)))
+    assert dashboard.to(COMMISSIONING_PATH) == []
+    await through_the_hold()
+    run = asyncio.create_task(desk.run(OPERATOR_ID))
+    await asyncio.sleep(0)
+    for _ in range(round(RUN_WAIT / CONTROL_PERIOD)):
+        clock.advance(CONTROL_PERIOD)
+        await panel.control_cycle()
+    assert isinstance(await run, Ok)
+    assert len(dashboard.to(COMMISSIONING_PATH)) == 1
     await panel.close()
 
 

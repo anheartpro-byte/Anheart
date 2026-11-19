@@ -52,7 +52,6 @@ from src.commissioning import (
     describe_outcome,
     drive_limits_result,
     dropped,
-    never_coasting,
     outcome_of,
     recorded_of,
     report_body,
@@ -531,7 +530,6 @@ def test_the_log_line_names_the_verdict_and_the_findings_or_why_not() -> None:
 def test_the_attestation_is_the_runtime_s_or_none() -> None:
     assert attested(Ok(ATTESTATION)) is ATTESTATION
     assert attested(Err(EstopUnattested(ESTOP_ATTESTATION))) is None
-    assert never_coasting() is None
     assert dropped("x") == "mise en service interrompue, rien n'est envoye : x"
 
 
@@ -640,6 +638,10 @@ def test_no_attestation_or_no_rest_or_a_coast_starts_none() -> None:
     rig.monitor.current = _green()
     rig.coasting = "roue libre en cours"
     assert rig.desk.view().refusal == "console pas au repos : roue libre en cours"
+    # The coast first, as a start asks it: an ending lasts the hold, and the hold is why.
+    rig.at_rest = False
+    assert rig.desk.view().refusal == "console pas au repos : roue libre en cours"
+    rig.at_rest = True
     assert asyncio.run(rig.desk.run("user-1")) == Err("console pas au repos : roue libre en cours")
     assert rig.monitor.reruns == 0
     assert rig.sent == []
@@ -655,7 +657,8 @@ def test_the_attestation_is_dated_by_the_time_since_it_was_given() -> None:
         UnixMillis(1_800_000_000_000 + 3 * 86_400_000),
     ):
         rig = Rig().bind()
-        rig.attestation = replace(ATTESTATION, at=Monotonic(900.0), wall_clock=wall_clock)
+        attestation = replace(ATTESTATION, at=Monotonic(900.0), wall_clock=wall_clock)
+        rig.attestation = attestation
         assert rig.desk.view().refusal is None
         assert isinstance(asyncio.run(rig.desk.run("user-1")), Ok)
         (body,) = rig.sent
@@ -663,7 +666,9 @@ def test_the_attestation_is_dated_by_the_time_since_it_was_given() -> None:
         assert (
             cast("dict[str, int]", body["attestation"])["at"] == cast("int", body["ranAt"]) - since
         )
-        assert attested_at(ATTESTATION, rig.clock) <= rig.clock.unix_millis()
+        # From the end of the checks it is given, not from a second read of the wall clock.
+        ran_at = UnixMillis(rig.clock.unix_millis() - 5_000)
+        assert attested_at(attestation, rig.clock, ran_at) == ran_at - since
 
 
 def test_a_clock_not_set_or_an_attestation_given_before_it_was_starts_none() -> None:

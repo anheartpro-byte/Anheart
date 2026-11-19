@@ -193,7 +193,6 @@ from src.commissioning import (
     DashboardLink,
     Facts,
     attested,
-    never_coasting,
 )
 from src.config_sync import (
     APPLIED_FILE,
@@ -2980,9 +2979,8 @@ def build_panel(  # noqa: PLR0912, PLR0915  # one branch, one statement per wire
                     medical_version=config.medical.version,
                     config_hash=None if applied is None else applied.revision.digest,
                 ),
-                # Until the coast-hold guard (CoastDownHold) lands, nothing says the arm still
-                # coasts: a run can then be recorded at rest while it does. The run only reads.
-                coasting=never_coasting,
+                # The coast-down hold (ANH-92): none starts or goes on while the arm may turn.
+                coasting=lambda: coast_words(runtime.coast_hold_remaining(clock.monotonic())),
             )
         )
     )
@@ -3447,6 +3445,12 @@ def describe_coast_hold(remaining: Seconds) -> str:
         "arbre peut-etre encore en roue libre (etage de puissance coupe, RFRD a 0) : "
         f"attendre encore {math.ceil(remaining)} s"
     )
+
+
+def coast_words(remaining: Seconds | None) -> str | None:
+    """The coast-down hold while it runs, in :func:`describe_coast_hold`'s words; ``None``:
+    none runs."""
+    return None if remaining is None else describe_coast_hold(remaining)
 
 
 def describe_record_storage(refusal: RecordStorageLow) -> str:
