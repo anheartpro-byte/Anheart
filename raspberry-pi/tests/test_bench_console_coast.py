@@ -3,13 +3,15 @@
 A noisy RS-485 pair fails the five transactions of a status read more often than the
 two of a speed write: the slider's LFRD lands, read back, while the poll after it fails,
 and each landed write resets the driver's count of failures, so the tool stays armed.
-What the tool itself wrote, Activer and each LFRD that landed, is what bounds the hold
-then. One pass of the bus thread at a time (:meth:`BusWorker.cycle_once`), on a clock
-the test moves.
+What the tool itself tried, Activer and each LFRD, landed or answered or not, is what
+bounds the hold then (review round 2: a write that lands with its answer lost). One
+pass of the bus thread at a time (:meth:`BusWorker.cycle_once`), on a clock the test
+moves.
 """
 
 from __future__ import annotations
 
+from collections import Counter
 from typing import Final, cast
 
 import pytest
@@ -58,14 +60,25 @@ def _link() -> DriveLink:
 
 
 class LosesStatus:
-    """Carries every frame, except a read of RFRD while ``lossy``: the status read fails,
-    while the enable's ETA checks and the slider's LFRD read-back get through.
-    ``lossy_from_enable``: lossy from the moment CMD = 15 is written."""
+    """Carries every frame, except:
+
+    * a read of RFRD while ``lossy``: the status read fails, while the enable's ETA checks
+      and the slider's LFRD read-back get through;
+    * ``lossy_from_enable``: lossy from the moment CMD = 15 is written;
+    * ``lose_reads[address]``: that many next reads of ``address`` fail;
+    * ``lose_answers[address]``: that many next writes to ``address`` land, then fail;
+    * ``drop_writes[address]``: that many next writes to ``address`` never land;
+    * ``after_enable``: (reads lost, writes dropped) from the moment CMD = 15 lands.
+    """
 
     def __init__(self, bus: FakeBus) -> None:
         self.bus: FakeBus = bus
         self.lossy: bool = False
         self.lossy_from_enable: bool = False
+        self.lose_reads: Counter[int] = Counter()
+        self.lose_answers: Counter[int] = Counter()
+        self.drop_writes: Counter[int] = Counter()
+        self.after_enable: tuple[Counter[int], Counter[int]] | None = None
 
     def connect(self) -> bool:
         return self.bus.connect()
@@ -74,14 +87,31 @@ class LosesStatus:
         self.bus.close()
 
     def read_holding_registers(self, address: int, count: int = 1, slave: int = 1) -> object:
+        if self.lose_reads[address] > 0:
+            self.lose_reads[address] -= 1
+            raise io_exception()
         if self.lossy and address == self.bus.regs.rfrd:
             raise io_exception()
         return self.bus.read_holding_registers(address, count, slave)
 
     def write_register(self, address: int, value: int, slave: int = 1) -> object:
-        if self.lossy_from_enable and address == self.bus.regs.cmd and value == 15:
+        if self.drop_writes[address] > 0:
+            self.drop_writes[address] -= 1
+            raise io_exception()
+        enabling = address == self.bus.regs.cmd and value == 15
+        if self.lossy_from_enable and enabling:
             self.lossy = True
-        return self.bus.write_register(address, value, slave)
+        answer = self.bus.write_register(address, value, slave)
+        if enabling and self.after_enable is not None:
+            reads, writes = self.after_enable
+            self.after_enable = None
+            self.lose_reads.update(reads)
+            self.drop_writes.update(writes)
+            self.lossy = True
+        if self.lose_answers[address] > 0:
+            self.lose_answers[address] -= 1
+            raise io_exception()
+        return answer
 
 
 class Bench:
@@ -250,3 +280,113 @@ async def test_a_stop_during_which_the_stage_drops_is_no_standstill(
     left = rig.held()
     assert left is not None
     assert left >= coast_hold(MotorRpm(300), since_read=Seconds(0.0), tau=TAU, standstill=ONE)
+
+
+# =========================================================================
+# Review round 2: a write that lands with its answer lost
+# =========================================================================
+
+
+async def lost_read_back(rig: Bench) -> None:
+    """Activer, then the polls failing, and the slider's 300 landing with its read-back
+    lost ("ECHEC consigne 300"): the drive heads for it all the same."""
+    await rig.armed()
+    await rig.cycle(bench.Command("enable"))
+    assert rig.shown().startswith("enable: ok"), rig.shown()
+    rig.line.lossy = True
+    rig.line.lose_reads[rig.bus.regs.lfrd] = 1
+    await rig.cycle(bench.Command("speed", 300))
+    assert rig.shown().startswith("speed 300 tr/min: ECHEC"), rig.shown()
+    assert rig.bus.registers[rig.bus.regs.lfrd] == 300, "landed"
+    await rig.cycle()
+    assert rig.worker.snap.armed
+
+
+async def test_a_reference_that_lands_with_its_read_back_lost_bounds_the_hold(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rig = Bench(monkeypatch)
+    await lost_read_back(rig)
+    await rig.cycle(bench.Command("speed", 0))
+    assert rig.shown() == "speed 0 tr/min: ok (relu sur LFRD)"
+    rig.sto_opens()
+    await rig.cycle()
+    left = rig.held()
+    assert left is not None
+    assert left >= FROM_250
+
+
+async def test_arreter_after_a_lost_read_back_holds_from_the_reference_tried(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The STO opens during Arrêter: no standstill, and the hold from the 300 tried."""
+    rig = Bench(monkeypatch)
+    await lost_read_back(rig)
+    rig.sto_opens()
+    await rig.cycle(bench.Command("stop"))
+    assert "arret NON confirme" in rig.shown(), rig.shown()
+    left = rig.held()
+    assert left is not None
+    assert left >= FROM_250
+
+
+async def test_an_exit_after_a_lost_read_back_leaves_the_longest_coast(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rig = Bench(monkeypatch)
+    await lost_read_back(rig)
+    rig.bus.registers[rig.bus.regs.eta] = ETA_FAULT
+    left = rig.worker.coast_after_exit(confirmed=True)
+    assert left is not None
+    assert left >= FROM_250
+
+
+async def test_an_activer_whose_15_landed_unconfirmed_is_driven_all_the_same(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """15 lands, the ETA check after it is lost, the rollback's 7 never lands:
+    EnableUnconfirmed, the stage live. The 300 that lands next bounds the hold."""
+    rig = Bench(monkeypatch)
+    await rig.armed()
+    regs = rig.bus.regs
+    rig.line.after_enable = (Counter({regs.eta: 1}), Counter({regs.cmd: 1}))
+    await rig.cycle(bench.Command("enable"))
+    assert rig.shown().startswith("enable: ECHEC activation"), rig.shown()
+    assert rig.bus.registers[regs.eta] == ETA_OPERATION_ENABLED, "the stage is live"
+    await rig.cycle(bench.Command("speed", 300))
+    assert rig.shown() == "speed 300 tr/min: ok (relu sur LFRD)", rig.shown()
+    await rig.cycle()
+    assert rig.worker.snap.armed
+    rig.sto_opens()
+    await rig.cycle()
+    left = rig.held()
+    assert left is not None
+    assert left >= FROM_250
+
+
+async def test_a_stop_word_that_lands_with_its_answer_lost_confirms_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Arrêter with LFRD 0 lost: 7 goes first, lands, its answer lost. Only a read of the
+    stage on at RFRD 0 confirms a standstill: the ramp of transition 5 ends with the stage
+    off, so this stop is not confirmed, 6 is not written, and the hold runs from the
+    speed last read under torque. No word written clears what the stage may be doing."""
+    rig = Bench(monkeypatch)
+    await rig.armed()
+    regs = rig.bus.regs
+    rig.bus.registers[regs.eta] = ETA_OPERATION_ENABLED
+    rig.bus.registers[regs.rfrd] = 300
+    rig.bus.registers[regs.lfrd] = 300
+    await rig.cycle()
+    rig.line.drop_writes[regs.lfrd] = 1
+    rig.line.lose_answers[regs.cmd] = 1
+    rig.bus.registers[regs.rfrd] = 0  # the ramp of transition 5 over by the first read
+    await rig.cycle(bench.Command("stop"))
+    shown = rig.shown()
+    assert shown.startswith("stop: ECHEC: arret NON confirme"), shown
+    assert "CMD=6 NON envoye" in shown
+    assert "CMD=7 ECHEC" in shown
+    left = rig.held()
+    assert left is not None
+    assert left >= coast_hold(MotorRpm(300), since_read=Seconds(0.0), tau=TAU, standstill=ONE)
+    assert rig.worker.coast_after_exit(confirmed=True) is not None

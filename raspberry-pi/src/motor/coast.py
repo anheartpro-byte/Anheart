@@ -123,17 +123,19 @@ class CoastWatch:
         return None if self._expected is None else self._expected.hold
 
     def driven(self) -> None:
-        """This process enabled the stage (its words, checked on ETA by the driver): on, at
-        rest until a read says more, whether a read follows or not. One read on keeps what
-        it showed."""
+        """This process is about to try the words that enable the stage: on, at rest until a
+        read says more, whether they land or are answered or not, and whether a read
+        follows or not. Only a read that shows the stage off clears it; one read on keeps
+        what it showed."""
         if self._on_rpm is None:
             self._on_rpm = MotorRpm(0)
             self._on_reference = MotorRpm(0)
 
     def referenced(self, rpm: MotorRpm) -> None:
-        """A reference this process wrote landed (LFRD read back): while the stage may be
-        on, the shaft heads for it before any read shows it. Never lowered by a smaller one
-        before the next read."""
+        """A reference this process is about to write, answered or not (one that lands
+        with its read-back lost leads there all the same): while the stage may be on, the
+        shaft heads for it before any read shows it. Never lowered by a smaller one before
+        the next read."""
         if self._on_rpm is not None:
             self._on_reference = MotorRpm(max(self._on_reference, abs(rpm)))
 

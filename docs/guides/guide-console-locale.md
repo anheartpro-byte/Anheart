@@ -2553,11 +2553,12 @@ ln(v), v étant cette vitesse plus une période de lecture de la rampe la plus r
 action le dit, `ECHEC: activation refusee (arbre peut-etre encore en roue libre (etage
 coupe, RFRD a 0): attendre encore N s)`, la page affiche le compte à rebours et grise les
 deux boutons. Avec la valeur par défaut, 40 s, depuis 3 tr/min au bras (149 tr/min
-moteur) : environ 231 s. Ce que l'outil écrit compte aussi, même quand ses lectures
-d'état échouent entre deux : après `1. Activer`, l'étage est en marche pour l'attente
-qu'une lecture l'ait vu ou non, et l'attente part de la plus grande de cette vitesse et
-de LFRD, lu à ces lectures ou écrit par le curseur entre elles (une consigne de 300
-écrite puis remise à 0 entre deux lectures perdues compte pour 300). Après un
+moteur) : environ 231 s. Ce que l'outil tente d'écrire compte aussi, répondu ou non,
+même quand ses lectures d'état échouent entre deux : dès que `1. Activer` est tenté,
+l'étage est en marche pour l'attente, confirmé ou non, qu'une lecture l'ait vu ou non,
+et l'attente part de la plus grande de cette vitesse et de LFRD, lu à ces lectures ou
+tenté par le curseur entre elles (une consigne de 300 dont la relecture se perd, puis
+remise à 0, entre deux lectures perdues, compte pour 300). Après un
 `2. Arrêt en rampe` confirmé, rien n'est attendu. `COAST_TAU_S` est lu dans l'environnement de l'outil, comme la
 console le lit ; une valeur que la console refuse (hors de [5, 300] s, ou qui n'est pas
 un nombre) fait refuser le démarrage de l'outil aussi, code 2, avec

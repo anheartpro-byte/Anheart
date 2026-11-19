@@ -2788,13 +2788,14 @@ class TrainingRuntime:
         """
         failure = await self._exchange_write_speed(now, MotorRpm(0))
         if failure is None:
+            # On for the coast-down hold before a word is tried: one may land unanswered.
+            self._coast_watch.driven()
             for word in (ControlWord.SHUTDOWN, ControlWord.SWITCH_ON, ControlWord.ENABLE_OPERATION):
                 failure = await self._exchange_command(word)
                 if failure is not None:
                     break
         if failure is None:
             self._enabled = True
-            self._coast_watch.driven()
             # _arm refused a faulted drive: no reset leads where this run command goes.
             self._disable_follows_fault = False
             return None
@@ -2814,7 +2815,6 @@ class TrainingRuntime:
         detail = f"the drive could not be armed: {failure.detail}"
         if failure.output_unknown:
             self._enabled = True
-            self._coast_watch.driven()
             self._latch(now, RULE_ENABLE_UNCONFIRMED, SafetyAction.QUICK_STOP, failure.detail)
             self._begin_ending(now, EndReason.EMERGENCY_STOP, self._latched)
         return DriveUnavailable(detail)
@@ -4742,11 +4742,12 @@ class TrainingRuntime:
         may still have landed, but the value that is *known* to be in force is
         the previous one, and the next keepalive re-asserts it.
         """
+        # Before the write is tried: one that lands with its answer lost still leads there.
+        self._coast_watch.referenced(rpm)
         outcome = await self._drive.write_speed(rpm)
         if isinstance(outcome, Err):
             return self._note_failure(Exchange.WRITE, outcome.error)
         self._note_success(Exchange.WRITE)
-        self._coast_watch.referenced(rpm)
         if rpm != self._applied_rpm:
             self._applied_rpm = rpm
             self._setpoint_changed_at = now

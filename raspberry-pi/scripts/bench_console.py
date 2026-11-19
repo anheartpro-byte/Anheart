@@ -522,11 +522,12 @@ class BusWorker(threading.Thread):
         failed = await self._zero_setpoint()
         if failed is not None:
             return f"ECHEC: LFRD=0 non confirme ({failed}); activation NON tentee"
+        # On for the coast-down hold before 6, 7, 15 are tried, whether a poll reads it or
+        # not: a 15 that lands with its check lost leaves the stage live (EnableUnconfirmed).
+        self._coast_watch.driven()
         enabled = await self._built.drive.enable()
         match enabled:
             case Ok():
-                # On from here for the coast-down hold, whether a poll reads it or not.
-                self._coast_watch.driven()
                 return "ok (LFRD=0 puis 6 -> 7 -> 15, chaque etape verifiee sur ETA)"
             case Err(error):
                 return f"ECHEC activation: {describe_error(error)}"
@@ -534,12 +535,13 @@ class BusWorker(threading.Thread):
 
     async def _do_speed(self, rpm: int) -> str:
         rpm = max(0, min(self.max_rpm, rpm))
+        # A bound of the hold before the write is tried: one that lands with its read-back
+        # lost still leads the shaft there, before any poll shows it.
+        self._coast_watch.referenced(MotorRpm(rpm))
         written = await self._built.drive.write_speed(MotorRpm(rpm))
         match written:
             case Ok():
                 self.snap.setpoint_rpm = rpm
-                # The shaft may head for it before any poll shows it: a bound of the hold.
-                self._coast_watch.referenced(MotorRpm(rpm))
                 return "ok (relu sur LFRD)"
             case Err(error):
                 return f"ECHEC consigne {rpm}: {describe_error(error)}"

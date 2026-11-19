@@ -525,6 +525,55 @@ async def test_a_stage_enabled_and_a_reference_written_since_the_last_read_bound
     await rig.panel.close()
 
 
+class AnswersLost(ReadsLost):
+    """A reference that lands with its answer lost, while ``lose_answer``: once."""
+
+    def __init__(self, inner: SimulatedDrive) -> None:
+        super().__init__(inner)
+        self.lose_answer: bool = False
+
+    @override
+    async def write_speed(self, rpm: MotorRpm) -> Result[None, DriveError]:
+        landed = await self.inner.write_speed(rpm)
+        if self.lose_answer and rpm != 0:
+            self.lose_answer = False
+            return Err(CommTimeout(after=Seconds(0.1)))
+        return landed
+
+
+async def test_a_reference_that_lands_with_its_answer_lost_bounds_the_hold(
+    tmp_path: Path,
+) -> None:
+    """LFRD 55 lands, its answer lost, the reads lost too; the target back to 0 and its
+    0 answered; the stage drops. The read that comes back shows RFRD 0 and LFRD 0: the
+    55 tried in between says where the shaft may have got to (review round 2)."""
+    rig, wrapper = make_rig(tmp_path, wrap=AnswersLost)
+    assert isinstance(wrapper, AnswersLost)
+    runtime = rig.panel.runtime
+    assert isinstance(runtime.confirm_estop_wiring(OPERATOR), Ok)
+    started = await runtime.start_manual(Occupancy.BENCH, OPERATOR, MotorRpm(276))
+    assert isinstance(started, Ok)
+    assert isinstance(runtime.set_manual_target(OutputRpm(3.0)), Ok)
+    await rig.tick(0.2)
+    wrapper.lost = True
+    wrapper.lose_answer = True
+    await rig.tick(0.2)
+    assert not wrapper.lose_answer, "the 55 was tried"
+    assert rig.simulator.commanded_setpoint == MIN_RUN, "and landed"
+    assert isinstance(runtime.set_manual_target(OutputRpm(0.0)), Ok)
+    await rig.tick(0.2)
+    assert rig.simulator.commanded_setpoint == 0
+    assert not runtime.silent
+    chain_of(rig).open(rig.clock.monotonic())
+    wrapper.lost = False
+    await rig.tick(0.2)
+    left = held(rig)
+    assert left is not None
+    from_reference = coast_hold(MIN_RUN, since_read=Seconds(0.0), tau=TAU, standstill=ONE)
+    assert left == pytest.approx(from_reference, abs=0.25)
+    await rig.panel.close()
+
+
 async def test_an_exit_with_the_stage_driven_since_the_last_read_leaves_the_longest_coast(
     tmp_path: Path,
 ) -> None:
