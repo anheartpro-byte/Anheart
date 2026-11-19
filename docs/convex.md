@@ -3992,7 +3992,8 @@ en service rouge est envoyée aussi : elle est une preuve.
   variateur, juste avant d'envoyer, et n'envoie qu'une fois, sans file
   d'attente ni nouvel essai (une route que son lien retient après un 429 est
   répondue aussitôt, rien n'est envoyé, ni alors ni plus tard), une requête
-  de 3 s au plus. L'âge est donc la latence de cette requête et l'erreur de
+  de quelques secondes (le délai de 3 s du lien borne chacune de ses phases,
+  pas le tout). L'âge est donc la latence de cette requête et l'erreur de
   l'horloge de la console, quelques secondes avec une horloge tenue ; dix
   minutes laissent de la marge à un lien lent et refusent un rapport gardé
   puis envoyé plus tard. Une console dont l'horloge retarde de plus de dix

@@ -104,7 +104,8 @@ export const CLOCK_SKEW_MS: number = SECTION.clock_skew_ms;
  * (`max_age_ms`). The console dates the end after its run and its drive read,
  * just before it sends, and sends once: no outbox, no retry (a route its link
  * holds after a 429 is answered at once, and nothing is sent, then or later),
- * a request of at most 3 s. So the age is that request's latency plus the
+ * one request of a few seconds (the link's 3 s timeout bounds each phase of
+ * it, not the whole). So the age is that request's latency plus the
  * console's clock error, a few seconds with a trusted clock. Ten minutes
  * leaves room for a slow link, and refuses a report kept and sent later; a
  * console whose clock is more than ten minutes behind the server's is
