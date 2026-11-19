@@ -497,7 +497,8 @@ def test_a_link_planted_in_a_record_refuses_its_close_and_a_fifo_is_not_listed(
     assert not (linked_writer.path / "checksums.sha256").exists()
     fifo_writer = writer(tmp_path / "fifo")
     os.mkfifo(fifo_writer.path / "planted")
-    assert isinstance(fifo_writer.close(ManualClock(), "operator_stop"), Ok)
+    closed = fifo_writer.close(ManualClock(), "operator_stop")
+    assert isinstance(closed, Ok)
     listed = (fifo_writer.path / "checksums.sha256").read_text(encoding="ascii")
     assert "planted" not in listed
 
