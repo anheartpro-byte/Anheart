@@ -1009,7 +1009,7 @@ Vérifié en cherchant `xfail(strict=True)` et `known_defect` dans le code :
   `ecg_dsp_corrupted` et `ecg_dsp_gaps`, ont été corrigés) ;
 * **aucun** xfail dans `raspberry-pi/tests/`. Le dernier, `IDLE_COAST_UNSEEN`
   (ANH-92, le cas `IDLE` de
-  `test_real_console_never_reactivates_after_close_without_acknowledgement`),
+  `test_real_console_never_reactivates_after_close_until_acknowledged_and_unheld`),
   a basculé avec l'attente de roue libre : une première lecture étage coupé
   avec LFRD non nul ouvre une attente depuis |LFRD| ([securite.md, section 2](securite.md#2-ce-que-le-logiciel-garantit)),
   et la marque a été retirée. Les commentaires « was a strict xfail » y

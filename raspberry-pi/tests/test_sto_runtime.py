@@ -551,13 +551,14 @@ async def wait_out_the_coast_hold(rig: FailureRig) -> None:
 @pytest.mark.parametrize(
     "phase", [RuntimeState.IDLE, RuntimeState.RUNNING, RuntimeState.ENDING, RuntimeState.FINISHED]
 )
-async def test_real_console_never_reactivates_after_close_without_acknowledgement(
+async def test_real_console_never_reactivates_after_close_until_acknowledged_and_unheld(
     tmp_path: Path, phase: RuntimeState, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """At rest, a drive another master ran, its stage dropped by the STO before the
-    console's first read, reads RFRD 0: nothing is latched, and the coast-down hold from
-    ``|LFRD|`` refuses the start until it runs out (ANH-92). This was the strict xfail
-    ``IDLE_COAST_UNSEEN`` until that hold."""
+    """After the STO closes, no start until the verdict is acknowledged and the coast-down
+    hold is over. At rest (IDLE), a drive another master ran, its stage dropped by the STO
+    before the console's first read, reads RFRD 0: nothing is latched, and the hold from
+    ``|LFRD|`` alone refuses the start until it runs out (ANH-92). That case was the strict
+    xfail ``IDLE_COAST_UNSEEN`` until that hold."""
     rig, _ = make_rig(tmp_path)
     async with rig.http() as client:
         if phase is RuntimeState.IDLE:

@@ -21,6 +21,7 @@ import pytest
 
 from src import kept_coast_hold
 from src.clock import ManualClock
+from src.cloud_sync import BenchLaunch
 from src.kept_coast_hold import COAST_HOLD_FILE, HoldKeeper, kept_hold, stored_hold
 from src.local_config import coast_tau
 from src.local_panel import describe_reset_refusal, describe_start_refusal
@@ -35,14 +36,16 @@ from src.motor.coast import (
     longest_hold,
 )
 from src.motor.drive import CommTimeout, DriveError, DriveFault, DriveState, DriveStatus
+from src.motor.simulated import SimState, SimulatedDrive
 from src.motor.sto import SimulatedStoChain
 from src.result import Err, Ok, Result
 from src.training.runtime import CoastDownHeld, CoastDownHold, RuntimeLimits, RuntimeState
-from src.training.types import Occupancy, Phase
+from src.training.types import Ballast, Occupancy, Phase
 from src.units import (
     Amperes,
     Monotonic,
     MotorRpm,
+    OutputRpm,
     RpmPerSecond,
     Seconds,
     StatusWord,
@@ -67,6 +70,7 @@ TICK: Final[Seconds] = Seconds(0.2)
 IDLE_POLL: Final[Seconds] = Seconds(0.5)
 START_MS: Final[int] = 1_700_000_000_000
 HOUR_MS: Final[int] = 3_600_000
+MIN_RUN: Final[MotorRpm] = MotorRpm(55)
 
 
 def status(state: DriveState, rpm: int, lfrd: int = 0, *, word: int = 0x0637) -> DriveStatus:
@@ -201,9 +205,9 @@ def held(rig: Rig) -> Seconds | None:
     return rig.panel.runtime.snapshot().coast_hold
 
 
-def stage_on(rig: Rig) -> bool:
+def may_coast(rig: Rig) -> bool:
     """Read afresh, as :func:`held`."""
-    return rig.panel.runtime.coast_stage_on
+    return rig.panel.runtime.coast_possible
 
 
 def state_of(rig: Rig) -> RuntimeState:
@@ -462,7 +466,7 @@ async def test_a_restart_after_a_session_ended_at_rest_holds_nothing(tmp_path: P
         await rig.tick(1.0)
     assert state_of(rig) is RuntimeState.FINISHED
     assert held(rig) is None
-    assert not stage_on(rig)
+    assert not may_coast(rig)
     await rig.panel.close()
     assert not (tmp_path / COAST_HOLD_FILE).exists()
     again = restarted(tmp_path, UnixMillis(rig.clock.unix_millis() + 30_000), TRUSTED)
@@ -473,31 +477,85 @@ async def test_a_restart_after_a_session_ended_at_rest_holds_nothing(tmp_path: P
     await again.panel.close()
 
 
-class CloseUnanswered(Wrapped):
-    """The exit's own stop gets no answer: the stage it enabled is not known off."""
+class ReadsLost(Wrapped):
+    """Status reads that get no answer while ``lost``; the writes still land (ANH-92, M1)."""
+
+    def __init__(self, inner: SimulatedDrive) -> None:
+        super().__init__(inner)
+        self.lost: bool = False
 
     @override
-    async def close(self) -> Result[None, DriveError]:
-        return Err(CommTimeout(after=Seconds(0.1)))
+    async def read_status(self) -> Result[DriveStatus, DriveError]:
+        if self.lost:
+            return Err(CommTimeout(after=Seconds(0.1)))
+        return await self.inner.read_status()
 
 
-async def test_a_stage_enabled_since_the_last_read_and_never_known_off_leaves_the_longest_coast(
-    tmp_path: Path,
-) -> None:
-    """The last read, the arming's, showed the stage off; then this console enabled it,
-    and its exit could not confirm a stop. Only its own belief says the stage may be on."""
-    rig, _ = make_rig(tmp_path, wrap=CloseUnanswered)
+async def driven_unread(tmp_path: Path) -> tuple[Rig, ReadsLost]:
+    """Armed (its read showed the stage off), then two ticks whose reads are lost while the
+    setpoint's writes land: the stage driven towards 55 motor rpm, no read since."""
+    rig, wrapper = make_rig(tmp_path, wrap=ReadsLost)
+    assert isinstance(wrapper, ReadsLost)
     runtime = rig.panel.runtime
     assert isinstance(runtime.confirm_estop_wiring(OPERATOR), Ok)
-    assert not stage_on(rig)
     started = await runtime.start_manual(Occupancy.BENCH, OPERATOR, MotorRpm(276))
     assert isinstance(started, Ok)
-    assert stage_on(rig), "enabled by this console since its last read"
+    assert isinstance(runtime.set_manual_target(OutputRpm(3.0)), Ok)
+    wrapper.lost = True
+    await rig.tick(0.4)
+    assert not runtime.silent
+    assert rig.simulator.commanded_setpoint == MIN_RUN
+    return rig, wrapper
+
+
+async def test_a_stage_enabled_and_a_reference_written_since_the_last_read_bound_the_hold(
+    tmp_path: Path,
+) -> None:
+    """The reads that would have shown the stage on and the shaft heading for LFRD 55 were
+    lost; the read that comes back shows the stage dropped, RFRD 0. What this console did
+    itself, the enable and each LFRD that landed, says where the shaft may have got to."""
+    rig, wrapper = await driven_unread(tmp_path)
+    chain_of(rig).open(rig.clock.monotonic())
+    wrapper.lost = False
+    await rig.tick(0.2)
+    left = held(rig)
+    assert left is not None
+    from_reference = coast_hold(MIN_RUN, since_read=Seconds(0.0), tau=TAU, standstill=ONE)
+    assert left == pytest.approx(from_reference, abs=0.25)
+    await rig.panel.close()
+
+
+async def test_an_exit_with_the_stage_driven_since_the_last_read_leaves_the_longest_coast(
+    tmp_path: Path,
+) -> None:
+    rig, _ = await driven_unread(tmp_path)
+    assert may_coast(rig), "enabled and driven towards 55 by this console, never read since"
     await rig.panel.close()
     kept = kept_hold(
         tmp_path / COAST_HOLD_FILE, now=rig.clock.unix_millis(), trusted=True, cap=longest_hold(ONE)
     )
     assert kept == pytest.approx(hold_cap(TAU, ONE), abs=0.01)
+
+
+async def test_an_exit_with_the_stage_on_at_rest_towards_nothing_leaves_nothing(
+    tmp_path: Path,
+) -> None:
+    """The install scenario's session: manual, target 0, the stage on, read at rest with
+    LFRD 0. The drive holds the shaft at 0 Hz: the stage dropping at the exit leaves no
+    coast, and the next start waits for none."""
+    rig, _ = make_rig(tmp_path, wall_clock=TRUSTED)
+    async with rig.http() as session:
+        await start_manual(rig, session, 0.0)
+    await rig.tick(1.0)
+    assert state_of(rig) is RuntimeState.RUNNING
+    assert rig.simulator.sim_state is SimState.OPERATION_ENABLED
+    assert not may_coast(rig)
+    await rig.panel.close()
+    assert not (tmp_path / COAST_HOLD_FILE).exists()
+    again = restarted(tmp_path, rig.clock.unix_millis(), TRUSTED)
+    await again.tick(0.2)
+    assert held(again) is None
+    await again.panel.close()
 
 
 async def test_a_hold_the_exit_cannot_keep_makes_the_stop_an_unclean_one(
@@ -543,6 +601,41 @@ def test_an_expected_hold_starts_at_the_next_read_that_shows_the_stage_off() -> 
     assert driven.stage_on
     assert expected_of(driven) is None
     assert driven.note(status(DriveState.READY, 0), TICK) is None
+
+
+def coasting(watch: CoastWatch) -> bool:
+    """Read afresh, as :func:`expected_of`."""
+    return watch.may_coast
+
+
+def test_what_this_process_wrote_bounds_the_hold_and_the_exit() -> None:
+    """The enable and each LFRD that landed count, read or not (review M1); a stage read off
+    learns nothing from a reference written to it."""
+    watch = CoastWatch(tau=TAU, standstill=ONE)
+    watch.referenced(MotorRpm(500))
+    assert not coasting(watch), "the stage is off: a reference moves nothing"
+    assert watch.kept_after_exit(confirmed=True, left=None) is None
+    watch.driven()
+    assert watch.stage_on
+    assert not coasting(watch), "on at rest, LFRD 0: held at 0 Hz"
+    watch.referenced(MotorRpm(-300))
+    watch.referenced(MotorRpm(100))
+    assert coasting(watch)
+    cap = hold_cap(TAU, ONE)
+    assert watch.kept_after_exit(confirmed=True, left=Seconds(10.0)) == cap
+    started = watch.note(status(DriveState.FAULT, 0, 0), TICK)
+    assert started == CoastStart(
+        Seconds(40.0 * math.log(300)), "the output stage dropped at 0 motor rpm, LFRD 300"
+    )
+    assert watch.kept_after_exit(confirmed=True, left=Seconds(10.0)) == 10.0
+    assert watch.kept_after_exit(confirmed=False, left=Seconds(10.0)) == cap
+    # A stage read on keeps what the read showed: an enable after it lowers nothing.
+    read = CoastWatch(tau=TAU, standstill=ONE)
+    assert read.note(status(DriveState.OPERATION_ENABLED, 300, 300), TICK) is None
+    read.driven()
+    dropped = read.note(status(DriveState.FAULT, 0, 0), TICK)
+    assert dropped is not None
+    assert dropped.hold == coast_hold(MotorRpm(300), since_read=TICK, tau=TAU, standstill=ONE)
 
 
 def test_a_reference_written_in_one_jump_bounds_the_hold_whatever_the_last_speed_read() -> None:
@@ -591,6 +684,48 @@ async def test_the_hold_file_goes_once_the_hold_is_over_and_a_bad_one_is_the_lon
     target.write_text('{"until_unix_ms": 1, "remaining_s": 1.0}', encoding="utf-8")
     kept.symlink_to(target)
     assert kept_hold(kept, now=now, trusted=False, cap=cap) == cap
+
+
+async def test_a_launch_from_the_dashboard_is_refused_with_the_hold_before_it_is_confirmed(
+    tmp_path: Path,
+) -> None:
+    """Not confirmed to the dashboard, then refused at the arming: refused before, in the
+    words the arming would have used."""
+    rig, _ = make_rig(tmp_path)
+    rig.panel.runtime.hold_coast(rig.clock.monotonic(), Seconds(100.0), "a drop")
+    launch = BenchLaunch(
+        session_id="remote-bench", operator="Dr Manager", ballast=Ballast(None), notes=None
+    )
+    refused = rig.panel.preflight_remote_start(launch)
+    assert refused == Err(describe_start_refusal(CoastDownHold(Seconds(100.0))))
+    await rig.panel.close()
+
+
+async def test_the_ending_is_given_the_hold_only_once_its_reference_is_zero(
+    tmp_path: Path,
+) -> None:
+    """``session_overrun`` gives the ending the hold (COOLDOWN lasts it), but not a descent
+    still above zero: that one is late on its own account, whatever may coast."""
+    rig, _ = make_rig(tmp_path)
+    async with rig.http() as session:
+        await at_speed(rig, session)
+    runtime = rig.panel.runtime
+    runtime.request_stop("operator: stop button")
+    await rig.tick(0.2)
+    assert runtime.applied_rpm != 0
+    runtime.hold_coast(rig.clock.monotonic(), Seconds(1000.0), "a drop")
+    ending = runtime._ending_in_progress()  # pyright: ignore[reportPrivateUsage]
+    assert ending is not None
+    assert ending.descent < 100.0
+    for _ in range(600):
+        if runtime.applied_rpm == 0:
+            break
+        await rig.tick(0.2)
+    assert runtime.applied_rpm == 0
+    ending = runtime._ending_in_progress()  # pyright: ignore[reportPrivateUsage]
+    assert ending is not None
+    assert ending.descent > 900.0
+    await rig.panel.close()
 
 
 async def test_a_hold_is_never_shortened_by_a_shorter_one(tmp_path: Path) -> None:

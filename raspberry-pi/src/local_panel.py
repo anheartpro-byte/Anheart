@@ -1922,6 +1922,10 @@ class LocalPanel:
 
     def preflight_remote_start(self, launch: Launch) -> Result[None, str]:
         """Run the panel's start gates without submitting a command or arming."""
+        # The coast-down hold refuses the arming (ANH-92): never confirm a launch it would.
+        held = self._runtime.coast_hold_remaining(self._clock.monotonic())
+        if held is not None:
+            return Err(self._start_refused(CoastDownHold(held)))
         match launch:
             case AutoLaunch():
                 return self._preflight_programme(launch)
@@ -2447,7 +2451,7 @@ class LocalPanel:
             detail = report.detail
         # ANH-92: a stage that may still be on, or that dropped unseen during this exit's
         # own stop (RFRD reads 0 either way), leaves the next start the longest coast.
-        if self._runtime.coast_stage_on:
+        if self._runtime.coast_possible:
             self._runtime.expect_coast("the console exited with the output stage maybe on")
         self._coast_keeper.keep(self._runtime, self._clock, self._clock.monotonic())
         recorder = self._recorder

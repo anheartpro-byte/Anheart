@@ -1444,9 +1444,9 @@ class _StillStopping:
     def shutdown(self) -> None:
         """Asked to stop: it does not."""
 
-    def coast_after_exit(self, _confirmed: bool) -> Seconds | None:
+    def leave_coast_mark(self, _confirmed: bool) -> str:
         """Nothing to keep: what is kept is another test's business."""
-        return None
+        return ""
 
     def join(self, timeout: float | None = None) -> None:
         """Waited for: it does not come."""

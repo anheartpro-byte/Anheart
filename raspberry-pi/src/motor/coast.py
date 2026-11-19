@@ -82,12 +82,13 @@ class CoastWatch:
     fault reaction that ramps): RFRD is the output frequency. A read with the stage off
     after one that showed it on starts a hold from the faster of two bounds: the speed
     that read showed, at ``standstill`` or above, plus one read period of the fastest
-    ramp; and ``|LFRD|`` read with either, which the ramp never takes the shaft past
-    however long the link was down between the two (a reference written in one jump, as
-    the bench's slider does). The first read there ever is, off with LFRD not zero
-    (another master, a process that died), holds from ``|LFRD|``: nothing says how fast
-    the shaft was. A hold :meth:`expect` asked for starts at the next read that shows
-    the stage off.
+    ramp; and the largest ``|LFRD|`` read with either or written by this process in
+    between (:meth:`referenced`), which the ramp never takes the shaft past however long
+    the reads failed between the two (a reference written in one jump, as the bench's
+    slider does). A stage this process enabled (:meth:`driven`) is on at rest from then,
+    read or not. The first read there ever is, off with LFRD not zero (another master, a
+    process that died), holds from ``|LFRD|``: nothing says how fast the shaft was. A
+    hold :meth:`expect` asked for starts at the next read that shows the stage off.
     """
 
     __slots__ = ("_expected", "_on_reference", "_on_rpm", "_read_once", "_standstill", "_tau")
@@ -106,9 +107,47 @@ class CoastWatch:
         return self._on_rpm is not None
 
     @property
+    def may_coast(self) -> bool:
+        """Whether the stage dropping now would leave a coast: on since the last read, at a
+        speed or towards a reference above standstill. A stage on at rest with LFRD 0 would
+        not: the drive holds it at 0 Hz, and nothing else turns it."""
+        last = self._on_rpm
+        # The two bounds of _seen: a speed read at standstill or above, a reference above it.
+        return last is not None and (
+            last >= self._standstill or self._on_reference > self._standstill
+        )
+
+    @property
     def expected(self) -> Seconds | None:
         """The hold :meth:`expect` asked for that no read has started yet; ``None``: none."""
         return None if self._expected is None else self._expected.hold
+
+    def driven(self) -> None:
+        """This process enabled the stage (its words, checked on ETA by the driver): on, at
+        rest until a read says more, whether a read follows or not. One read on keeps what
+        it showed."""
+        if self._on_rpm is None:
+            self._on_rpm = MotorRpm(0)
+            self._on_reference = MotorRpm(0)
+
+    def referenced(self, rpm: MotorRpm) -> None:
+        """A reference this process wrote landed (LFRD read back): while the stage may be
+        on, the shaft heads for it before any read shows it. Never lowered by a smaller one
+        before the next read."""
+        if self._on_rpm is not None:
+            self._on_reference = MotorRpm(max(self._on_reference, abs(rpm)))
+
+    def kept_after_exit(self, *, confirmed: bool, left: Seconds | None) -> Seconds | None:
+        """What the next start must hold from its first read, once nothing reads any more.
+
+        ``left``: the hold still running. A stop at the exit that was not ``confirmed``,
+        a stage that :attr:`may_coast`, or a hold no read started yet leave the longest
+        coast, from the nameplate: nothing after this says what the stage did.
+        """
+        if confirmed and not self.may_coast and self._expected is None:
+            return left
+        parts = (hold_cap(self._tau, self._standstill), left, self.expected)
+        return max(part for part in parts if part is not None)
 
     def expect(self, hold: Seconds, why: str) -> None:
         """A drop no read here saw may have left a coast: the next read starts ``hold`` if it

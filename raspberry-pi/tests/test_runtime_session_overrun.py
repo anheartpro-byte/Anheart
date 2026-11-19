@@ -102,10 +102,10 @@ TOTAL: Final[float] = 130.0
 COOLDOWN to 70, RECOVERY to 130."""
 
 DEADLINE: Final[float] = TOTAL + 30.0
+"""Past this the rule fires on ``develop``, session or no session."""
 
 LONGEST_ENDING: Final[float] = 1000.0
 """Far past any ending's coast-down hold (289 s at most) and recovery: a loop bound."""
-"""Past this the rule fires on ``develop``, session or no session."""
 
 SHORT_LIMIT: Final[Seconds] = Seconds(100.0)
 """The manual session limit these tests run under (3600 s on the machine)."""

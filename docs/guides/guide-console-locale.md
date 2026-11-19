@@ -2526,7 +2526,7 @@ la console d'abord (voir §3.4 et §14).
 | case `moteur désaccouplé` puis `Armer` | rien : il arme l'outil, sans quoi `Activer` et une consigne sont refusés (409 `console non armee`) |
 | curseur de vitesse puis `Envoyer` | LFRD à la vitesse demandée, bornée à `--max-rpm`, relue sur LFRD ; ensuite, armé et activé, la même consigne à chaque lecture (maintien du ttO) |
 | `1. Activer (LFRD=0, 6→7→15)` | LFRD=0 relu d'abord, puis CMD=6, 7, 15, chaque pas vérifié sur ETA ; rien de plus si LFRD=0 n'est pas confirmé. Rien du tout sur un variateur déjà activé, un arbre que RFRD ne lit pas à 0, ou sans état lu à cet instant (`enable: ECHEC: activation refusee (...)`) : le 6 couperait l'étage de puissance d'un variateur en marche, et le 7 et le 15 remettraient sous tension un arbre qui tourne. La page grise le bouton tant que le variateur se dit activé ou que l'arbre tourne |
-| `2. Arrêt en rampe` | LFRD=0 et CMD=7 (rampe dEC), puis CMD=6 seulement une fois l'arbre lu à l'arrêt (RFRD=0) ; sinon jamais CMD=6, et l'échec est dit |
+| `2. Arrêt en rampe` | LFRD=0 (rampe dEC sous couple), l'état relu jusqu'à l'arbre lu à l'arrêt étage en marche (RFRD=0), puis CMD=7 et CMD=6 ; sinon jamais CMD=6, et l'échec est dit, un étage coupé pendant l'arrêt compris. Un arrêt confirmé ainsi ne laisse aucune attente de roue libre |
 | `ARRÊT D'URGENCE` | désarme tout de suite, puis LFRD=0 et CMD=7 (rampe dEC) ; jamais CMD=6 |
 | `Acquitter défaut` | CMD=128 puis CMD=6, et seulement sur un variateur en défaut, arbre lu à l'arrêt (RFRD=0), défaut nommé que la console peut acquitter, hors de l'attente de roue libre |
 
@@ -2553,9 +2553,12 @@ ln(v), v étant cette vitesse plus une période de lecture de la rampe la plus r
 action le dit, `ECHEC: activation refusee (arbre peut-etre encore en roue libre (etage
 coupe, RFRD a 0): attendre encore N s)`, la page affiche le compte à rebours et grise les
 deux boutons. Avec la valeur par défaut, 40 s, depuis 3 tr/min au bras (149 tr/min
-moteur) : environ 231 s. Une consigne écrite d'un coup par le curseur compte aussi :
-l'attente part de la plus grande de cette vitesse et de LFRD, lu à la même lecture ou à
-celle de la coupure. `COAST_TAU_S` est lu dans l'environnement de l'outil, comme la
+moteur) : environ 231 s. Ce que l'outil écrit compte aussi, même quand ses lectures
+d'état échouent entre deux : après `1. Activer`, l'étage est en marche pour l'attente
+qu'une lecture l'ait vu ou non, et l'attente part de la plus grande de cette vitesse et
+de LFRD, lu à ces lectures ou écrit par le curseur entre elles (une consigne de 300
+écrite puis remise à 0 entre deux lectures perdues compte pour 300). Après un
+`2. Arrêt en rampe` confirmé, rien n'est attendu. `COAST_TAU_S` est lu dans l'environnement de l'outil, comme la
 console le lit ; une valeur que la console refuse (hors de [5, 300] s, ou qui n'est pas
 un nombre) fait refuser le démarrage de l'outil aussi, code 2, avec
 `configuration refusee: COAST_TAU_S: ...`. Une sortie dont l'arrêt n'est pas confirmé

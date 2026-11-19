@@ -1894,10 +1894,12 @@ class TrainingRuntime:
         return self._coast_watch.expected
 
     @property
-    def coast_stage_on(self) -> bool:
-        """Whether the output stage may be on: the last read showed it, or this runtime
-        believes it live. A console leaving now may leave a coast no read sees."""
-        return self._coast_watch.stage_on or self._enabled
+    def coast_possible(self) -> bool:
+        """Whether the stage dropping now would leave a coast (:attr:`CoastWatch.may_coast`):
+        on since the last read, or enabled by this runtime since, at a speed or towards a
+        reference it wrote above standstill. A console leaving now may leave a coast no read
+        sees: its stop at the exit reads nothing of the stage."""
+        return self._coast_watch.may_coast
 
     def _note_stage(self, now: Monotonic, status: DriveStatus, period: Seconds) -> None:
         """Every read: start the coast-down hold when it shows the stage dropped (ANH-92)."""
@@ -2683,6 +2685,7 @@ class TrainingRuntime:
             return await self._energise(now)
         except CancelledError:
             self._enabled = True
+            self._coast_watch.driven()
             await complete_owned(create_task(self.shutdown("arming cancelled")))
             raise
 
@@ -2791,6 +2794,7 @@ class TrainingRuntime:
                     break
         if failure is None:
             self._enabled = True
+            self._coast_watch.driven()
             # _arm refused a faulted drive: no reset leads where this run command goes.
             self._disable_follows_fault = False
             return None
@@ -2810,6 +2814,7 @@ class TrainingRuntime:
         detail = f"the drive could not be armed: {failure.detail}"
         if failure.output_unknown:
             self._enabled = True
+            self._coast_watch.driven()
             self._latch(now, RULE_ENABLE_UNCONFIRMED, SafetyAction.QUICK_STOP, failure.detail)
             self._begin_ending(now, EndReason.EMERGENCY_STOP, self._latched)
         return DriveUnavailable(detail)
@@ -3569,9 +3574,12 @@ class TrainingRuntime:
             descent = self._expected_descent(ending.setpoint)
             self._ending_descent = descent
         # COOLDOWN lasts the coast-down hold (_ending_phase): the ending is given it, as
-        # long as the shaft may still coast, and never more than the hold's cap.
+        # long as the shaft may still coast, and never more than the hold's cap; once the
+        # reference is zero only, so a descent left above it is not excused by the hold.
         until = self._coast_until
-        coasting = Seconds(0.0) if until is None else elapsed(ending.at, until)
+        coasting = (
+            Seconds(0.0) if until is None or self._applied_rpm != 0 else elapsed(ending.at, until)
+        )
         return EndingInProgress(
             opened=self._session_elapsed(ending.at),
             descent=Seconds(max(descent, coasting)),
@@ -4738,6 +4746,7 @@ class TrainingRuntime:
         if isinstance(outcome, Err):
             return self._note_failure(Exchange.WRITE, outcome.error)
         self._note_success(Exchange.WRITE)
+        self._coast_watch.referenced(rpm)
         if rpm != self._applied_rpm:
             self._applied_rpm = rpm
             self._setpoint_changed_at = now

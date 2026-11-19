@@ -13,6 +13,7 @@ from simulation.replay_config import AppliedRuntime, load_configuration, sidecar
 from simulation.tests.replay_support import edit_lines, record, short
 from src.geometry import MachineGeometry
 from src.local_config import load_local_config
+from src.motor.coast import DEFAULT_COAST_TAU
 from src.record.codec import JSON, mapping
 from src.record.configuration import MAX_CONFIG_BYTES
 from src.record.rows import JsonValue
@@ -106,6 +107,21 @@ def test_a_console_document_older_than_its_sto_source_still_loads(tmp_path: Path
     removed = document.pop("sto_source")
     assert removed == "sim_ready"
     assert isinstance(_load(tmp_path, document), Ok)
+
+
+def test_a_console_document_older_than_its_coast_tau_still_loads_at_40_s(tmp_path: Path) -> None:
+    """The runtime section before the coast-down hold (ANH-92) has no ``coast_tau``: the
+    replay reads it with the default, 40 s."""
+    document = _document()
+    text = document["runtime"]
+    assert isinstance(text, str)
+    runtime = dict(mapping(JSON.validate_json(text)))
+    removed = runtime.pop("coast_tau")
+    assert removed == DEFAULT_COAST_TAU
+    document["runtime"] = json.dumps(runtime)
+    found = _load(tmp_path, document)
+    assert isinstance(found, Ok), found
+    assert found.value.runtime.coast_tau == DEFAULT_COAST_TAU
 
 
 @pytest.mark.parametrize("document", [None, {}, [], {"unknown": 1}])

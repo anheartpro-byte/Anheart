@@ -192,7 +192,7 @@ from src.console_access import replace_file
 from src.geometry import CONFIRMED_GEAR_RATIO, MachineGeometry
 from src.kept_coast_hold import kept_hold, stored_hold
 from src.local_config import DriveLink, coast_tau
-from src.motor.coast import DEFAULT_COAST_TAU, CoastWatch, hold_cap, longest_hold
+from src.motor.coast import DEFAULT_COAST_TAU, CoastWatch, longest_hold
 from src.motor.drive import (
     BadResponse,
     CommTimeout,
@@ -204,7 +204,6 @@ from src.motor.drive import (
     EnableUnconfirmed,
     StopUnconfirmed,
     UnexpectedState,
-    decode_speed,
     describe_fault,
 )
 from src.result import Err, Ok, Result
@@ -526,6 +525,8 @@ class BusWorker(threading.Thread):
         enabled = await self._built.drive.enable()
         match enabled:
             case Ok():
+                # On from here for the coast-down hold, whether a poll reads it or not.
+                self._coast_watch.driven()
                 return "ok (LFRD=0 puis 6 -> 7 -> 15, chaque etape verifiee sur ETA)"
             case Err(error):
                 return f"ECHEC activation: {describe_error(error)}"
@@ -537,40 +538,54 @@ class BusWorker(threading.Thread):
         match written:
             case Ok():
                 self.snap.setpoint_rpm = rpm
+                # The shaft may head for it before any poll shows it: a bound of the hold.
+                self._coast_watch.referenced(MotorRpm(rpm))
                 return "ok (relu sur LFRD)"
             case Err(error):
                 return f"ECHEC consigne {rpm}: {describe_error(error)}"
         raise assert_never(written)
 
-    async def _await_standstill(self) -> tuple[bool, str]:
-        """Poll RFRD until it READS 0. (confirmed, what was last seen)."""
-        drive = self._built.drive
-        rfrd = self.link.registers.rfrd
+    async def _await_standstill(self, driven: bool) -> tuple[bool, str]:
+        """Read the status until RFRD reads 0. (confirmed, what was last seen).
+
+        Every read goes through the coast-down hold (ANH-92). On a stage that was
+        ``driven`` when the stop began, a read that shows it dropped starts the hold and
+        is no standstill, RFRD reading 0 on a coasting shaft too; one at RFRD 0 with the
+        stage still on ends the stop with nothing to hold.
+        """
         started = self._clock.monotonic()
         last = "RFRD jamais lu"
         while elapsed(started, self._clock.monotonic()) < STOP_WAIT_S:
-            match await drive.read_register(rfrd):
-                case Ok(raw):
-                    rpm = decode_speed(raw)
-                    if rpm == 0:
+            match await self._built.drive.read_status():
+                case Ok(status):
+                    self._note_coast(status)
+                    if driven and not self._coast_watch.stage_on:
+                        return False, f"etage coupe ({status.state.name}), RFRD ne dit plus rien"
+                    if status.output_rpm == 0:
                         return True, "RFRD=0"
-                    last = f"RFRD={rpm} tr/min"
+                    last = f"RFRD={status.output_rpm} tr/min"
                 case Err(error):
                     last = f"RFRD illisible ({describe_error(error)})"
             await asyncio.sleep(STOP_POLL_S)
         return False, last
 
     async def _do_stop(self) -> str:
-        """Zero the reference, remove the run command, and ONLY on a read RFRD = 0, write 6.
+        """Zero the reference, read the shaft to rest, remove the run command, then write 6.
 
-        SWITCH_ON (7) out of OPERATION_ENABLED is CiA402 transition 5, which on
-        this drive ramps on dEC. SHUTDOWN (6) out of OPERATION_ENABLED is
-        transition 8 and freewheels - so it is written only once the shaft has
-        been MEASURED stopped, never on a timer.
+        With LFRD 0 the drive ramps on dEC under torque; the status is read until RFRD
+        reads 0 with the stage still on (ANH-92: a stop that ends so leaves nothing to
+        hold), and only then SWITCH_ON (7), CiA402 transition 5, at standstill. SHUTDOWN
+        (6) out of OPERATION_ENABLED is transition 8 and freewheels - so it is written
+        only once the shaft has been MEASURED stopped, never on a timer.
         """
+        driven = self._coast_watch.stage_on
         zero_failed = await self._zero_setpoint()
-        run_failed = await self._command(ControlWord.SWITCH_ON)
-        confirmed, last = await self._await_standstill()
+        # LFRD 0 landed: the dEC ramp under torque, read to rest with the stage on, then 7
+        # at standstill (ANH-92: nothing to hold). Not landed: 7 now, transition 5's ramp.
+        run_failed = None if zero_failed is None else await self._command(ControlWord.SWITCH_ON)
+        confirmed, last = await self._await_standstill(driven)
+        if zero_failed is None:
+            run_failed = await self._command(ControlWord.SWITCH_ON)
         if not confirmed:
             return (
                 f"ECHEC: arret NON confirme apres {STOP_WAIT_S:.0f} s ({last}). CMD=6 NON "
@@ -783,32 +798,36 @@ class BusWorker(threading.Thread):
     async def _cycle(self) -> None:
         while not self._stop_requested.is_set():
             started: Monotonic = self._clock.monotonic()
-            # A command still queued when the stop is asked for is never run (ANH-218).
-            while not self._stop_requested.is_set():
-                try:
-                    cmd = self._commands.get_nowait()
-                except queue.Empty:
-                    break
-                # Again once taken: a command put after the flag, whatever the interleaving
-                # with the check above or with submit's own, never runs.
-                if self._stop_requested.is_set():
-                    break
-                await self._execute(cmd)
-            await self._recover_if_latched()
-            if not self._built.drive.link_lost:
-                if not self.snap.armed:
-                    # At rest only: an open that failed is tried again, and HSP, read
-                    # only, while it is unknown; either clears the reason once done.
-                    if not self._opened:
-                        await self._connect()
-                    elif self.snap.hsp_hz is None and not self._hsp_final:
-                        await self._read_hsp()
-                await self._poll()
-            self.snap.cycles += 1
-            self.snap.coast_hold_s = self._coast_left()
-            self.snap.updated_at = self._clock.monotonic()
+            await self.cycle_once()
             spent = elapsed(started, self._clock.monotonic())
             await asyncio.sleep(max(0.05, CYCLE_S - spent))
+
+    async def cycle_once(self) -> None:
+        """One pass of the bus thread: the queued commands, then a poll. Its thread only."""
+        # A command still queued when the stop is asked for is never run (ANH-218).
+        while not self._stop_requested.is_set():
+            try:
+                cmd = self._commands.get_nowait()
+            except queue.Empty:
+                break
+            # Again once taken: a command put after the flag, whatever the interleaving
+            # with the check above or with submit's own, never runs.
+            if self._stop_requested.is_set():
+                break
+            await self._execute(cmd)
+        await self._recover_if_latched()
+        if not self._built.drive.link_lost:
+            if not self.snap.armed:
+                # At rest only: an open that failed is tried again, and HSP, read
+                # only, while it is unknown; either clears the reason once done.
+                if not self._opened:
+                    await self._connect()
+                elif self.snap.hsp_hz is None and not self._hsp_final:
+                    await self._read_hsp()
+            await self._poll()
+        self.snap.cycles += 1
+        self.snap.coast_hold_s = self._coast_left()
+        self.snap.updated_at = self._clock.monotonic()
 
     async def _stop_and_release(self) -> None:
         """The driver's own stop, then the port. What it achieved is ``exit_report``.
@@ -841,7 +860,10 @@ class BusWorker(threading.Thread):
         """What the exit before this start left at ``mark`` (:data:`COAST_MARK`), held from
         the first read that shows the stage off. Before the bus thread starts."""
         left = kept_hold(
-            mark, now=RealClock().unix_millis(), trusted=False, cap=longest_hold(STANDSTILL_RPM)
+            mark,
+            now=self._clock.unix_millis(),
+            trusted=False,
+            cap=longest_hold(STANDSTILL_RPM),
         )
         if left is not None:
             self._coast_watch.expect(left, "kept from the exit before this start")
@@ -849,18 +871,17 @@ class BusWorker(threading.Thread):
     def coast_after_exit(self, confirmed: bool) -> Seconds | None:
         """What the next start must hold from its first read; ``None``: nothing (ANH-92).
 
-        Read once the bus thread is over or given up on. The driver's stop reads RFRD
-        only, which reads 0 on a stage dropped during it: a stage on at the last read, a
-        stop not ``confirmed`` or a hold not started yet leave the longest coast.
+        Read once the bus thread is over or given up on (``CoastWatch.kept_after_exit``):
+        the driver's stop reads RFRD only, which reads 0 on a stage dropped during it.
         """
-        left = self._coast_left()
-        if confirmed and not self._coast_watch.stage_on and self._coast_watch.expected is None:
-            return left
-        parts = (hold_cap(COAST_TAU, STANDSTILL_RPM), left, self._coast_watch.expected)
-        return max(part for part in parts if part is not None)
+        return self._coast_watch.kept_after_exit(confirmed=confirmed, left=self._coast_left())
+
+    def leave_coast_mark(self, confirmed: bool) -> str:
+        """:func:`_leave_coast_mark` for this worker's exit, on its clock."""
+        return _leave_coast_mark(self.coast_after_exit(confirmed), self._clock)
 
 
-def _leave_coast_mark(hold: Seconds | None) -> str:
+def _leave_coast_mark(hold: Seconds | None, clock: Clock) -> str:
     """Write :data:`COAST_MARK`, or remove it with nothing to hold; what to add to the last line.
 
     Blocking, at the exit, before the process ends."""
@@ -870,9 +891,7 @@ def _leave_coast_mark(hold: Seconds | None) -> str:
         except OSError as error:
             return f" (attente de roue libre precedente non effacee: {error})"
         return ""
-    written = replace_file(
-        COAST_MARK, stored_hold(hold, now=RealClock().unix_millis(), trusted=False)
-    )
+    written = replace_file(COAST_MARK, stored_hold(hold, now=clock.unix_millis(), trusted=False))
     if isinstance(written, Err):
         return (
             f" ATTENTION: attente de roue libre NON gardee ({written.error}): avant de relancer, "
@@ -1386,7 +1405,7 @@ def _stop_and_report(started: BusWorker, before: Mapping[signal.Signals, _Handle
         )
     if started.ident is not None:
         confirmed = started.stop_confirmed and not unfinished
-        report += _leave_coast_mark(started.coast_after_exit(confirmed))
+        report += started.leave_coast_mark(confirmed)
     try:
         _say_last(f"\nsortie: {report}")
     finally:

@@ -953,12 +953,16 @@ async def test_a_stop_at_standstill_before_the_stage_drops_holds_nothing(rig: Be
 
 async def test_what_an_exit_leaves_the_next_start(rig: Bench) -> None:
     """The driver's stop at the exit reads RFRD only, which a stage dropped during it reads
-    0 too: a stage on at the last read, or a stop not confirmed, leaves the longest coast."""
+    0 too: a shaft read turning, or a stop not confirmed, leaves the longest coast. A stage
+    on at rest with LFRD 0 leaves nothing: the drive holds the shaft at 0 Hz."""
     cap = hold_cap(bench.COAST_TAU, bench.STANDSTILL_RPM)
     assert rig.worker.coast_after_exit(confirmed=True) is None
     assert rig.worker.coast_after_exit(confirmed=False) == cap
     await rig.armed_and_enabled()
+    await rig.polled()
+    assert rig.worker.coast_after_exit(confirmed=True) is None
     rig.bus.registers[rig.regs.rfrd] = TURNING_RPM
+    await rig.polled()  # the poll under way may have read RFRD before it was set
     await rig.polled()
     assert rig.worker.coast_after_exit(confirmed=True) == cap
 
