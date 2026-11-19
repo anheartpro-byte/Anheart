@@ -173,6 +173,8 @@ wait_for_system() {
 
 healthz() { in_machine curl --silent --fail --max-time 3 "http://127.0.0.1:$port/healthz" 2> /dev/null || true; }
 status()  { in_machine curl --silent --fail --max-time 3 --header "x-anheart-token: $TOKEN" "http://127.0.0.1:$port/api/status" 2> /dev/null || true; }
+# The newest telemetry snapshot, or null before the first control tick.
+snapshot() { in_machine curl --silent --fail --max-time 3 --header "x-anheart-token: $TOKEN" "http://127.0.0.1:$port/api/snapshot" 2> /dev/null || true; }
 # What the console says of itself: in service or not, its last stop, its watchdog, its clock.
 panel()   { in_machine curl --silent --fail --max-time 3 --header "x-anheart-token: $TOKEN" "http://127.0.0.1:$port/api/panel" 2> /dev/null || true; }
 
@@ -301,8 +303,22 @@ restarts() { in_machine systemctl show --property NRestarts --value anheart; }
 # What the console keeps of its restarts, as it is on the disk.
 restart_state() { in_machine cat /var/lib/anheart/records/service-state.json 2> /dev/null || true; }
 
-# A manual bench session at target 0 on the simulated drive.
+# The coast-down hold (ANH-92) runs out. After an unclean stop, or a stop that left
+# the output stage maybe on (one in the middle of a session: the stop at the exit
+# reads nothing the stage did), the console holds every start for the longest coast
+# from its first read with the stage off: 36 s at this run's COAST_TAU_S of 5 s.
+wait_for_no_coast_hold() {
+    local attempt
+    for ((attempt = 0; attempt < 60; attempt++)); do
+        case "$(snapshot)" in *'"coast_hold_s":null'*) return 0 ;; esac
+        sleep 1
+    done
+    fail "the coast-down hold did not run out within 60 s ($1)"
+}
+
+# A manual bench session at target 0 on the simulated drive, once no coast may run.
 start_session() {
+    wait_for_no_coast_hold "$1"
     post /api/safety/attest '{"sto_jumper_removed":true,"mushroom_wired_nc":true}' > /dev/null \
         || fail "the simulated console refused the attestation ($1)"
     post /api/manual/start '{"occupancy":"bench"}' > /dev/null \
@@ -638,6 +654,10 @@ step "2. Second install: nothing changes"
 # A secret in the configuration, and a console restarted to read it.
 in_machine sed -i "s/^# DEVICE_TOKEN=.*/DEVICE_TOKEN=$TOKEN/" "$ENV_FILE"
 expect_in "$(in_machine grep -c "^DEVICE_TOKEN=$TOKEN$" "$ENV_FILE")" "1" "a secret is written in the configuration"
+# The shortest coast time constant the key takes: the longest coast-down hold, after
+# the stops and kills below, is then 36 s (5 ln 1380) instead of 289 s at 40 s.
+in_machine sed -i "s/^COAST_TAU_S=.*/COAST_TAU_S=5/" "$ENV_FILE"
+expect_in "$(in_machine grep -c "^COAST_TAU_S=5$" "$ENV_FILE")" "1" "the coast time constant is the shortest the key takes"
 # The signed operator list (ANH-152), where the unit mounts the console's data,
 # the account's alone like everything there: read at the console's start.
 docker cp "$SIGNING/operators.json" "$MACHINE:/tmp/operators.json" > /dev/null \

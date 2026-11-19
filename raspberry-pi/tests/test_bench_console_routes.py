@@ -973,7 +973,8 @@ async def test_a_start_after_an_exit_that_left_a_coast_holds_it_from_its_first_r
     async with started(monkeypatch, mark=mark) as rig:
         armed = await rig.press("/api/arm", {"motor_uncoupled": True})
         assert armed.status_code == HTTPStatus.OK
-        assert whole_seconds(await coast_hold_shown(rig)) in {1, 2}
+        countdown = await coast_hold_shown(rig)
+        assert whole_seconds(countdown) in {1, 2}
         await rig.press("/api/enable")
         shown = await rig.result("enable")
         assert "activation refusee (arbre peut-etre encore en roue libre" in shown, shown

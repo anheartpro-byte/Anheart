@@ -1734,8 +1734,15 @@ défauts du variateur, [raspberry-pi.md, section 6](raspberry-pi.md#6-les-défau
   que la console morte ait entraîné le bras ou non : 289,2 s (40 ln 1380) avec
   40 s, 72,3 s (10 ln 1380) avec 10 s ; une console relancée qui trouve le
   variateur encore en marche (C bis) lit l'arbre elle-même, et son propre
-  arrêt mène le bras à l'arrêt sous couple, sans attente. Compter ce temps avant
-  chaque départ des essais suivants.
+  arrêt mène le bras à l'arrêt sous couple, sans attente. Un arrêt propre de la
+  console pendant une séance (`sudo systemctl stop anheart`, un redémarrage,
+  Ctrl+C), l'étage en marche à sa dernière lecture, coûte la même attente au
+  démarrage suivant : l'arrêt de sortie ne lit que RFRD sur l'ATV320, rien sur le
+  simulateur, et RFRD lit 0 aussi sur un étage tombé pendant cet arrêt. Un
+  redémarrage après une séance terminée (STOP, descente jusqu'à l'arrêt lu étage
+  en marche, étage coupé au repos) ne coûte rien. Compter ce temps avant chaque
+  départ des essais suivants ; pour ne pas le payer, terminer la séance avant
+  d'arrêter la console.
   L'outil de banc tient de même son attente la plus longue au démarrage qui suit
   une sortie non confirmée (code 4, ou `sortie: ATTENTION`) ou une sortie bras
   entraîné.

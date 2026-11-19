@@ -449,6 +449,30 @@ async def test_a_clean_exit_with_the_stage_maybe_on_leaves_the_longest_coast_fro
     await again.panel.close()
 
 
+async def test_a_restart_after_a_session_ended_at_rest_holds_nothing(tmp_path: Path) -> None:
+    """The bench's ordinary restart: STOP, the descent read to a standstill with the stage
+    on, the stage removed at rest, then the console stopped. Nothing is left to wait for."""
+    rig, _ = make_rig(tmp_path, wall_clock=TRUSTED)
+    async with rig.http() as session:
+        await at_speed(rig, session)
+    rig.panel.runtime.request_stop("operator: stop button")
+    for _ in range(600):
+        if state_of(rig) is RuntimeState.FINISHED:
+            break
+        await rig.tick(1.0)
+    assert state_of(rig) is RuntimeState.FINISHED
+    assert held(rig) is None
+    assert not stage_on(rig)
+    await rig.panel.close()
+    assert not (tmp_path / COAST_HOLD_FILE).exists()
+    again = restarted(tmp_path, UnixMillis(rig.clock.unix_millis() + 30_000), TRUSTED)
+    await again.tick(0.2)
+    assert held(again) is None
+    accepted = await again.panel.runtime.start_manual(Occupancy.BENCH, OPERATOR, MotorRpm(276))
+    assert isinstance(accepted, Ok)
+    await again.panel.close()
+
+
 class CloseUnanswered(Wrapped):
     """The exit's own stop gets no answer: the stage it enabled is not known off."""
 
@@ -648,10 +672,12 @@ async def test_a_hold_the_disk_refuses_is_said_and_the_console_goes_on(
     with caplog.at_level(logging.WARNING, logger="src.kept_coast_hold"):
         nowhere = HoldKeeper(tmp_path / "a_file" / COAST_HOLD_FILE, lambda: False)
         nowhere.keep(runtime, rig.clock, now)
-        assert not nowhere.close(), "a hold the disk refused is said not kept"
+        landed = nowhere.close()
+        assert not landed, "a hold the disk refused is said not kept"
         stuck = HoldKeeper(tmp_path / "a_directory", lambda: False)
         stuck.keep(runtime, rig.clock, Monotonic(now + 31.0))  # over: the file is removed
-        assert stuck.close(), "a file left behind is a hold for nothing, not one missing"
+        removed = stuck.close()
+        assert removed, "a file left behind is a hold for nothing, not one missing"
     assert "coast-down hold not kept across a restart" in caplog.text
     assert "coast-down hold file not removed" in caplog.text
     await rig.panel.close()

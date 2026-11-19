@@ -1225,9 +1225,11 @@ cette attente : seul le temps. Sa durée vient de `COAST_TAU_S` (40 s par défau
 mesurer au banc) et de la dernière vitesse lue : environ 215 s depuis 3 tr/min au bras.
 Elle est gardée à travers un redémarrage de la console. Après un arrêt non propre
 (console tuée, figée, plantée, coupure de courant), ou une sortie avec l'étage de
-puissance peut-être encore en marche (sortie en séance), la console relancée tient
-l'attente la plus longue, depuis la plaque, dès sa première lecture qui montre l'étage
-coupé : 289 s avec 40 s, 72 s avec 10 s, même si le bras ne tournait pas.
+puissance peut-être encore en marche (un arrêt de la console pendant une séance, même
+propre : `systemctl stop`, un redémarrage), la console relancée tient l'attente la plus
+longue, depuis la plaque, dès sa première lecture qui montre l'étage coupé : 289 s avec
+40 s, 72 s avec 10 s, même si le bras ne tournait pas. Terminer la séance (STOP, puis la
+fin de la descente) avant d'arrêter la console : le redémarrage n'attend alors rien.
 
 **Pendant un gel, un programme fait quand même son retour au calme.** Un gel `freeze`
 tient la vitesse d'un programme pendant `warmup` et `hold`. Quand le programme arrive à
