@@ -354,7 +354,16 @@ def test_a_coast_time_constant_the_console_refuses_ends_the_tool_with_2_too(
     def start(_self: bench.BusWorker) -> None:
         started.append("bus")
 
+    def serve(_self: bench.StoppingServer) -> None:
+        started.append("page")
+
+    def no_wait(_seconds: float) -> None:
+        """The start-up wait, skipped."""
+
     monkeypatch.setattr(bench.BusWorker, "start", start)
+    # Were the refusal gone, the page would never be served: never waited for here.
+    monkeypatch.setattr(bench.StoppingServer, "run", serve)
+    monkeypatch.setattr(time, "sleep", no_wait)
     monkeypatch.setenv("COAST_TAU_S", tau)
     monkeypatch.setattr(sys, "argv", ["bench_console.py", "--port", "COM-NONE"])
     code = bench.main()

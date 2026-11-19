@@ -34,9 +34,9 @@ from src.motor.coast import (
     hold_cap,
     longest_hold,
 )
-from src.motor.drive import DriveFault, DriveState, DriveStatus
+from src.motor.drive import CommTimeout, DriveError, DriveFault, DriveState, DriveStatus
 from src.motor.sto import SimulatedStoChain
-from src.result import Err, Ok
+from src.result import Err, Ok, Result
 from src.training.runtime import CoastDownHeld, CoastDownHold, RuntimeLimits, RuntimeState
 from src.training.types import Occupancy, Phase
 from src.units import (
@@ -54,6 +54,7 @@ from tests.test_failure_rig import (
     BENCH_ENV,
     OPERATOR,
     Rig,
+    Wrapped,
     make_rig,
     precommanded,
     start_manual,
@@ -198,6 +199,11 @@ def chain_of(rig: Rig) -> SimulatedStoChain:
 def held(rig: Rig) -> Seconds | None:
     """Read afresh: a checker would otherwise keep a narrowing across an ``await``."""
     return rig.panel.runtime.snapshot().coast_hold
+
+
+def stage_on(rig: Rig) -> bool:
+    """Read afresh, as :func:`held`."""
+    return rig.panel.runtime.coast_stage_on
 
 
 def state_of(rig: Rig) -> RuntimeState:
@@ -441,6 +447,33 @@ async def test_a_clean_exit_with_the_stage_maybe_on_leaves_the_longest_coast_fro
     await again.tick(0.2)
     assert held(again) == pytest.approx(hold_cap(TAU, ONE), abs=0.01)
     await again.panel.close()
+
+
+class CloseUnanswered(Wrapped):
+    """The exit's own stop gets no answer: the stage it enabled is not known off."""
+
+    @override
+    async def close(self) -> Result[None, DriveError]:
+        return Err(CommTimeout(after=Seconds(0.1)))
+
+
+async def test_a_stage_enabled_since_the_last_read_and_never_known_off_leaves_the_longest_coast(
+    tmp_path: Path,
+) -> None:
+    """The last read, the arming's, showed the stage off; then this console enabled it,
+    and its exit could not confirm a stop. Only its own belief says the stage may be on."""
+    rig, _ = make_rig(tmp_path, wrap=CloseUnanswered)
+    runtime = rig.panel.runtime
+    assert isinstance(runtime.confirm_estop_wiring(OPERATOR), Ok)
+    assert not stage_on(rig)
+    started = await runtime.start_manual(Occupancy.BENCH, OPERATOR, MotorRpm(276))
+    assert isinstance(started, Ok)
+    assert stage_on(rig), "enabled by this console since its last read"
+    await rig.panel.close()
+    kept = kept_hold(
+        tmp_path / COAST_HOLD_FILE, now=rig.clock.unix_millis(), trusted=True, cap=longest_hold(ONE)
+    )
+    assert kept == pytest.approx(hold_cap(TAU, ONE), abs=0.01)
 
 
 async def test_a_hold_the_exit_cannot_keep_makes_the_stop_an_unclean_one(
