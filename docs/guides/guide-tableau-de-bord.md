@@ -897,7 +897,11 @@ renseigné** ; aucun numéro, rayon ou document n'est créé automatiquement.
    Le fichier est déposé dans Convex Storage avant son rattachement. La
    fiche courante et les précédentes restent téléchargeables. Ne joignez
    aucune donnée de santé. Si le dépôt échoue, une notification l'indique ;
-   choisissez de nouveau le fichier et réessayez.
+   choisissez de nouveau le fichier et réessayez. Tapez aussi les cinq
+   valeurs de la fiche, tFr, HSP et LSP en Hz, ACC et dEC en s, au dixième :
+   une mise en service ne s'enregistre que contre une fiche qui les porte, et
+   compare à ces valeurs, jamais au fichier, ce que la console relit du
+   variateur. Les cinq ou aucune.
 4. **Validation** : consultez le niveau courant, les revues et leurs comptes
    rendus. **Ajouter une revue** ne propose que le niveau suivant : Aucune
    validation vers Au banc, puis Automatique, puis Personne à bord. Joignez
@@ -979,6 +983,23 @@ logicielles, et ce que l'équipe y écrit à la main.
 - **Exporter (CSV)** et **Imprimer (PDF)** (admin Anheart) donnent le carnet
   pour le dossier technique, avec les identifiants seulement. Pour un PDF,
   choisir « Enregistrer au format PDF » dans la fenêtre d'impression.
+
+#### Mises en service
+
+La carte **Mises en service** (admin Anheart, admin de l'organisation) liste
+chaque mise en service que la console a envoyée : sa date, **Conforme** ou
+**Non conforme** et ses écarts. **Voir la fiche** ouvre la fiche à imprimer :
+écarts, qui l'a lancée et qui a attesté l'arrêt d'urgence, la phrase attestée,
+les valeurs de la fiche variateur face à celles relues, chaque contrôle de la
+console et les versions.
+
+- **Une machine au STO ponté ou simulé n'est jamais conforme.** Sa mise en
+  service est enregistrée quand même, comme preuve, avec l'écart qui le dit.
+- **Le niveau de validation ne change pas** : il ne monte que par une revue du
+  registre.
+- **Imprimer ou enregistrer en PDF** : choisir « Enregistrer au format PDF »
+  dans la fenêtre d'impression. **Télécharger le JSON signé** donne le texte
+  tel que le tableau de bord l'a signé, à garder au dossier technique.
 
 #### Carte « Zone de danger »
 

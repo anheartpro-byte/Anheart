@@ -21,6 +21,11 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import {
+  DRIVE_FIELDS,
+  SHEET_BOUNDS,
+  type DriveParameters,
+} from "@/convex/lib/commissioning";
 import type { MachineRegistry } from "./MachineRegistryCard";
 
 const VALIDATION_LEVELS = ["none", "bench", "auto", "occupied"] as const;
@@ -300,8 +305,24 @@ export function RadiiForm({ registry }: { registry: MachineRegistry }) {
   );
 }
 
+
+/**
+ * The five values typed with a sheet; undefined when none is; null when some
+ * are and not all, or one is not a number. The server holds them to the
+ * keypad's ranges.
+ */
+function driveParametersOf(data: FormData): DriveParameters | undefined | null {
+  const typed = DRIVE_FIELDS.map((field) => text(data, field));
+  if (typed.every((value) => value === "")) return undefined;
+  const values = typed.map((value) => (value === "" ? Number.NaN : Number(value)));
+  if (values.some((value) => !Number.isFinite(value))) return null;
+  const [tfrHz, hspHz, lspHz, accS, decS] = values;
+  return { tfrHz, hspHz, lspHz, accS, decS };
+}
+
 export function DriveSheetForm({ registry }: { registry: MachineRegistry }) {
   const t = useTranslations("machineRegistry");
+  const tAll = useTranslations();
   const [file, setFile] = useState<File>();
   const upload = useRegistryUpload();
   const attach = useMutationWithFeedback(
@@ -311,6 +332,18 @@ export function DriveSheetForm({ registry }: { registry: MachineRegistry }) {
     <RegistryForm
       title={t("attachSheet")}
       onSave={async (data, form) => {
+        const parameters = driveParametersOf(data);
+        if (parameters === null) {
+          await runWithFeedback(
+            "[drive sheet values]",
+            async () => {
+              throw new ConvexError({ code: "invalid_drive_parameters" });
+            },
+            undefined,
+            tAll,
+          );
+          return;
+        }
         const storageId = await upload(file);
         if (storageId === null) return;
         const result = await attach(
@@ -320,6 +353,7 @@ export function DriveSheetForm({ registry }: { registry: MachineRegistry }) {
             version: text(data, "sheetVersion"),
             signedBy: text(data, "signedBy"),
             at: day(data, "sheetAt"),
+            parameters,
           },
           { success: t("sheetSaved") },
         );
@@ -352,6 +386,23 @@ export function DriveSheetForm({ registry }: { registry: MachineRegistry }) {
           required
         />
       </div>
+      <fieldset className="space-y-2">
+        <legend className="text-sm font-medium">{t("sheetValues")}</legend>
+        <p className="text-sm text-muted-foreground">{t("sheetValuesHelp")}</p>
+        <div className="grid gap-3 sm:grid-cols-5">
+          {DRIVE_FIELDS.map((field) => (
+            <Field
+              key={field}
+              label={t(field)}
+              name={field}
+              type="number"
+              min={SHEET_BOUNDS[field].min}
+              max={SHEET_BOUNDS[field].max}
+              step="0.1"
+            />
+          ))}
+        </div>
+      </fieldset>
     </RegistryForm>
   );
 }

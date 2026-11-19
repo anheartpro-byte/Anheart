@@ -2708,6 +2708,8 @@ Les codes d'un refus immédiat (`code` du corps 409 ou 412) : `start_pending`,
 | GET | `/api/preflight` | - | le pré-vol tel que la console le juge maintenant, au banc et avec une personne à bord ([section 17](#17-page--pre-vol--anh-142)) | 200 `{running, last, battery_pct, bench, occupied, unreported_stop, acknowledgeable}` (`unreported_stop` : pourquoi une personne à bord est retenue pour une séance que le tableau de bord ne compte pas, ou `null` ; `acknowledgeable` : cette retenue est une séance perdue, la seule que l'opérateur peut acquitter, ANH-145) ; `null` sur une console sans pré-vol |
 | POST | `/api/preflight/run` | - | « Relancer » : une nouvelle passe, la batterie du BITalino relue au repos ; ne lance et ne refuse rien | 202, le même objet ; 409 sur une console sans pré-vol |
 | POST | `/api/preflight/acknowledge` | - | « Acquitter une seance perdue » (ANH-145) : l'opérateur connecté lève les seules séances perdues (refusées pour de bon, illisibles), écrites au journal de bord ; ne lance rien | 200, l'objet du pré-vol ; 401 `operator_required` ; 409 pendant une séance, quand aucune séance n'est perdue (une retenue qui se lèvera d'elle-même reste), avant la liste des enregistrements, ou console non reliée |
+| GET | `/api/commissioning` | - | la mise en service ([section 17](#17-page--pre-vol--anh-142)) : une en cours, pourquoi aucune ne peut partir maintenant, la dernière et ce que le tableau de bord en a dit ; `null` sur une console reliée à aucun tableau de bord | 200 `{running, refusal, last}` ou `null` |
+| POST | `/api/commissioning/run` | - | « Lancer la mise en service » (ANH-115), par l'opérateur connecté, nommé dans l'enregistrement : le pré-vol relancé, le variateur relu, la liste jugée, puis envoyée au tableau de bord ; répond quand il a répondu, après environ une minute | 200 `{running, refusal, last}` ; 401 `operator_required` sans opérateur connecté ; 409 avec la raison, rien n'est envoyé : une en cours, pas de tableau de bord 1.18, aucune attestation de l'arrêt d'urgence, une horloge ou une attestation d'avant le 1er janvier 2026, console pas au repos (l'attente de roue libre et son temps restant, la règle de la console, le contrôle du variateur), console sortie du repos en cours de route |
 | POST | `/api/service/restore` | - | remet en service une console hors service, par l'opérateur connecté ; ne lance rien | 200 `{out_of_service, unclean_starts, threshold, window_s, unclean_stop, open_record, persisted}` (`persisted: false` : vaut jusqu'au prochain redémarrage seulement) ; 401 `operator_required` ; 409 (console en service, ou console qui ne garde pas d'état de redémarrage) |
 
 ### Enregistrements
@@ -3135,6 +3137,75 @@ interruption après la reprise de l'acquisition. Une batterie lue il y a plus de
 - La batterie : la conversion de la lecture brute en pourcentage est une
   hypothèse à vérifier au banc sur le vrai BITalino
   ([raspberry-pi.md, 4.2](raspberry-pi.md#le-pré-vol-anh-142)).
+
+### La mise en service (ANH-115, contrat 1.18)
+
+Sous le pré-vol, sur une console reliée à un tableau de bord, la carte « Mise
+en service » : le pré-vol **en mode mise en service**, au repos, capsule vide,
+envoyé au tableau de bord, qui le compare au registre de la machine et
+l'enregistre signé ([convex.md](convex.md#la-mise-en-service-dune-machine-contrat-118-anh-115)).
+`Lancer la mise en service`, par l'opérateur connecté :
+
+1. une nouvelle passe du pré-vol : la batterie du BITalino relue, chaque
+   contrôle attendu jusqu'à son délai (une minute au plus), puis la
+   relecture du variateur et l'envoi : environ une minute en tout ;
+2. les cinq paramètres du variateur relus (tFr, HSP, LSP, ACC, dEC), une
+   lecture et rien d'écrit, jugés comme à chaque armement ;
+3. la liste jugée : celle du pré-vol au banc, l'horloge, le BITalino et les
+   paramètres médicaux rouges quand ils ne tiennent pas, plus trois contrôles :
+   la **source STO** (verte sur l'entrée du variateur, rouge sous
+   `bridged_declared`, orange pour une chaîne simulée ou absente), la **chaîne
+   STO prête** pour un départ au banc, les **paramètres du variateur** ;
+4. l'envoi, avec l'attestation de l'arrêt d'urgence donnée depuis le
+   démarrage (son auteur, sa phrase, sa date) : le tableau de bord répond le
+   verdict et chaque écart, que la carte montre (`sto_bridged : attendu
+   drive_input, lu bridged_declared`).
+
+**Une machine au STO ponté ou simulé n'est jamais enregistrée conforme** :
+sa mise en service part quand même, et est enregistrée non conforme, comme
+preuve ; la carte le dit. Une mise en service rouge part aussi. Elle ne
+change rien à la console, ni au niveau de validation de la machine.
+
+Refusée avant toute lecture, avec la raison sous le bouton : une déjà en
+cours ; une console pas encore jointe à un tableau de bord du contrat 1.18 ;
+aucune attestation de l'arrêt d'urgence depuis le démarrage (`arret
+d'urgence non atteste depuis le demarrage de la console : donner
+l'attestation, page Securite`) ; une horloge de la console d'avant le 1er
+janvier 2026, pas encore à l'heure, ou une attestation que cette horloge,
+moins le temps écoulé depuis, daterait d'avant (le tableau de bord ne prend
+aucune date d'avant le 1er janvier 2026 : un Pi n'a pas d'horloge à lui, et
+la sienne est quelconque avant son service de temps ; l'attestation n'y tombe
+que sur une horloge à peine au delà, ou une console allumée depuis avant ;
+`arret d'urgence atteste avant le 1er janvier 2026 selon l'horloge de la
+console : attendre son service de temps (page Pre-vol, controle Horloge), ou
+redonner l'attestation, page Securite`) ; une console qui n'est pas au repos :
+l'attente de roue libre, une séance, un départ attendu ou en cours
+d'armement, un lancement du tableau de bord en main, ou le contrôle
+« Variateur ni en defaut ni en marche ». **Une mise en service est refusée
+pendant l'attente de roue libre** (ANH-92) : après une coupure secteur ou une
+ouverture du STO, le variateur lit 0 étage coupé alors que le bras peut
+encore tourner ; la raison dit le temps restant, dans les mots d'un départ
+refusé (`console pas au repos : arbre peut-etre encore en roue libre (etage
+de puissance coupe, RFRD a 0) : attendre encore N s`). Une mise en service
+qui quitte le repos en cours de route s'interrompt, et rien n'est envoyé
+(`mise en service interrompue, rien n'est envoye : ...`), une attente de roue
+libre qui commence pendant elle comprise. Un refus du tableau de
+bord est dit tel qu'il l'écrit (`refusee par le tableau de bord : Aucune
+fiche variateur avec ses valeurs ...`), et la mise en service n'est pas
+enregistrée.
+
+Le rapport tient dans les 16 Kio de la route : quand les raisons sont
+longues, chacune est raccourcie de même, de moitié à chaque fois, jusqu'à ce
+qu'il tienne. Ses textes ne portent aucun caractère des catégories Unicode
+que le tableau de bord refuse (Cc, Cf, Zl, Zp : contrôles, marques de
+direction, largeur nulle, trait d'union conditionnel, séparateurs) : chacun
+devient une espace.
+
+Ce qui reste : la carte ne garde que la dernière mise en service de cette
+exécution de la console ; l'enregistrement est celui du tableau de bord. Les
+paramètres ttO et SLL ne sont pas relus (leur adresse Modbus n'est pas
+vérifiée), ni le numéro de série du variateur. Une mise en service qui n'a pas
+pu partir est refaite : rien ne la garde pour plus tard.
 
 ## 18. Connexion de l'opérateur (ANH-152)
 

@@ -24,6 +24,7 @@ import {
   boundedText,
   limitMachine,
   limitPairing,
+  MAX_COMMISSIONING_BYTES,
   MAX_EVENTS_BYTES,
   MAX_HEARTBEAT_BYTES,
   MAX_PROFILES_BYTES,
@@ -47,6 +48,12 @@ import {
   normalizedSerial,
   PAIRING_MAX_BODY_BYTES,
 } from "./lib/machinePairing";
+import {
+  commissioningPayload,
+  findingsOf,
+  parseCommissioningReport,
+  verdictOf,
+} from "./lib/commissioning";
 
 const http = httpRouter();
 http.route({
@@ -551,20 +558,29 @@ http.route({
 });
 
 /**
+ * `payload` signed by the key in `ANHEART_CATALOG_SIGNING_KEY`; null without
+ * a usable key, said in the log when one is set that is not Ed25519.
+ */
+async function signatureOf(payload: string): Promise<string | null> {
+  const key = process.env[CATALOG_SIGNING_KEY_ENV];
+  if (!key) return null;
+  const signature = await signCatalog(payload, key);
+  if (signature === null)
+    console.error(`${CATALOG_SIGNING_KEY_ENV} is set but is not an Ed25519 private key`);
+  return signature;
+}
+
+/**
  * The answer of a signed route: `{status: "signed", payload, signature}`, the
  * text that `load` gives signed by the key in `ANHEART_CATALOG_SIGNING_KEY`;
  * `{status: "not_configured"}` without a usable key, `load` then never called.
  */
 async function signedAnswer(load: () => Promise<string>): Promise<Response> {
   const unsigned = { status: "not_configured", server_contract_version: CONTRACT_VERSION };
-  const key = process.env[CATALOG_SIGNING_KEY_ENV];
-  if (!key) return json(200, unsigned);
+  if (!process.env[CATALOG_SIGNING_KEY_ENV]) return json(200, unsigned);
   const payload = await load();
-  const signature = await signCatalog(payload, key);
-  if (signature === null) {
-    console.error(`${CATALOG_SIGNING_KEY_ENV} is set but is not an Ed25519 private key`);
-    return json(200, unsigned);
-  }
+  const signature = await signatureOf(payload);
+  if (signature === null) return json(200, unsigned);
   return json(200, {
     status: "signed",
     payload,
@@ -1077,6 +1093,77 @@ http.route({
         },
       },
     );
+  }),
+});
+
+/**
+ * POST /api/machine/commissioning {ranAt, operator, attestation, stoSource,
+ * controls, drive, bitalinoAddress, softwareVersion, medicalParametersVersion,
+ * configHash} (contract 1.18, ANH-115)
+ * -> 200 {recordId, verdict, findings, signed, server_contract_version}
+ *    409 {error: "commissioning_refused", message}
+ *
+ * What the console judged and read at rest, compared with the registry
+ * (`machineCommissioning.reference`, convex/lib/commissioning.ts), signed on
+ * the catalogue's channel when the key is set, and written once with its
+ * line in the logbook (`machineCommissioning.record`). A red commissioning
+ * is recorded too, nonconforming: it is evidence. 409, nothing written: no
+ * drive sheet with its values, an operator or the author of the attestation
+ * not on the machine's operator list, the registry changed in between. One
+ * every 30 s per machine, two ahead.
+ */
+http.route({
+  path: "/api/machine/commissioning",
+  method: "POST",
+  handler: limitedRoute("machineCommissioning", async (ctx, req, machineId) => {
+    const body = await readBoundedJson(req, MAX_COMMISSIONING_BYTES);
+    if (body instanceof Response) return body;
+    const report = parseCommissioningReport(body, Date.now());
+    if (report === null) {
+      return refuse(
+        400,
+        "invalid_request",
+        "Expected the commissioning report of contracts/machine-api.json (machine_commissioning): its texts, its dates and their order",
+      );
+    }
+    const who = {
+      machineId,
+      operator: report.operator,
+      attestedBy: report.attestation.operator,
+      ranAt: report.ranAt,
+    };
+    const looked = await ctx.runQuery(internal.machineCommissioning.reference, who);
+    if (looked.status === "refused") return refuse(409, "commissioning_refused", looked.message);
+    const recordedAt = Date.now();
+    const findings = findingsOf(report, looked.reference);
+    const verdict = verdictOf(findings);
+    const payload = commissioningPayload({
+      machineId,
+      recordedAt,
+      verdict,
+      findings,
+      reference: looked.reference,
+      report,
+    });
+    const signature = await signatureOf(payload);
+    const outcome = await ctx.runMutation(internal.machineCommissioning.record, {
+      ...who,
+      reference: looked.reference,
+      recordedAt,
+      verdict,
+      findings,
+      payload,
+      signature,
+      softwareVersion: report.softwareVersion,
+    });
+    if (outcome.status === "refused") return refuse(409, "commissioning_refused", outcome.message);
+    return json(200, {
+      recordId: outcome.recordId,
+      verdict,
+      findings,
+      signed: signature !== null,
+      server_contract_version: CONTRACT_VERSION,
+    });
   }),
 });
 

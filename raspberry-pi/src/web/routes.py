@@ -131,6 +131,7 @@ from src.training.types import (
     TelemetrySnapshot,
 )
 from src.units import Bpm, Monotonic, OutputRpm, Seconds, elapsed
+from src.web.commissioning_routes import register_commissioning
 from src.web.deps import (
     SESSION_COOKIE,
     TOKEN_HEADER,
@@ -484,6 +485,7 @@ def _register_api(app: FastAPI, *, services: Services, config: WebConfig) -> Non
     _register_config(app, services=services, auth=auth, acting=acting)
     register_preflight(app, services=services, auth=auth, acting=acting)
     register_pairing(app, services=services, auth=auth)
+    register_commissioning(app, services=services, auth=auth, acting=acting)
 
 
 def _register_access(

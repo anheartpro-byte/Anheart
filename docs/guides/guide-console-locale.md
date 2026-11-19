@@ -2228,6 +2228,37 @@ de la machine sur le site.
 
 **Désappairer une console** : l'arrêter au repos, retirer `/var/lib/anheart/data/machine.env` (`raspberry-pi/data/machine.env` sur un poste de développement), la redémarrer (`sudo systemctl restart anheart`), puis **Révoquer** la clé sur la fiche de la machine, carte **Clés de la machine** : la console redémarre sans clé, sur son écran de mise en service, et la clé qu'elle tenait n'ouvre plus rien.
 
+### 13.13 Lancer les contrôles de mise en service
+
+**Qui** : un opérateur connecté à la console d'une machine appairée, l'admin
+du site ayant joint la fiche variateur avec ses cinq valeurs.
+
+1. Capsule vide, machine au repos, personne dans le rayon du bras.
+2. Donner l'attestation de l'arrêt d'urgence, page **Securite**, si ce n'est
+   pas fait depuis le démarrage de la console.
+3. Page **Pre-vol**, carte **Mise en service** : **Lancer la mise en service**.
+   Le pré-vol est relancé, le variateur relu, puis la liste part au tableau de
+   bord : environ une minute. Ne pas démarrer de séance pendant ce temps : la
+   mise en service s'interromprait, et rien ne serait envoyé.
+4. La carte dit **conforme** ou **non conforme**, et chaque écart (par exemple
+   `drive_hsp : attendu 50.0 Hz, lu 50.1 Hz`). La fiche est enregistrée sur le
+   site, carte **Mises en service** de la machine, à imprimer.
+5. Non conforme : corriger ce que l'écart nomme (le variateur au clavier, le
+   registre sur le site), puis relancer. Une machine au STO ponté ou simulé
+   n'est jamais conforme.
+
+**Si ça ne marche pas** : la raison est sous le bouton. « pas encore joint, ou
+anterieur au contrat 1.18 » : attendre que la console soit reliée, ou mettre à
+jour le tableau de bord. « arret d'urgence non atteste » : étape 2. « horloge
+de la console pas a l'heure » : attendre son service de temps (contrôle
+Horloge du pré-vol). « refusee par le tableau de bord : invalid_request
+(HTTP 400) » une minute après le lancement, contrôle Horloge rouge : la
+console a démarré sur l'heure de son dernier arrêt (fake-hwclock), en retard
+de plusieurs jours ; attendre son service de temps (contrôle Horloge vert),
+puis relancer. « arbre peut-etre encore en roue libre » : attendre le temps
+dit, puis relancer. « refusee par le tableau de bord : Aucune fiche
+variateur avec ses valeurs » : l'admin joint la fiche avec ses valeurs.
+
 ## 14. Message affiché, ce qu'il veut dire, quoi faire
 
 Où chercher : sous le bouton concerné (note rouge), dans les bandeaux du haut, dans

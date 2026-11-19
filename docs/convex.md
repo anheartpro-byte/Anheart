@@ -505,7 +505,7 @@ envoyées par le Pi. Les index sont `by_machine` et `by_organization`.
 | `armRadiusM`, `legTipRadiusM`, `radiiMeasuredAt`, `radiiMeasuredBy` | Rayons mesurés en mètres, date Unix en ms et nom du mesureur. Valeurs finies strictement positives et au plus 10 m : borne de plausibilité contre une erreur d'unité, pas une limite de sûreté. |
 | `commissionedAt`, `site`, `contacts` | Date de mise en service, adresse texte, au plus 20 identifiants de membres actifs de l'organisation, sans doublon. Aucun e-mail dans la lecture du registre. |
 | `expectedSoftwareVersion` | Tag `pi-X.Y.Z` présent dans `software_releases`. Une version insuffisamment validée est signalée et reste sélectionnable. |
-| `driveParameterSheet` | Fiche variateur avec `storageId`, `contentType` (PDF ou JSON), `version`, `signedBy`, `at`, `attachedBy`, `attachedAt`. |
+| `driveParameterSheet` | Fiche variateur avec `storageId`, `contentType` (PDF ou JSON), `version`, `signedBy`, `at`, `attachedBy`, `attachedAt`, et depuis ANH-115 `parameters` facultatif : tFr, HSP et LSP en Hz, ACC et dEC en s, tapés avec la fiche, au dixième, dans les plages du clavier du variateur (`sheet_bounds` de `machine_commissioning`), LSP ≤ HSP ≤ tFr, sinon `invalid_drive_parameters`. Le fichier lui-même n'est jamais lu. Une mise en service ne s'enregistre que contre une fiche qui porte ses valeurs ([§6](#la-mise-en-service-dune-machine-contrat-118-anh-115)). |
 | `driveParameterSheetHistory` | Toutes les fiches remplacées, conservées avec leur fichier. |
 | `validation` | `level` (`none`, `bench`, `auto`, `occupied`), `reviews` et `downgrades`. |
 | `updatedAt`, `updatedBy` | Date et administrateur de la dernière écriture. |
@@ -653,6 +653,26 @@ montré une fois, dans la réponse de l'action qui l'a tiré.
 Index : `by_serial_and_closed` (ce qu'une demande d'appairage cherche),
 `by_machine_and_closed` (le code ouvert d'une machine). Une machine a au plus
 un code ouvert : en émettre un ferme les autres.
+
+### `machine_commissioning` : les mises en service (ANH-115)
+
+Ce que la console d'une machine a jugé et lu à sa mise en service, comparé au
+registre ([§6](#la-mise-en-service-dune-machine-contrat-118-anh-115)). Écrit
+une fois par `machineCommissioning.record`, jamais modifié.
+
+| Champ | Rôle |
+|---|---|
+| `machineId`, `organizationId` | La machine et son organisation au moment de l'enregistrement. |
+| `recordedAt` | L'horloge du serveur à l'enregistrement. |
+| `ranAt` | La fin des contrôles à l'horloge de la console : une seule mise en service par machine et par fin, un rapport renvoyé est refusé. |
+| `operator`, `attestedBy` | Qui a lancé la mise en service à la console et qui y a attesté l'arrêt d'urgence : des identifiants d'utilisateurs, opérateurs habilités de la machine à l'enregistrement. |
+| `verdict`, `findings` | `conforming` sans aucun écart, `nonconforming` sinon ; chaque écart `{id, expected, read}`. |
+| `payload` | Le texte canonique de l'enregistrement (`commissioningPayload`, `kind: "commissioning_record"`) : la référence du registre, le rapport de la console, le verdict et les écarts. |
+| `signature` | Sa signature Ed25519 sur le canal du catalogue, en base 64 ; `null` sans clé utilisable. |
+
+Index : `by_machine_and_recorded_at` (les mises en service d'une machine),
+`by_machine_and_ran_at` (un rapport renvoyé),
+`by_organization`.
 
 ### `machine_operators` et `machine_devices` : qui agit à la console (ANH-152)
 
@@ -997,6 +1017,7 @@ défaut variateur), `by_storage` (une pièce jointe ne sert qu'une fois) et
 | `incident` | le serveur : un incident ouvert (`openIncident`), rouvert (`join`, un incident clos qui devient `high`) ou clos (`incidents.close`), son id dans `refs.incidentId` |
 | `validation_review` | le serveur : une revue ajoutée (`addValidationReview`, le compte rendu dans `refs.storageId`, la version dans `refs.softwareVersion`) ou un niveau abaissé (`lowerValidationLevel`) |
 | `drive_parameter_change` | le serveur : une fiche variateur jointe (`attachDriveParameterSheet`, la fiche dans `refs.storageId`) |
+| `commissioning` | le serveur : une mise en service enregistrée (`machineCommissioning.record`, ANH-115), `mise en service conforme, fiche variateur v3` ou `mise en service non conforme : 2 écart(s), fiche variateur v3`, chaque écart dans `details`, la version de la console dans `refs.softwareVersion`. Jamais un nom |
 | `software_update` | le serveur : un heartbeat qui annonce une autre version que la précédente (`recordHeartbeat`, `writeSoftwareUpdate`, la nouvelle dans `refs.softwareVersion`). Une version absente ne compte pas ; une entrée qui dit déjà cette version n'est pas réécrite, et une console qui passe et repasse entre deux versions n'en écrit qu'une par sens, puis plus rien : elle ne pousse pas les vraies entrées hors des 500 que la liste montre |
 | `config_change` | le serveur : une révision de configuration que la machine dit appliquée (`machineConfigs.recordApplied`, ANH-141), `configuration révision 3 appliquée`, la révision dans `refs.configRevision`. Une révision redite appliquée n'en écrit pas une seconde ; une révision que la machine refuse n'en écrit aucune (son refus reste dans l'audit, `machine_config.refused`) |
 
@@ -2230,6 +2251,11 @@ révision remplacée), `machine_config.applied` et `machine_config.refused`
 refus de la machine n'entrent dans le journal : texte libre, ils restent sur
 la révision.
 
+ANH-115 a ajouté `commissioning.recorded` (cible la machine, acteur `machine`,
+sans détail) : une mise en service enregistrée. Ni son verdict, ni ses écarts,
+ni qui l'a lancée n'entrent dans le journal : ils restent sur
+l'enregistrement.
+
 `audit()` lit une fois les métadonnées de requête puis insère une ligne,
 sans autre lecture, contrôle métier ni chemin de refus ajouté. Son contrat
 ne peut donc pas refuser une demande d'arrêt autorisée. Une défaillance de
@@ -3441,6 +3467,7 @@ qui fonctionne comme prévu ne les atteint jamais.
 | `POST /api/machine/training/local` | 1 par minute | 20 | une déclaration par séance démarrée à la machine ; rattrapage une séance à la fois, après l'envoi de la précédente |
 | `POST /api/machine/profiles` | 1 toutes les 10 s | 5 | une fois par révision des programmes, et depuis 1.11 une fois par nouvel état du catalogue (au plus une réponse du catalogue par minute) ; pas de nouvel essai avant 15 s après un échec |
 | `POST /api/machine/records/commit` | 10 par seconde | 64 | au plus un commit par réservation `upload-url`, 64 fichiers par étape du dépôt |
+| `POST /api/machine/commissioning` | 1 toutes les 30 s | 2 | une fois par mise en service, qui dure plus de 30 s (ANH-115) |
 
 Ces trois plafonds (ANH-228) suivent le trafic attendu d'une console : une
 séance avec quelqu'un à bord dure des minutes (embarquement, rampe et plancher
@@ -3510,6 +3537,7 @@ rien passer). Au-delà : **413** `payload_too_large`, rien n'est écrit.
 | `POST /api/machine/training/telemetry` | 300 Kio (307 200 octets) | 600 points |
 | `POST /api/machine/training/events` | 2,5 Mio (2 621 440 octets) | 200 événements |
 | `POST /api/machine/profiles` | 4 Mio (4 194 304 octets) | 2 000 programmes |
+| `POST /api/machine/commissioning` | 16 Kio (16 384 octets) | 32 contrôles |
 
 Le nombre d'éléments est vérifié aussitôt le JSON lu, avant d'en examiner un
 seul : 601 points, 201 événements ou 2 001 programmes reçoivent 413 (400
@@ -3565,6 +3593,7 @@ déploiement.
 | `GET /api/machine/operators` | - | `{status: "signed", payload, signature, server_contract_version}`, ou `{status: "not_configured", server_contract_version}` sans clé de signature utilisable ([ci-dessous](#la-liste-des-opérateurs-signée-contrat-113-anh-152)) | contrat 1.13 : au démarrage de la console, puis au plus une fois par minute, au repos seulement ; non limitée en débit |
 | `GET /api/machine/config` | - | `{status: "signed", payload, signature, server_contract_version}`, ou `{status: "not_configured", server_contract_version}` sans clé de signature utilisable ([ci-dessous](#la-configuration-signée-contrat-115-anh-141)) | contrat 1.15 : au démarrage de la console, puis au plus une fois par minute, au repos seulement ; non limitée en débit |
 | `POST /api/machine/config/applied` | `{revision, hash}`, ou `{revision, hash, refusal}` pour une révision que la console refuse (`refusal` de 1 à 500 caractères, comptés en points de code) | `{status: "applied"\|"refused"\|"unchanged", server_contract_version}` ; 400 `invalid_request` pour un corps mal formé, une révision inconnue de la machine, une autre empreinte, ou une révision jamais approuvée sur le site (un brouillon, ou une révision refusée avant toute approbation) : ce que dit la machine ne fait jamais appliquer une révision qui n'a pas été approuvée | contrat 1.15 : après chaque application, ou chaque refus ; limite 1 toutes les 10 s, réserve 5 |
+| `POST /api/machine/commissioning` | `{ranAt, operator, attestation: {operator, statement, at}, stoSource, controls: [{id, state, detail}], drive: {tfrHz, hspHz, lspHz, accS, decS}\|null, bitalinoAddress\|null, softwareVersion, medicalParametersVersion\|null, configHash\|null}` (depuis 1.18) | `{recordId, verdict, findings, signed, server_contract_version}` ; 409 `commissioning_refused`, rien d'écrit ([ci-dessous](#la-mise-en-service-dune-machine-contrat-118-anh-115)) | une fois par mise en service, que lance un opérateur à la console |
 | `GET /api/machine/roster` | - | `{riders: [{userId, name, hrMax\|null, birthYear\|null, fit, fitnessValidUntil\|null, consent, fitnessQuestionnaireVersion\|null}]}` (`getRoster`, [`roster` du contrat 1.6](../contracts/machine-api.json)) | au démarrage de la console, puis toutes les 60 s sans séance en cours ; non limitée en débit. La console garde la liste en mémoire seulement, au plus 15 min sans nouvelle réponse, et la vide sur un 401 ou un 403 ([raspberry-pi.md, 4.5](raspberry-pi.md#45-le-passager--la-liste-du-tableau-de-bord-anh-84)) |
 | `GET /api/machine/training/poll` | - | `{session: null, incidents_open_high, drive_interventions_due, server_contract_version}` ou `{session: {sessionId, mode: "auto", profileId, totalDurationS\|null, subjectId, subjectLabel, subjectHrMax, subjectAge\|null, operatorName, profilesDigest\|null}, incidents_open_high, drive_interventions_due, server_contract_version}` (`profilesDigest` depuis 1.12, à toute console : l'empreinte de la liste d'où le lancement a été fait) ou, depuis 1.9 et seulement à une console qui l'annonce, `{session: {sessionId, mode: "bench", occupancy: "ballast", ballastKg\|null, notes\|null, operatorName}, incidents_open_high, drive_interventions_due, server_contract_version}`. `incidents_open_high` (depuis 1.10, ANH-145, à toute console) : le nombre d'incidents de gravité haute de la machine ouverts ou analysés, que le pré-vol lit. `drive_interventions_due` (depuis 1.16, ANH-149, à toute console) : le nombre de défauts variateur de la machine qui attendent leur intervention au carnet de bord | toutes les 3 s, sans séance en cours ni lancement en attente, quels que soient les programmes depuis 1.9 (un lancement auto que la console ne prend pas est laissé comme s'il n'était pas là) |
 | `POST /api/machine/training/start` | `{sessionId, startedAt?, sessionAgeMs?, profilesDigest?}` (`profilesDigest` depuis 1.12 : l'empreinte de la liste que la machine tient ; une valeur qui n'est pas du texte n'est pas lue) | `{success: true}`, aussi pour une confirmation répétée d'un départ déjà confirmé dont la machine n'a encore rien envoyé et sans arrêt demandé, dans les 90 s qui suivent le départ daté par le serveur à la première confirmation (contrat 1.8) ; **409** `{error: <refus à l'armement>, message}` si le lancement revérifié est refusé (contrat 1.5) | après la confirmation de l'opérateur et avant l'armement ; seul un 2xx autorise l'armement, et sur un 409 la console n'arme pas et n'envoie pas de fin. Les deux champs sont facultatifs. Jamais limitée en débit |
@@ -3935,6 +3964,96 @@ contrat ([entrée `machine_pairing`](../contracts/machine-api.json)).
   remplacé encore ouvert), `machine_pairing.burned`, `machine_pairing.claimed`,
   puis `machine_key.created` et `machine_key.revoked` de la rotation. Jamais le
   code, son sel, son empreinte ni la clé.
+
+### La mise en service d'une machine (contrat 1.18, ANH-115)
+
+`POST /api/machine/commissioning`, avec la clé de la machine, une toutes les
+30 s, deux d'avance, 16 Kio au plus (`machine_commissioning` du
+[contrat](../contracts/machine-api.json)). La console envoie ce qu'elle a
+jugé et lu à sa mise en service, au repos, capsule vide : qui l'a lancée et
+l'attestation de l'arrêt d'urgence (son auteur, sa phrase exacte, sa date), la
+source STO, chaque contrôle `{id, state, detail}`, les cinq paramètres du
+variateur relus (ou `null`), l'adresse du BITalino et les versions. Une mise
+en service rouge est envoyée aussi : elle est une preuve.
+
+- **Le rapport** (`parseCommissioningReport`). Chaque champ du contrat, rien
+  d'autre. Les dates sont des millisecondes entières de `min_date_ms`
+  (2026-01-01 UTC, avant toute console de ce logiciel) à 8,64e15 (la plus
+  grande date que JavaScript tient). L'attestation, donnée une fois par
+  démarrage, peut précéder de plusieurs heures la fin des contrôles, mais
+  pas les suivre ; datée avant `min_date_ms`, elle a été donnée quand
+  l'horloge de la console n'était pas à l'heure (un Pi n'a pas d'horloge à
+  lui) et ne dit rien de quand. La fin des contrôles ne dépasse pas
+  l'horloge du serveur de plus d'une minute (`clock_skew_ms`) : celle de la console,
+  tenue par un service de temps est à 5 s près (son contrôle `clock`, que le
+  rapport porte), et une minute couvre ce bord, la latence du lien et
+  l'erreur du serveur. Elle n'est pas plus ancienne que dix minutes
+  (`max_age_ms`) : la console date la fin après sa passe et la relecture du
+  variateur, juste avant d'envoyer, et n'envoie qu'une fois, sans file
+  d'attente ni nouvel essai (une route que son lien retient après un 429 est
+  répondue aussitôt, rien n'est envoyé, ni alors ni plus tard), une requête
+  de quelques secondes (le délai de 3 s du lien borne chacune de ses phases,
+  pas le tout). L'âge est donc la latence de cette requête et l'erreur de
+  l'horloge de la console, quelques secondes avec une horloge tenue ; dix
+  minutes laissent de la marge à un lien lent et refusent un rapport gardé
+  puis envoyé plus tard. Une console dont l'horloge retarde de plus de dix
+  minutes sur celle du serveur est refusée. Ce que la carte offre après un
+  échec est une nouvelle mise en service, avec sa propre fin. Aucun texte ni identifiant
+  ne porte un caractère des catégories Unicode `forbidden_categories` : Cc
+  (les contrôles), Cf (les caractères de format : marques, remplacements et
+  isolats de direction, largeur nulle, trait d'union conditionnel,
+  opérateurs invisibles, étiquettes), Zl et Zp (les séparateurs de ligne et
+  de paragraphe) : une fiche est lue par des personnes, rien n'y cache ni n'y
+  réordonne ce qu'elle montre. Sinon 400 `invalid_request`, rien d'écrit.
+
+- **La référence.** La fiche variateur courante du registre, son fichier
+  (`storageId`) et ses valeurs tapées, l'adresse du BITalino et la version
+  logicielle qu'attend le registre (`machineCommissioning.reference`) : le
+  texte signé nomme la fiche à laquelle il a été comparé. Sans fiche portant
+  ses valeurs : 409 `commissioning_refused`, rien d'écrit. Une mise en service
+  de la machine de même fin (`ranAt`) déjà enregistrée : 409 aussi, un rejeu.
+- **Les personnes.** Celui qui l'a lancée et celui qui a attesté l'arrêt
+  d'urgence sont tous deux sur la liste d'opérateurs de la machine à
+  l'instant de l'envoi (`onOperatorList`, la règle de `operatorList`) :
+  activés, un code posé, admin ou gestionnaire de son organisation. Sinon 409.
+- **La comparaison** (`findingsOf`, `convex/lib/commissioning.ts`). Chaque
+  écart `{id, expected, read}` : `sto_bridged` pour une source STO
+  `bridged_declared`, `sto_source` pour toute autre source que
+  `drive_input` (une machine au STO ponté ou simulé n'est jamais conforme),
+  `control:<id>` pour un contrôle de `required_controls` qui n'est pas
+  `ok` (`drive_link`, `drive_state`, `estop`, `verdict`, `disk`, `clock`,
+  `contract`, `medical`, `bitalino`, `sto_source`, `sto_ready`,
+  `drive_limits`, tous rouges en mise en service quand ils ne tiennent pas)
+  et pour tout autre contrôle jugé `block` (un autre `warn`, comme la
+  température, reste conforme), `control_missing:<id>` pour un contrôle
+  requis absent du rapport,
+  `drive_unread` ou `drive_tfr`, `drive_hsp`, `drive_lsp`, `drive_acc`,
+  `drive_dec` pour une valeur qui diffère d'un dixième ou plus,
+  `bitalino_address` (comparée sans casse) et `software_version`, y compris
+  quand le registre ne les renseigne pas. `conforming` sans aucun écart.
+- **L'enregistrement.** Le texte canonique est signé Ed25519 par la clé du
+  catalogue quand elle est posée, puis `machineCommissioning.record` relit la
+  référence dans sa transaction : une fiche remplacée ou un opérateur
+  désactivé entre les deux refuse l'enregistrement (409), rien d'écrit.
+  Sinon une ligne de `machine_commissioning`, une ligne du carnet
+  (`commissioning`) et l'audit `commissioning.recorded` (source `machine`,
+  sans détail). Le niveau de validation de la machine ne change pas : seule
+  une revue du registre l'élève (ANH-147).
+- **La réponse.** 200 `{recordId, verdict, findings, signed,
+  server_contract_version}`, que la console montre.
+- **La lecture.** `listCommissionings` (les 50 dernières d'une machine) et
+  `getCommissioning` (une, avec le nom de qui l'a lancée et de qui a attesté,
+  le texte signé et sa signature), sous la règle de lecture du registre :
+  l'admin Anheart, ou un admin de l'organisation de la machine.
+- **Pas de PDF.** Le ticket demandait une fiche PDF dans Convex Storage. La
+  fiche est un enregistrement JSON signé : le site la rend en page à
+  imprimer, que le navigateur enregistre en PDF, comme le rapport de séance et
+  le carnet de bord, et en exporte le texte signé avec sa signature, vérifiable
+  hors ligne avec la clé publique du contrat. Aucune bibliothèque PDF, aucun
+  fichier dans Storage. Qui vérifie un export vérifie la signature de
+  `payload` tel quel, puis, dans le texte signé, que `kind` vaut
+  `commissioning_record` et que `machineId` est la machine attendue : la clé
+  signe aussi le catalogue, la liste d'opérateurs et la configuration.
 
 ### Routes retirées
 
@@ -5010,6 +5129,7 @@ sont décrites ci-dessous.
 
 | Mineure | Ajouts, tous compatibles |
 |---|---|
+| `1.18` | La mise en service d'une machine (ANH-115, [entrée `machine_commissioning`](../contracts/machine-api.json), [§6](#la-mise-en-service-dune-machine-contrat-118-anh-115)) : la route `POST /api/machine/commissioning`, une toutes les 30 s par machine, 16 Kio au plus ; le code d'erreur `commissioning_refused` (409). Un serveur antérieur répond 404. Ordre de déploiement : Convex, puis l'image du Pi. |
 | `1.17` | L'appairage d'une console par un code à usage unique (ANH-115, [entrée `machine_pairing`](../contracts/machine-api.json), [§6](#lappairage-dune-console-contrat-117-anh-115)) : la route `POST /api/machine/pair {code, serialPi}`, sans clé (`machine_key_exempt_routes`), sous un seau global de 20 par minute ; le code d'erreur `pairing_refused` (401). La console 1.17 de ce dépôt l'appelle depuis son écran de mise en service, tant qu'elle n'a pas de clé ([raspberry-pi.md, 12.8](raspberry-pi.md#128-la-mise-en-service-par-code-dappairage-anh-115)) ; un serveur antérieur répond 404. Ordre de déploiement : Convex, puis l'image du Pi. |
 | `1.16` | Le défaut variateur qui attend son intervention (ANH-149, [entrée `drive_interventions`](../contracts/machine-api.json), [carnet de bord](#machine_logbook--carnet-de-bord-des-machines-anh-149)) : la réponse de `GET /api/machine/training/poll` porte `drive_interventions_due`, le nombre de défauts variateur de la machine qui attendent leur intervention, à toute console ; la console 1.16 de ce dépôt le lit dans son pré-vol et ferme tout départ avec une personne à bord tant qu'il n'est pas nul, plus strictement que le serveur. Un refus à l'armement de plus en **409**, `drive_intervention_required`, pour un lancement auto seulement : il était dit `incident_open` avant 1.16, code qui ne dit plus qu'un incident grave ouvert. Une console antérieure ignore le champ et ne connaît pas ce code : sur ce 409 elle n'arme pas, n'envoie pas de fin, et montre la phrase générique qui le nomme, `depart distant refuse (HTTP 409, drive_intervention_required)` ; son indicateur de liaison ne le reconnaît pas et le note jusqu'au poll suivant. Ordre de déploiement : Convex avant l'image du Pi. |
 | `1.15` | La configuration de la machine tenue dans Convex (ANH-141, [entrée `machine_config`](../contracts/machine-api.json), [§6](#la-configuration-signée-contrat-115-anh-141)) : la route `GET /api/machine/config`, non limitée en débit, qui répond la révision en vigueur signée avec le niveau de validation de la machine, ou `not_configured` sans clé ; la route `POST /api/machine/config/applied {revision, hash, refusal?}`, limitée à 1 toutes les 10 s ; `config_hash` du heartbeat gardé (`machines.configHash`). Aucun code d'erreur nouveau. La console 1.15 de ce dépôt demande la route au repos, applique la révision et le dit ; tant qu'elle n'a appliqué aucune révision, elle envoie `config_hash: null`. Ordre de déploiement : Convex, puis la clé de signature dans Convex, puis l'image du Pi. |

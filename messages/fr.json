@@ -158,6 +158,9 @@
       },
       "logbook": {
         "entry_added": "Entrée ajoutée au carnet de bord"
+      },
+      "commissioning": {
+        "recorded": "Mise en service enregistrée par la machine"
       }
     },
     "targets": {
@@ -321,7 +324,16 @@
     "radiiSaved": "Mesures enregistrées.",
     "sheetSaved": "Fiche variateur déposée.",
     "reviewSaved": "Revue enregistrée.",
-    "levelLowered": "Niveau abaissé avec son motif."
+    "levelLowered": "Niveau abaissé avec son motif.",
+    "sheetValues": "Valeurs de la fiche, au dixième",
+    "sheetValuesHelp": "Les cinq valeurs, ou aucune. Une mise en service ne s'enregistre que contre une fiche qui les porte.",
+    "tfrHz": "tFr (Hz)",
+    "hspHz": "HSP (Hz)",
+    "lspHz": "LSP (Hz)",
+    "accS": "ACC (s)",
+    "decS": "dEC (s)",
+    "sheetParameters": "tFr {tfr} Hz, HSP {hsp} Hz, LSP {lsp} Hz, ACC {acc} s, dEC {dec} s",
+    "noSheetParameters": "Valeurs non tapées : aucune mise en service ne s'enregistre contre cette fiche."
   },
   "machineConfig": {
     "title": "Configuration de la machine",
@@ -409,6 +421,7 @@
     "unknown_software_version": "Cette version logicielle du Pi n'est pas enregistrée.",
     "unknown_medical_parameters_version": "Cette version des paramètres médicaux n'est pas enregistrée.",
     "invalid_registry_file": "Pièce jointe absente, invalide, trop ancienne ou déjà utilisée.",
+    "invalid_drive_parameters": "Valeurs du variateur refusées : des dixièmes dans les plages du variateur (tFr de 10 à 599 Hz, HSP et LSP de 0 à 599 Hz, ACC et dEC de 0 à 999,9 s), avec LSP ≤ HSP ≤ tFr.",
     "validation_level_not_next": "Une revue doit accorder exactement le niveau de validation suivant.",
     "validation_level_not_lower": "Le niveau demandé doit être inférieur au niveau actuel.",
     "downgrade_reason_required": "La descente de niveau exige un motif de 3 à 500 caractères.",
@@ -698,6 +711,73 @@
     "expired": "Ce code a expiré. Émettez-en un autre depuis la fiche de la machine.",
     "codeWarning": "Montré cette seule fois. Lisez-le au technicien ; ne le copiez dans aucun message, ticket ni capture.",
     "codeDone": "Fermer"
+  },
+  "machineCommissioning": {
+    "title": "Mises en service",
+    "description": "Ce que la console a jugé et lu à chaque mise en service, comparé au registre. Une machine au STO ponté ou simulé n'est jamais conforme. Une mise en service ne change pas le niveau de validation.",
+    "none": "Aucune mise en service enregistrée.",
+    "open": "Voir la fiche",
+    "findings": "{count, plural, one {# écart} other {# écarts}}",
+    "unsigned": "non signée",
+    "verdicts": {
+      "conforming": "Conforme",
+      "nonconforming": "Non conforme"
+    },
+    "printTitle": "Fiche de mise en service",
+    "printMachine": "Machine {id}",
+    "recordedAt": "Enregistrée le {at}",
+    "ranAt": "Contrôles terminés à la console le {at}",
+    "back": "Retour à la machine",
+    "printButton": "Imprimer ou enregistrer en PDF",
+    "printHint": "La fenêtre d'impression du navigateur enregistre la fiche en PDF.",
+    "download": "Télécharger le JSON signé",
+    "notAllowed": "Fiche introuvable, ou réservée aux administrateurs de la machine.",
+    "people": "Personnes",
+    "ranBy": "Lancée par {name}",
+    "attestedBy": "Arrêt d'urgence attesté par {name}, le {at} :",
+    "sto": "Chaîne STO",
+    "stoSource": "Source lue : {source}",
+    "stoBridged": "STO ponté déclaré : aucun arrêt d'urgence matériel. Une telle mise en service n'est jamais conforme.",
+    "findingsTitle": "Écarts",
+    "noFindings": "Aucun écart.",
+    "finding": "{label} : attendu {expected}, lu {read}",
+    "findingIds": {
+      "sto_bridged": "STO ponté",
+      "sto_source": "Source STO",
+      "drive_unread": "Variateur non relu",
+      "drive_tfr": "tFr",
+      "drive_hsp": "HSP",
+      "drive_lsp": "LSP",
+      "drive_acc": "ACC",
+      "drive_dec": "dEC",
+      "bitalino_address": "Adresse du BITalino",
+      "software_version": "Version logicielle"
+    },
+    "controlFinding": "Contrôle {id}",
+    "drive": "Variateur",
+    "sheet": "Fiche {version}, signée par {by} le {at}",
+    "parameter": "Paramètre",
+    "expected": "Fiche",
+    "read": "Lu",
+    "notRead": "non lu",
+    "controls": "Contrôles de la console",
+    "control": "Contrôle",
+    "state": "État",
+    "detail": "Détail",
+    "states": {
+      "ok": "vert",
+      "warn": "orange",
+      "block": "rouge"
+    },
+    "versions": "Versions",
+    "softwareVersion": "Logiciel : {version} (attendu : {expected})",
+    "medicalVersion": "Paramètres médicaux : {version}",
+    "configHash": "Configuration : {hash}",
+    "bitalino": "BITalino : {address} (registre : {expected})",
+    "missingValue": "non renseignée",
+    "signature": "Signature",
+    "signed": "Texte signé Ed25519 par le tableau de bord : le JSON téléchargé se vérifie avec sa clé publique.",
+    "notSigned": "Texte non signé : aucune clé de signature n'était posée."
   },
   "consoleAccess": {
     "title": "Accès à la console",
@@ -1908,7 +1988,8 @@
       "config_change": "Configuration appliquée",
       "incident": "Incident",
       "validation_review": "Revue de validation",
-      "note": "Note"
+      "note": "Note",
+      "commissioning": "Mise en service"
     }
   }
 }

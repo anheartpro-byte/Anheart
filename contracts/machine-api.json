@@ -1,6 +1,6 @@
 {
   "description": "Contrat HTTP entre une machine (console du Raspberry Pi) et Convex. Source unique : convex/lib/contract.ts lit ce fichier, raspberry-pi/src/contract.py y est épinglé par ses tests. Voir docs/convex.md, section Versions et compatibilité.",
-  "contract_version": "1.17",
+  "contract_version": "1.18",
   "header": "X-Anheart-Contract",
   "server_version_field": "server_contract_version",
   "heartbeat_response_fields": ["success", "serverTime", "server_contract_version"],
@@ -78,6 +78,38 @@
     "global_limit": { "rate": 20, "period_ms": 60000, "capacity": 20 },
     "response_fields": ["machineId", "apiKey", "keyPrefix", "convexUrl", "server_contract_version"]
   },
+  "machine_commissioning": {
+    "since": "1.18",
+    "route": "POST /api/machine/commissioning",
+    "description": "Depuis 1.18 (ANH-115), la console envoie le résultat d'une mise en service : la liste de contrôles de mise en service, jugée au repos, capsule vide, lancée par l'opérateur connecté (`operator`), avec l'attestation de l'arrêt d'urgence donnée depuis son démarrage (`attestation` : `{operator, statement, at}`, son auteur, sa phrase exacte et sa date en millisecondes Unix), la source STO (`stoSource`, une des `sto_sources` de `health_state`), chaque contrôle jugé (`controls`, de 1 à `max_controls`, chacun `{id, state, detail}`, `state` parmi `control_states`, les `id` sans doublon), les paramètres du variateur relus (`drive` : `drive_fields`, de 0 à `drive_read_max`, ou `null` quand ils n'ont pas pu être lus), l'adresse du BITalino (`bitalinoAddress`) et les versions (`softwareVersion`, `medicalParametersVersion`, `configHash`), `ranAt` étant la fin de la mise en service à l'horloge de la console. Les dates sont des millisecondes Unix entières de `min_date_ms` à `max_date_ms` ; `attestation.at` ne suit pas `ranAt`, et `ranAt` n'est ni plus ancien que l'horloge du serveur moins `max_age_ms` (aucune file d'attente : la console envoie dès la fin de ses contrôles) ni plus récent qu'elle plus `clock_skew_ms`, sinon 400 `invalid_request`. Aucun texte libre ni identifiant ne porte un caractère des catégories Unicode `forbidden_categories` : les contrôles (Cc), les caractères de format (Cf : marques, remplacements et isolats de direction, largeur nulle, trait d'union conditionnel, opérateurs invisibles, étiquettes), les séparateurs de ligne et de paragraphe (Zl, Zp). Une mise en service jugée rouge est envoyée aussi : elle est une preuve. Une mise en service interrompue parce que la console a quitté le repos n'est jamais envoyée. Le serveur compare la lecture à la fiche variateur du registre de la machine (ses valeurs tapées, au dixième près), l'adresse du BITalino et la version logicielle à celles qu'attend le registre, puis écrit un enregistrement que rien ne modifie ensuite, son texte signé Ed25519 sur le canal du catalogue (`signing_key_env`, `public_key`, `kind`) quand la clé est posée, et une ligne du carnet de bord de la machine (`commissioning`). Il répond 200 `{recordId, verdict, findings, signed, server_contract_version}` : `verdict` vaut `conforming` sans aucun écart, `nonconforming` sinon ; chaque écart `{id, expected, read}` porte un des `finding_ids`, `control:<id>` pour un contrôle de `required_controls` qui n'est pas `ok` ou pour tout autre contrôle jugé `block` (un autre contrôle `warn` reste conforme), ou `control_missing:<id>` pour un contrôle de `required_controls` absent du rapport. Une source `bridged_declared` est toujours un écart (`sto_bridged`), et toute autre source que `drive_input` aussi (`sto_source`) : une machine au STO ponté ou simulé n'est jamais enregistrée conforme. Le niveau de validation de la machine ne change pas. Refus 409 `commissioning_refused`, rien d'écrit : aucune fiche variateur avec ses valeurs au registre, un opérateur ou l'auteur de l'attestation qui n'est pas un opérateur habilité de la machine (`operator_list`), une mise en service de la machine de même `ranAt` déjà enregistrée (un rejeu), ou le registre changé pendant l'enregistrement. Un serveur antérieur répond 404.",
+    "kind": "commissioning_record",
+    "signing_key_env": "ANHEART_CATALOG_SIGNING_KEY",
+    "public_key": "raspberry-pi/config/anheart_catalog.pub",
+    "control_states": ["ok", "warn", "block"],
+    "max_controls": 32,
+    "max_control_id_chars": 40,
+    "max_detail_chars": 300,
+    "max_statement_chars": 400,
+    "max_text_chars": 64,
+    "drive_fields": ["tfrHz", "hspHz", "lspHz", "accS", "decS"],
+    "drive_read_max": 6553.5,
+    "sheet_bounds": {
+      "tfrHz": { "min": 10, "max": 599 },
+      "hspHz": { "min": 0, "max": 599 },
+      "lspHz": { "min": 0, "max": 599 },
+      "accS": { "min": 0, "max": 999.9 },
+      "decS": { "min": 0, "max": 999.9 }
+    },
+    "max_date_ms": 8640000000000000,
+    "clock_skew_ms": 60000,
+    "max_age_ms": 600000,
+    "min_date_ms": 1767225600000,
+    "forbidden_categories": ["Cc", "Cf", "Zl", "Zp"],
+    "required_controls": ["drive_link", "drive_state", "estop", "verdict", "disk", "clock", "contract", "medical", "bitalino", "sto_source", "sto_ready", "drive_limits"],
+    "verdicts": ["conforming", "nonconforming"],
+    "finding_ids": ["sto_bridged", "sto_source", "drive_unread", "drive_tfr", "drive_hsp", "drive_lsp", "drive_acc", "drive_dec", "bitalino_address", "software_version"],
+    "response_fields": ["recordId", "verdict", "findings", "signed", "server_contract_version"]
+  },
   "contract_exempt_routes": {
     "GET /api/machine/training/status": "Porte la demande d'arrêt, qui doit atteindre une séance en cours quelle que soit la version du contrat. La clé de la machine reste exigée et la réponse annonce `server_contract_version`. Une console d'une autre majeure n'en retient que ce qui arrête : `stopRequested: true` ou `active: false`."
   },
@@ -101,7 +133,8 @@
       "POST /api/machine/training/local": { "rate": 1, "period_ms": 60000, "capacity": 20 },
       "POST /api/machine/profiles": { "rate": 1, "period_ms": 10000, "capacity": 5 },
       "POST /api/machine/records/commit": { "rate": 10, "period_ms": 1000, "capacity": 64 },
-      "POST /api/machine/config/applied": { "rate": 1, "period_ms": 10000, "capacity": 5 }
+      "POST /api/machine/config/applied": { "rate": 1, "period_ms": 10000, "capacity": 5 },
+      "POST /api/machine/commissioning": { "rate": 1, "period_ms": 30000, "capacity": 2 }
     }
   },
   "max_body_bytes": {
@@ -110,7 +143,8 @@
       "POST /api/machine/heartbeat": 16384,
       "POST /api/machine/training/telemetry": 307200,
       "POST /api/machine/training/events": 2621440,
-      "POST /api/machine/profiles": 4194304
+      "POST /api/machine/profiles": 4194304,
+      "POST /api/machine/commissioning": 16384
     },
     "max_programmes": 2000
   },
@@ -188,6 +222,10 @@
     "contract_unsupported": {
       "statuses": [426],
       "meaning": "La majeure du contrat annoncée par la machine est absente ou n'est pas servie. La réponse porte `supported`, la liste des majeures servies."
+    },
+    "commissioning_refused": {
+      "statuses": [409],
+      "meaning": "Depuis 1.18, mise en service refusée sans rien écrire (`machine_commissioning`) : aucune fiche variateur avec ses valeurs au registre, un opérateur ou l'auteur de l'attestation non habilité sur la machine, une mise en service de même `ranAt` déjà enregistrée, ou le registre changé pendant l'enregistrement."
     },
     "pairing_refused": {
       "statuses": [401],

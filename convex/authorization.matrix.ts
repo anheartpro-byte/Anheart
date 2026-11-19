@@ -376,6 +376,30 @@ export const MATRIX: Entry[] = [
         throw new Error("Empty registry badges differ");
     },
   },
+  {
+    id: "machineCommissioning.listCommissionings", ref: api.machineCommissioning.listCommissionings, kind: "query",
+    cases: registryReadCases(),
+    build: async (w, actor, scope) => {
+      const machineId = registryTarget(w, actor, scope);
+      await commissioningRecord(w, machineId);
+      return { machineId };
+    },
+    onSuccess: (res, w, actor, scope) => {
+      const rows = res as Array<{ verdict: string; findings: number }>;
+      if (rows.length !== 1 || rows[0].verdict !== "nonconforming" || rows[0].findings !== 1)
+        throw new Error(`Commissioning records of ${registryTarget(w, actor, scope)} differ`);
+    },
+  },
+  {
+    id: "machineCommissioning.getCommissioning", ref: api.machineCommissioning.getCommissioning, kind: "query",
+    cases: registryReadCases(),
+    build: async (w, actor, scope) => ({ recordId: await commissioningRecord(w, registryTarget(w, actor, scope)) }),
+    onSuccess: (res, w) => {
+      const record = res as { operator: { userId: string; firstName?: string }; report: { stoSource: string } };
+      if (record.operator.userId !== w.manager || record.operator.firstName !== "manager" || record.report.stoSource !== "bridged_declared")
+        throw new Error("Commissioning record differs");
+    },
+  },
   ...registryMutationEntries(),
   ...machineConfigEntries(),
   // =========================================================================
@@ -4404,6 +4428,29 @@ function registryTarget(w: World, actor: Actor, scope: Scope) {
   return actor === "orgAdmin" && scope === "foreign" ? w.orgBMachine : w.machine;
 }
 
+/** One synthetic commissioning record of a machine (ANH-115): bridged, so one finding. */
+async function commissioningRecord(w: World, machineId: Id<"machines">) {
+  const reference = {
+    sheet: { storageId: await registryUpload(w), version: "TEST-v1", signedBy: "TEST signataire", at: 0, parameters: { tfrHz: 60, hspHz: 50, lspHz: 0, accS: 3, decS: 3 } },
+    bitalinoAddress: null,
+    expectedSoftwareVersion: null,
+  };
+  const report = {
+    ranAt: 0, operator: w.manager, attestation: { operator: w.manager, statement: "TEST attestation", at: 0 },
+    stoSource: "bridged_declared", controls: [{ id: "estop", state: "ok", detail: "TEST" }],
+    drive: reference.sheet.parameters, bitalinoAddress: null, softwareVersion: "pi-0.1.0",
+    medicalParametersVersion: null, configHash: null,
+  };
+  const findings = [{ id: "sto_bridged", expected: "drive_input", read: "bridged_declared" }];
+  return await w.t.run(async (ctx) => {
+    const machine = await ctx.db.get(machineId);
+    return await ctx.db.insert("machine_commissioning", {
+      machineId, organizationId: machine?.organizationId, recordedAt: 0, ranAt: 0, operator: w.manager, attestedBy: w.manager,
+      verdict: "nonconforming", findings, payload: JSON.stringify({ reference, report }), signature: null,
+    });
+  });
+}
+
 /** A write of the programme catalogue (ANH-137): the Anheart admin's alone. */
 function catalogueWriteCases(): Case[] {
   return [
@@ -4927,6 +4974,7 @@ export const ROUTE_COVERAGE: ReadonlyArray<{
   { method: "GET", path: "/api/machine/operators", tests: "consoleAccess.test.ts (signature verified with a test key, disabled operator and revoked tablet left out, not configured); machineAuth.test.ts (machine key); rateLimitsRoutes.test.ts (never limited)" },
   { method: "GET", path: "/api/machine/config", tests: "machineConfigs.test.ts (signature verified with a test key, revision in force, level, not configured); machineAuth.test.ts (machine key); rateLimitsRoutes.test.ts (never limited)" },
   { method: "POST", path: "/api/machine/pair", tests: "machinePairing.test.ts (no key, contract header, global bucket first, size, form, one claim, five failures burn, serial bound, uniform 401, every other key revoked, no plain key kept); contract.test.ts (pairing_refused)" },
+  { method: "POST", path: "/api/machine/commissioning", tests: "machineCommissioning.test.ts (report checked to the contract, comparison at a tenth, signature verified with a test key, logbook and audit, red run recorded, no sheet values, operator and attester off the list, registry changed, 400, 413, limit per machine); machineAuth.test.ts (machine key); contract.test.ts (commissioning_refused)" },
   { method: "POST", path: "/api/machine/config/applied", tests: "machineConfigs.test.ts (applied, refused, unknown revision, other hash, draft, malformed body); machineAuth.test.ts (machine key); rateLimits.test.ts (limit per machine)" },
   { method: "POST", path: "/api/machine/profiles", tests: "httpRoutes.test.ts (malformed body)" },
   { method: "POST", path: "/api/machine/training/start", tests: "httpRoutes.test.ts (non-pending refused); contract.test.ts and armingRecheck.test.ts (409 with the arming refusal's code)" },

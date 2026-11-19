@@ -777,6 +777,25 @@
         <tbody id="preflight-rows"></tbody>
       </table>
     </div>
+    <!--
+      The commissioning (ANH-115): the pre-flight in commissioning mode, at rest, the capsule
+      empty, sent to the dashboard, which compares it with the machine's registry and records
+      it. Only on a console linked to a dashboard; the console says why none can start.
+    -->
+    <div id="commissioning-card" class="card hidden">
+      <h2>Mise en service <span id="commissioning-state" class="pill">&mdash;</span></h2>
+      <p class="note">Le pre-vol en mode mise en service, au repos, capsule vide, puis envoye au tableau de bord, qui le compare au registre de la machine et l'enregistre. Une machine au STO ponte ou simule n'est jamais enregistree conforme : sa mise en service est enregistree quand meme, comme preuve. Le niveau de validation de la machine ne change pas.</p>
+      <button id="commissioning-run" class="btn" type="button">Lancer la mise en service</button>
+      <p id="commissioning-note" class="note" role="status"></p>
+      <p id="commissioning-summary" class="note"></p>
+      <ul id="commissioning-findings"></ul>
+      <table class="preflight">
+        <thead>
+          <tr><th>Controle</th><th>Etat</th><th>Raison</th></tr>
+        </thead>
+        <tbody id="commissioning-rows"></tbody>
+      </table>
+    </div>
   </section>
 
 </main>

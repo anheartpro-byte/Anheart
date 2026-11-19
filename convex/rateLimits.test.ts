@@ -168,6 +168,12 @@ const ROUTES: Record<
     path: "/api/machine/config/applied",
     body: JSON.stringify({ revision: 1, hash: "0".repeat(64) }),
   }),
+  // A body the route refuses (400): the token is taken before the body is read.
+  "POST /api/machine/commissioning": async () => ({
+    method: "POST",
+    path: "/api/machine/commissioning",
+    body: "{}",
+  }),
 };
 
 async function rateLimited(response: Response) {

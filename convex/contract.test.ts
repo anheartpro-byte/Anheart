@@ -154,7 +154,7 @@ async function startAfter(
 describe("ANH-133 EX-1 one contract, defined in contracts/machine-api.json", () => {
   it("serves the version, header and error codes of the shared file", () => {
     expect(CONTRACT_VERSION).toBe(shared.contract_version);
-    expect(CONTRACT_VERSION).toBe("1.17");
+    expect(CONTRACT_VERSION).toBe("1.18");
     expect(CONTRACT_HEADER).toBe(shared.header);
     expect(MACHINE_ERROR_CODES).toEqual(Object.keys(shared.error_codes));
     expect(MACHINE_ERROR_CODES.length).toBeGreaterThan(0);
@@ -889,6 +889,24 @@ describe("ANH-133 EX-5 every refusal is {error: <stable code>, message}", () => 
       status: 426,
       code: "contract_unsupported",
       run: (w) => call(w, "GET", "/api/machine/roster", null),
+    },
+    {
+      name: "commissioning: no drive sheet with its values in the registry",
+      status: 409,
+      code: "commissioning_refused",
+      run: (w) =>
+        post(w, "/api/machine/commissioning", {
+          ranAt: Date.now(),
+          operator: "nobody",
+          attestation: { operator: "nobody", statement: "TEST attestation", at: Date.now() },
+          stoSource: "drive_input",
+          controls: [{ id: "estop", state: "ok", detail: "TEST" }],
+          drive: null,
+          bitalinoAddress: null,
+          softwareVersion: "pi-0.1.0",
+          medicalParametersVersion: null,
+          configHash: null,
+        }),
     },
     {
       name: "pair: no open code for this serial number",

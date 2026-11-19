@@ -91,7 +91,7 @@ describe("ANH-132 completeness of the authorization matrix", () => {
 
   it("covers every machine HTTP route", () => {
     const discovered = discoverRoutes();
-    expect(discovered.length).toBe(21);
+    expect(discovered.length).toBe(22);
     expect(missing(discovered, coveredRoutes)).toEqual([]);
   });
 

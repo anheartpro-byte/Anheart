@@ -60,6 +60,7 @@ import { MachineKeysCard } from "@/components/machines/MachineKeysCard";
 import { MachineConsoleAccessCard } from "@/components/machines/MachineConsoleAccessCard";
 import { MachineRegistryCard } from "@/components/machines/MachineRegistryCard";
 import { MachinePairingCard } from "@/components/machines/MachinePairingCard";
+import { MachineCommissioningCard } from "@/components/machines/MachineCommissioningCard";
 import { MachineConfigCard } from "@/components/machines/MachineConfigCard";
 import { MachineProgramsCard } from "@/components/training/ProfileList";
 import { LaunchRightsCard } from "@/components/training/LaunchRightsCard";
@@ -331,6 +332,11 @@ export default function MachineDetailPage({
       {/* The pairing of its console (ANH-115): its admins' only. */}
       {isOrganizationAdmin(user?.role) && !machine.isDeleted && (
         <MachinePairingCard machineId={machineId} />
+      )}
+
+      {/* Its commissionings (ANH-115): whoever reads its registry. */}
+      {isOrganizationAdmin(user?.role) && (
+        <MachineCommissioningCard machineId={machineId} />
       )}
 
       {/* The machine's configuration (ANH-141): its admins' only. */}

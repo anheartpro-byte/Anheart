@@ -158,6 +158,9 @@
       },
       "logbook": {
         "entry_added": "Logbook entry added"
+      },
+      "commissioning": {
+        "recorded": "Commissioning recorded by the machine"
       }
     },
     "targets": {
@@ -321,7 +324,16 @@
     "radiiSaved": "Measurements saved.",
     "sheetSaved": "Drive parameter sheet uploaded.",
     "reviewSaved": "Review recorded.",
-    "levelLowered": "Validation level lowered with its reason."
+    "levelLowered": "Validation level lowered with its reason.",
+    "sheetValues": "The sheet's values, to a tenth",
+    "sheetValuesHelp": "All five values, or none. A commissioning is recorded only against a sheet that carries them.",
+    "tfrHz": "tFr (Hz)",
+    "hspHz": "HSP (Hz)",
+    "lspHz": "LSP (Hz)",
+    "accS": "ACC (s)",
+    "decS": "dEC (s)",
+    "sheetParameters": "tFr {tfr} Hz, HSP {hsp} Hz, LSP {lsp} Hz, ACC {acc} s, dEC {dec} s",
+    "noSheetParameters": "Values not typed: no commissioning is recorded against this sheet."
   },
   "machineConfig": {
     "title": "Machine configuration",
@@ -409,6 +421,7 @@
     "unknown_software_version": "This Pi software version is not registered.",
     "unknown_medical_parameters_version": "This medical parameters version is not registered.",
     "invalid_registry_file": "The attachment is missing, invalid, too old or already used.",
+    "invalid_drive_parameters": "Drive values refused: tenths inside the drive's ranges (tFr 10 to 599 Hz, HSP and LSP 0 to 599 Hz, ACC and dEC 0 to 999.9 s), with LSP ≤ HSP ≤ tFr.",
     "validation_level_not_next": "A review must grant exactly the next validation level.",
     "validation_level_not_lower": "The requested level must be lower than the current level.",
     "downgrade_reason_required": "Lowering validation requires a reason of 3 to 500 characters.",
@@ -698,6 +711,73 @@
     "expired": "This code has expired. Issue another from the machine's page.",
     "codeWarning": "Shown this once only. Read it to the technician; never copy it into a message, a ticket or a screenshot.",
     "codeDone": "Close"
+  },
+  "machineCommissioning": {
+    "title": "Commissionings",
+    "description": "What the console judged and read at each commissioning, compared with the registry. A machine with a bridged or simulated STO is never conforming. A commissioning does not change the validation level.",
+    "none": "No commissioning recorded.",
+    "open": "View the record",
+    "findings": "{count, plural, one {# finding} other {# findings}}",
+    "unsigned": "unsigned",
+    "verdicts": {
+      "conforming": "Conforming",
+      "nonconforming": "Nonconforming"
+    },
+    "printTitle": "Commissioning record",
+    "printMachine": "Machine {id}",
+    "recordedAt": "Recorded on {at}",
+    "ranAt": "Checks finished at the console on {at}",
+    "back": "Back to the machine",
+    "printButton": "Print or save as PDF",
+    "printHint": "The browser's print window saves the record as a PDF.",
+    "download": "Download the signed JSON",
+    "notAllowed": "Record not found, or kept for the machine's administrators.",
+    "people": "People",
+    "ranBy": "Run by {name}",
+    "attestedBy": "Emergency stop attested by {name}, on {at}:",
+    "sto": "STO chain",
+    "stoSource": "Source read: {source}",
+    "stoBridged": "STO declared bridged: no hardware emergency stop. Such a commissioning is never conforming.",
+    "findingsTitle": "Findings",
+    "noFindings": "No finding.",
+    "finding": "{label}: expected {expected}, read {read}",
+    "findingIds": {
+      "sto_bridged": "Bridged STO",
+      "sto_source": "STO source",
+      "drive_unread": "Drive not read",
+      "drive_tfr": "tFr",
+      "drive_hsp": "HSP",
+      "drive_lsp": "LSP",
+      "drive_acc": "ACC",
+      "drive_dec": "dEC",
+      "bitalino_address": "BITalino address",
+      "software_version": "Software version"
+    },
+    "controlFinding": "Check {id}",
+    "drive": "Drive",
+    "sheet": "Sheet {version}, signed by {by} on {at}",
+    "parameter": "Parameter",
+    "expected": "Sheet",
+    "read": "Read",
+    "notRead": "not read",
+    "controls": "Console checks",
+    "control": "Check",
+    "state": "State",
+    "detail": "Detail",
+    "states": {
+      "ok": "green",
+      "warn": "orange",
+      "block": "red"
+    },
+    "versions": "Versions",
+    "softwareVersion": "Software: {version} (expected: {expected})",
+    "medicalVersion": "Medical parameters: {version}",
+    "configHash": "Configuration: {hash}",
+    "bitalino": "BITalino: {address} (registry: {expected})",
+    "missingValue": "not set",
+    "signature": "Signature",
+    "signed": "Text signed Ed25519 by the dashboard: the downloaded JSON is checked with its public key.",
+    "notSigned": "Text not signed: no signing key was set."
   },
   "consoleAccess": {
     "title": "Console access",
@@ -1908,7 +1988,8 @@
       "config_change": "Configuration applied",
       "incident": "Incident",
       "validation_review": "Validation review",
-      "note": "Note"
+      "note": "Note",
+      "commissioning": "Commissioning"
     }
   }
 }

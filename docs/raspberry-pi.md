@@ -4369,6 +4369,65 @@ Le code ([`src/pairing.py`](../raspberry-pi/src/pairing.py)) :
 
 **Désappairer une console** : l'arrêter au repos, retirer `/var/lib/anheart/data/machine.env` (`raspberry-pi/data/machine.env` sur un poste de développement), la redémarrer (`sudo systemctl restart anheart`), puis **Révoquer** la clé sur la fiche de la machine, carte **Clés de la machine** : la console redémarre sans clé, sur son écran de mise en service, et la clé qu'elle tenait n'ouvre plus rien.
 
+### 12.9 Les contrôles de mise en service (ANH-115, contrat 1.18)
+
+Une console appairée, qui juge son pré-vol, offre sa mise en service, page
+Pre-vol ([console-locale.md, section 17](console-locale.md#17-page--pre-vol--anh-142)) :
+`src/commissioning.py`, la carte et ses routes `src/web/commissioning_routes.py`.
+
+* **La liste.** `COMMISSIONING_CONTROLS` est `CONTROLS` du pré-vol, dans son
+  ordre, jugé au banc, avec l'horloge, le BITalino et les paramètres médicaux
+  rouges quand ils ne tiennent pas (`RAISED`). `src/training/preflight.py`
+  n'est pas modifié : ses règles du banc et son verrou « personne à bord »
+  restent les siennes, et `tests/test_commissioning.py` épingle sa liste
+  colonne par colonne : identifiant, libellé, sévérités, délai et la fonction
+  qui juge chaque contrôle. Trois contrôles de plus : `sto_source`, `sto_ready`
+  (`check_sto_ready`, ou un pont déclaré au banc), `drive_limits`
+  (`read_limits` puis `check_limits`, sous le plafond `max_motor_hz` de
+  l'armement). La liste porte chaque contrôle que le tableau de bord exige
+  (`required_controls` du contrat).
+* **Au repos.** D'abord l'attente de roue libre (`CoastDownHold`, ANH-92),
+  par `CommissioningSetup.coasting`, qui n'a pas de valeur par défaut :
+  `build_panel` donne celle du runtime et son temps restant (`coast_words`),
+  dans les mots d'un départ refusé. Elle passe la première, comme pour un
+  départ : une fin de séance dure l'attente, et l'attente est la raison.
+  **Une mise en service est refusée pendant l'attente de roue libre** : après
+  une coupure secteur ou une ouverture du STO, RFRD lit 0 étage coupé alors
+  que le bras peut encore tourner. Puis la règle de la console (`at_rest`, la
+  même que `catalog_at_rest`, que gardent le catalogue, la liste d'opérateurs
+  et la configuration) : aucune séance, aucun départ attendu ni en cours
+  d'armement, aucun lancement du tableau de bord en main ; l'instantané seul
+  reste en REPOS pendant qu'un départ s'arme. Puis celle du contrôle
+  `drive_state` : console en REPOS, variateur ni en défaut ni en marche,
+  moteur à 0. Les trois sont demandées avant de partir, à chaque attente de
+  la passe, juste avant la lecture du variateur et juste avant l'envoi.
+  Reste : une lecture qui chevauche un armement commencé pendant elle, une
+  lecture sans effet sous le verrou du variateur.
+* **La lecture du variateur** passe par le `backend` de la console, celui du
+  runtime et de son enregistreur : une lecture des cinq registres, sérialisée
+  avec les autres échanges par le verrou du client ATV320, rien d'écrit. Ces
+  cinq lectures partent hors de l'ordonnancement de `StoReadGate` ; une
+  lecture qui échoue peut verrouiller un FREEZE `loop_stall` au repos, comme
+  tout échange qui échoue.
+* **La date de l'attestation** envoyée est la fin des contrôles (`ranAt`),
+  moins le temps écoulé depuis l'attestation sur l'horloge monotone
+  (`attested_at`), donc jamais après elle, et jamais sa propre date : un Pi
+  démarre sur l'heure de son dernier arrêt (fake-hwclock), et une attestation
+  donnée avant que le service de temps règle l'horloge dirait cette heure, à
+  des jours près. Sur l'image, cette horloge restaurée rend rare le refus
+  « horloge pas à l'heure » (`MIN_DATE_MS`) ; c'est le contrôle `clock`,
+  rouge en mise en service, qui juge la date de la fin des contrôles.
+* **L'envoi** prend le transport du lien (`PacedTransport`), lié une fois le
+  lien construit (`CommissioningDesk.bind`), et seulement vers un tableau de
+  bord qui a annoncé 1.18 ou plus dans son dernier battement de cœur. Le
+  rapport, encodé comme le transport l'encode (`json.dumps`), tient dans
+  `MAX_BODY_BYTES` : les raisons sont raccourcies de même, de moitié à chaque
+  fois, jusqu'à ce qu'il tienne ; tout caractère des catégories Unicode que
+  le tableau de bord refuse (Cc, Cf, Zl, Zp) y devient une espace
+  (`FORBIDDEN_CATEGORIES`). Aucune mise en service ne part d'une console dont
+  l'horloge, ou l'attestation, est d'avant le 1er janvier 2026
+  (`MIN_DATE_MS`) : le tableau de bord la refuserait.
+
 ---
 
 ## 13. Le contrat de code strict et la gate
@@ -4460,7 +4519,7 @@ dépôt ; la description complète des règles est dans
 
 Ce que fait la console :
 
-* **Chaque requête** porte l'en-tête `X-Anheart-Contract: 1.17`. Il est posé sur
+* **Chaque requête** porte l'en-tête `X-Anheart-Contract: 1.18`. Il est posé sur
   le client HTTP lui-même, pas requête par requête : aucune ne peut partir sans.
 * **Chaque heartbeat** porte `software_version`, `contract_version`,
   `medical_parameters_version` et `config_hash`. `medical_parameters_version`

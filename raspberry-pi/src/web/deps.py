@@ -48,6 +48,7 @@ from typing import Final, Protocol, final, runtime_checkable
 from uuid import uuid4
 
 from src.clock import Clock
+from src.commissioning_view import CommissioningScreen
 from src.config_view import ENV_VIEW, ConfigView
 from src.console_access import LOCAL_DEVICE, LOOPBACK_DEVICE, ConsoleAccess
 from src.control_surface import ControlSurface
@@ -648,6 +649,10 @@ class Services:
     pairing: PairingScreen | None = None
     """The first-power-up screen (``/api/pairing``, ANH-115); ``None``: the console has a key,
     and offers no pairing."""
+
+    commissioning: CommissioningScreen | None = None
+    """The commissioning card (``/api/commissioning``, ANH-115); ``None``: the console is
+    linked to no dashboard, or judges no pre-flight, and offers no commissioning."""
 
     access: ConsoleAccess | None = None
     """Who may act (ANH-152): the signed operator list, the sign-in, the sessions.

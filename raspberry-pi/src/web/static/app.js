@@ -1285,6 +1285,87 @@ function doRunPreflight() {
     });
 }
 
+/* ------------------------------------------------------------------ commissioning */
+
+/*
+  The commissioning (ANH-115), from /api/commissioning: null on a console linked to no
+  dashboard, and the card stays hidden. The run is the console's: the page asks for it, says
+  why none can start, and shows what the dashboard answered. Its words are the console's and
+  the dashboard's; it decides nothing.
+*/
+var COMMISSIONING_WORDS = { conforming: "conforme", nonconforming: "non conforme" };
+var commissioningRunning = false; // a run this page asked for, until its answer comes
+
+function renderCommissioning(row) {
+  show(el("commissioning-card"), !!row);
+  if (!row) {
+    return;
+  }
+  var running = row.running || commissioningRunning;
+  var button = el("commissioning-run");
+  button.disabled = running || !!row.refusal;
+  text(button, running ? "Mise en service en cours..." : "Lancer la mise en service");
+  var findings = el("commissioning-findings");
+  var rows = el("commissioning-rows");
+  findings.textContent = "";
+  rows.textContent = "";
+  var last = row.last;
+  var refusal = !running && row.refusal ? " Pas de mise en service maintenant : " + row.refusal + "." : "";
+  if (!last) {
+    pill(el("commissioning-state"), running ? "en cours" : "aucune", "");
+    text(el("commissioning-summary"), "Aucune mise en service depuis le demarrage de la console." + refusal);
+    return;
+  }
+  if (last.recorded) {
+    var conforming = last.verdict === "conforming";
+    pill(el("commissioning-state"), COMMISSIONING_WORDS[last.verdict] || last.verdict, conforming ? "good" : "bad");
+    text(
+      el("commissioning-summary"),
+      "Enregistree par le tableau de bord" +
+        (last.signed ? ", signee" : ", non signee") +
+        " : " +
+        (last.findings.length ? last.findings.length + " ecart(s)." : "aucun ecart.") +
+        refusal
+    );
+    last.findings.forEach(function (finding) {
+      findings.appendChild(make("li", "", finding.id + " : attendu " + finding.expected + ", lu " + finding.read));
+    });
+  } else {
+    pill(el("commissioning-state"), "non enregistree", "bad");
+    text(el("commissioning-summary"), "Non enregistree : " + last.reason + "." + refusal);
+  }
+  last.controls.forEach(function (control) {
+    var line = make("tr");
+    line.appendChild(make("td", "", control.label));
+    line.appendChild(preflightCell(control));
+    line.appendChild(make("td", "", control.detail));
+    rows.appendChild(line);
+  });
+}
+
+function loadCommissioning() {
+  return api("/api/commissioning").then(renderCommissioning).catch(function () {
+    /* the banner and the token note already say the API is unreachable */
+  });
+}
+
+function doRunCommissioning() {
+  commissioningRunning = true;
+  el("commissioning-run").disabled = true;
+  ok(el("commissioning-note"), "mise en service en cours : le pre-vol est relance, le variateur relu, puis le tableau de bord repond (environ une minute)");
+  api("/api/commissioning/run", { method: "POST" })
+    .then(function (row) {
+      commissioningRunning = false;
+      ok(el("commissioning-note"), "mise en service terminee");
+      renderCommissioning(row);
+    })
+    .catch(function (error) {
+      commissioningRunning = false;
+      problem(el("commissioning-note"), error);
+      loadCommissioning();
+    });
+}
+
 /*
   The confirmations of the console's mode, and none other: the console names
   the fields its attestation takes (attestation_fields) and the words of the
@@ -4543,6 +4624,7 @@ function start() {
     showView("preflight");
   };
   el("preflight-run").onclick = doRunPreflight;
+  el("commissioning-run").onclick = doRunCommissioning;
   el("preflight-ack").onclick = doAcknowledgeStops;
   el("run-goto-safety").onclick = function () {
     showView("safety");
@@ -4611,6 +4693,7 @@ function start() {
   window.setInterval(refreshLiveness, 500);
   window.setInterval(loadPanel, PANEL_MS);
   window.setInterval(loadPreflight, PANEL_MS);
+  window.setInterval(loadCommissioning, PANEL_MS);
   window.setInterval(loadRemoteLaunch, PANEL_MS);
   window.setInterval(loadFeedback, PANEL_MS);
   window.setInterval(loadConfig, PANEL_MS);
@@ -4634,6 +4717,7 @@ function boot() {
   loadAccess();
   loadPanel();
   loadPreflight();
+  loadCommissioning();
   loadRemoteLaunch();
   loadFeedback();
   loadConfig();

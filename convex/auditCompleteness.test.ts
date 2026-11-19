@@ -1121,6 +1121,70 @@ const SCENARIOS: Record<string, (w: World) => Promise<Doc<"audit_log">[]>> = {
       ];
     });
   },
+  "machineCommissioning.record": async (w) => {
+    const parameters = { tfrHz: 60, hspHz: 50, lspHz: 0, accS: 3, decS: 3 };
+    const storageId = await w.t.run((ctx) => ctx.storage.store(new Blob(["fiche"])));
+    await w.t.run(async (ctx) => {
+      await ctx.db.insert("machine_registry", {
+        organizationId: w.orgA,
+        machineId: w.machine,
+        contacts: [],
+        driveParameterSheet: {
+          storageId,
+          contentType: "application/pdf",
+          version: "v1",
+          signedBy: "synthetic-signer",
+          at: NOW,
+          attachedBy: w.admin,
+          attachedAt: NOW,
+          parameters,
+        },
+        driveParameterSheetHistory: [],
+        validation: { level: "none", reviews: [], downgrades: [] },
+        updatedAt: NOW,
+        updatedBy: w.admin,
+      });
+      await ctx.db.insert("machine_operators", {
+        organizationId: w.orgA,
+        machineId: w.machine,
+        userId: w.manager,
+        operatorCode: { algorithm: "scrypt", n: 1, r: 1, p: 1, salt: btoa("sel"), hash: btoa("empreinte") },
+        enabledAt: NOW,
+        enabledBy: w.orgAdmin,
+      });
+    });
+    return observe(w, async () => {
+      const outcome = await w.t.mutation(internal.machineCommissioning.record, {
+        machineId: w.machine,
+        operator: w.manager,
+        attestedBy: w.manager,
+        ranAt: NOW,
+        reference: {
+          sheet: { storageId, version: "v1", signedBy: "synthetic-signer", at: NOW, parameters },
+          bitalinoAddress: null,
+          expectedSoftwareVersion: null,
+        },
+        recordedAt: NOW,
+        verdict: "nonconforming",
+        findings: [{ id: "software_version", expected: "non renseignée au registre", read: "pi-0.1.0" }],
+        payload: "{}",
+        signature: null,
+        softwareVersion: "pi-0.1.0",
+      });
+      expect(outcome.status).toBe("recorded");
+      return [
+        {
+          action: "commissioning.recorded",
+          targetId: w.machine,
+          targetType: "machine",
+          source: "machine",
+          actorRole: "machine",
+          actorId: w.machine,
+          organizationId: w.orgA,
+        },
+      ];
+    });
+  },
   "machines.createMachine": async (w) =>
     observe(w, async () => {
       const created = await as(w.t, "admin").mutation(

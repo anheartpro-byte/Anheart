@@ -6,6 +6,7 @@ import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import fr from "@/messages/fr.json";
 import en from "@/messages/en.json";
+import machineApi from "@/contracts/machine-api.json";
 import {
   answer,
   feedbackShown,
@@ -731,4 +732,81 @@ describe("machine registry editing", () => {
       else expect(takeConsoleErrors()).toHaveLength(1);
     },
   );
+});
+
+describe("ANH-115 the drive sheet's typed values", () => {
+  const values = { tfrHz: "60", hspHz: "50", lspHz: "0", accS: "3", decS: "2.5" };
+  const pdf = () => new File(["TEST"], "TEST.pdf", { type: "application/pdf" });
+
+  it("sends the five values typed with the sheet, as numbers", async () => {
+    uploadAnswer();
+    const view = await card();
+    const scope = sheetFields();
+    // Each input holds the contract's keypad range, the server's own (`sheet_bounds`).
+    for (const [field, bound] of Object.entries(machineApi.machine_commissioning.sheet_bounds)) {
+      const input = scope.getByLabelText(t[field as keyof typeof values]) as HTMLInputElement;
+      expect([input.min, input.max, input.step]).toEqual([String(bound.min), String(bound.max), "0.1"]);
+    }
+    for (const [field, value] of Object.entries(values))
+      fill(scope, t[field as keyof typeof values], value);
+    await view.user.upload(scope.getByLabelText(t.sheetFile), pdf());
+    await act(async () =>
+      fireEvent.submit(screen.getByRole("form", { name: t.attachSheet })),
+    );
+    expect(mutationsSent()[1]).toEqual({
+      name: "machineRegistry:attachDriveParameterSheet",
+      args: {
+        machineId,
+        storageId,
+        version: "TEST-v2",
+        signedBy: "TEST signataire",
+        at: Date.parse("2026-10-15"),
+        parameters: { tfrHz: 60, hspHz: 50, lspHz: 0, accS: 3, decS: 2.5 },
+      },
+    });
+  });
+
+  it("refuses some values without the others, before any upload", async () => {
+    uploadAnswer();
+    const view = await card();
+    const scope = sheetFields();
+    fill(scope, t.tfrHz, "60");
+    await view.user.upload(scope.getByLabelText(t.sheetFile), pdf());
+    await act(async () =>
+      fireEvent.submit(screen.getByRole("form", { name: t.attachSheet })),
+    );
+    expect(mutationsSent()).toEqual([]);
+    expect(feedbackShown()).toContainEqual({
+      kind: "error",
+      message: fr.errors.invalid_drive_parameters,
+    });
+    expect(takeConsoleErrors()).toHaveLength(1);
+  });
+
+  it("shows the current sheet's values, or that none were typed", async () => {
+    const sheet = {
+      storageId,
+      version: "TEST-v2",
+      contentType: "application/pdf" as const,
+      signedBy: "TEST signataire",
+      at: NOW,
+      attachedBy: author,
+      attachedAt: NOW,
+      url: "https://storage.example.invalid/current",
+    };
+    const view = await card(
+      registry({
+        driveParameterSheet: {
+          ...sheet,
+          parameters: { tfrHz: 60, hspHz: 50, lspHz: 0, accS: 3, decS: 2.5 },
+        },
+      }),
+    );
+    expect(
+      screen.getByText("tFr 60,0 Hz, HSP 50,0 Hz, LSP 0,0 Hz, ACC 3,0 s, dEC 2,5 s"),
+    ).toBeTruthy();
+    answer(api.machineRegistry.getRegistry, registry({ driveParameterSheet: sheet }));
+    await view.refresh();
+    expect(screen.getByText(t.noSheetParameters)).toBeTruthy();
+  });
 });
