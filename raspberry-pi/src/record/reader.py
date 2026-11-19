@@ -2,6 +2,7 @@ import csv
 import hashlib
 import io
 import json
+import os
 import stat
 import zlib
 from collections.abc import Mapping
@@ -12,7 +13,7 @@ from typing import Final
 
 from pydantic import TypeAdapter
 
-from src.kept_file import open_kept, read_kept
+from src.kept_file import open_kept, read_kept, refuse_link
 from src.record.codec import ACTOR, Privacy, validate_manifest
 from src.record.ecg import (
     MAX_BLOCK_HEADER_BYTES,
@@ -134,9 +135,10 @@ RAW_BLOCKS_ABOVE_LONGEST_RECORD: Final[str] = "raw_blocks_above_longest_record"
 RAW_BYTES_ABOVE_LONGEST_RECORD: Final[str] = "raw_bytes_above_longest_record"
 FILE_ABOVE_ITS_BOUND: Final[str] = "file_above_its_bound"
 NOT_A_REGULAR_FILE: Final[str] = "not_a_regular_file"
+LINKED_DIRECTORY: Final[str] = "linked_directory"
 LINE_ABOVE_ITS_BOUND: Final[str] = "line_above_its_bound"
 REGISTERS_ABOVE_A_MODBUS_READ: Final[str] = "registers_above_a_modbus_read"
-"""Why ``read`` refuses a record, as the ``detail`` of its error: the first four before
+"""Why ``read`` refuses a record, as the ``detail`` of its error: the first five before
 reading it, a line too long before parsing it, a frame of too many registers as soon
 as it is parsed."""
 
@@ -234,6 +236,14 @@ def _csv[T](
     return tuple(result)
 
 
+def _bound_of(name: str) -> int:
+    """The largest a file the checksums list can be: its own bound, a raw block's, or the
+    largest of a record's files for any other."""
+    if name in FILE_BOUNDS:
+        return FILE_BOUNDS[name]
+    return LARGEST_BLOCK_FILE if name.startswith("ecg_raw/") else max(FILE_BOUNDS.values())
+
+
 def _checksums(path: Path, warnings: list[ReadWarning]) -> None:
     checksum = path / "checksums.sha256"
     if not checksum.exists():
@@ -244,8 +254,11 @@ def _checksums(path: Path, warnings: list[ReadWarning]) -> None:
         digest, name = line.split("  ", 1)
         member = path / name
         if member.resolve().is_relative_to(path.resolve()) and member.is_file():
-            # Hashed as it is read, a file the reader keeps nothing of is never held whole.
+            # Hashed as it is read, a file the reader keeps nothing of is never held whole,
+            # nor one larger than a file of its name can be.
             with open_kept(member) as content:
+                if os.fstat(content.fileno()).st_size > _bound_of(name):
+                    raise _RefusalError(FILE_ABOVE_ITS_BOUND)
                 actual = hashlib.file_digest(content, "sha256").hexdigest()
             if actual != digest:
                 warnings.append(ReadWarning(name, "checksum_mismatch"))
@@ -316,8 +329,12 @@ def _outside_bounds(path: Path) -> str | None:
 
     From what the file system says, before a byte is read: each a regular file, never a
     link, a pipe or a device (a folder given as it is, not extracted, can hold one), and
-    no larger than its bound (:data:`FILE_BOUNDS`), then the raw blocks.
+    no larger than its bound (:data:`FILE_BOUNDS`), then the raw blocks. Nor is the
+    record's directory a link, or its ``ecg_raw``: ``O_NOFOLLOW`` guards only a path's last
+    component.
     """
+    if path.is_symlink() or (path / "ecg_raw").is_symlink():
+        return LINKED_DIRECTORY
     for name, bound in FILE_BOUNDS.items():
         try:
             status = (path / name).lstat()
@@ -349,6 +366,8 @@ def _raw_above_longest_record(path: Path) -> str | None:
 
 
 def _raw(path: Path, warnings: list[ReadWarning]) -> tuple[RawBlock, ...]:
+    # Judged before the read (``_outside_bounds``), and swapped for a link since.
+    refuse_link(path)
     blocks: list[RawBlock] = []
     for member in sorted(path.glob("*.bin.gz")):
         raw = read_kept(member, LARGEST_BLOCK_FILE)

@@ -6,6 +6,7 @@ import hashlib
 from pathlib import Path
 from typing import Final
 
+from src.kept_file import read_kept
 from src.record.writer import (
     DIRECTORY_SYNC,
     PRIVATE_DIRECTORY,
@@ -36,8 +37,8 @@ def persist(root: Path, document: bytes) -> str | None:
         try:
             create_private(path, document)
         except FileExistsError:
-            with path.open("rb") as handle:
-                existing = handle.read(MAX_CONFIG_BYTES + 1)
+            # A kept read: a link or a FIFO in its place never holds the journal thread.
+            existing = read_kept(path, MAX_CONFIG_BYTES)
             if existing != document:
                 return f"{WARNING_PREFIX} existing_document_differs"
             return None

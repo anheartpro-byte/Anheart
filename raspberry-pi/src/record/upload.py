@@ -49,7 +49,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Final, Literal, cast
 
-from src.kept_file import open_kept, read_kept
+from src.kept_file import open_kept, read_kept, refuse_link
 from src.record import commands
 from src.record.commands import INPUT_KINDS
 from src.record.cursor import (
@@ -184,6 +184,7 @@ def reference_in(name: str) -> str | None:
 def read_head(record: Path) -> Result[Head, RecordError]:
     """The manifest of ``record``, for the dashboard. Blocking; never raises."""
     try:
+        refuse_link(record)  # listed as a directory, maybe a link since
         manifest = MANIFEST.validate_json(read_kept(record / "manifest.json", MANIFEST_MAX_BYTES))
         start_ms = _millis(manifest.clocks.utc_start)
     except (OSError, ValueError) as error:

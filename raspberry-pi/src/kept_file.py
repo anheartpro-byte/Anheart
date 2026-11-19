@@ -16,9 +16,14 @@ from io import BufferedReader
 from pathlib import Path
 from typing import Final
 
+# Windows: binary, or a read stops at 0x1A and turns CRLF into LF (0 elsewhere).
+_BINARY: Final[int] = getattr(os, "O_BINARY", 0)
+
 # POSIX: a link in a kept file's place is refused, and a FIFO is never waited on.
 _KEPT_FLAGS: Final[int] = (
-    os.O_RDONLY if sys.platform == "win32" else os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
+    os.O_RDONLY | _BINARY
+    if sys.platform == "win32"
+    else os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
 )
 
 
@@ -36,6 +41,15 @@ def open_kept(path: Path) -> BufferedReader:
         os.close(descriptor)
         raise OSError(errno.EINVAL, "not a regular file")
     return os.fdopen(descriptor, "rb")
+
+
+def refuse_link(directory: Path) -> None:
+    """Refuse ``directory`` when it is a link (``lstat``): ``O_NOFOLLOW`` guards only the
+    last component of a path, so a directory a file is read in is checked on its own, a
+    record's and its ``ecg_raw``, which the writer never makes links. Raises ``OSError``
+    (``ELOOP``)."""
+    if directory.is_symlink():
+        raise OSError(errno.ELOOP, "a link in a directory's place")
 
 
 def read_kept(path: Path, limit: int) -> bytes:

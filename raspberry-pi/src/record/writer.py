@@ -13,6 +13,7 @@ from typing import Final, Literal
 from pydantic import TypeAdapter
 
 from src.clock import Clock
+from src.kept_file import open_kept
 from src.record.codec import ACTOR, Privacy, document, encode, validate_manifest
 from src.record.ecg import RawBlock, encode_block
 from src.record.rows import JsonScalar, Row, finite
@@ -318,7 +319,9 @@ class Writer:
                 final_manifest.replace(self.path / "manifest.json")
             lines: list[str] = []
             for path in sorted(path for path in self.path.rglob("*") if path.is_file()):
-                digest = hashlib.sha256(path.read_bytes()).hexdigest()
+                # A kept open, hashed as it is read: a planted link refuses the close.
+                with open_kept(path) as content:
+                    digest = hashlib.file_digest(content, "sha256").hexdigest()
                 lines.append(f"{digest}  {path.relative_to(self.path).as_posix()}\n")
                 if pulse is not None:
                     pulse()

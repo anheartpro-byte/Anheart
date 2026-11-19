@@ -45,9 +45,32 @@ exactement ceux-ci :
 | `VERSION` | 1 Kio | version inconnue, dite au tableau de bord |
 | `manifest.json` d'un enregistrement | 2 Mio | `upload.read_head` : rien de l'enregistrement n'est envoyé au tableau de bord, il est laissé au démarrage suivant ; `deposit_files.eligible_record` : pas déposé ; `reader.read` (relecture, import) : refusé |
 | `checksums.sha256` d'un enregistrement | 4 994 048 octets | `retention` : aucune confirmation de dépôt écrite, et celle d'avant ne tient plus, l'enregistrement n'est jamais purgé ; `deposit_files.inventory` : pas déposé ; `reader.read` : refusé |
-| `ticks.csv`, `events.jsonl` lus pour le tableau de bord | un morceau à la fois (`open_kept`) | `upload.read_points`, `read_events`, `read_last_tick_ms` : erreur de lecture, rien n'est envoyé, l'enregistrement est laissé au démarrage suivant |
+| `ticks.csv`, `events.jsonl` lus pour le tableau de bord | un morceau à la fois (`open_kept`) | `upload.read_points`, `read_events`, `read_last_tick_ms` : erreur de lecture, rien du fichier n'est envoyé, l'enregistrement est laissé au démarrage suivant ; la fin d'une séance qui vient de finir part quand même, de mémoire, après `CLOSE_GRACE` (`_end_from_memory`) |
 | un fichier d'enregistrement à déposer | 16 Mio (`MAX_FILE_BYTES`) | `deposit_files.payload` : non envoyé, aucune confirmation. Il lit le chemin que `resolve_under` rend, liens suivis et gardés dans l'enregistrement : ce qu'un lien désigne est ouvert comme un fichier gardé et jugé par son empreinte |
-| les autres fichiers d'un enregistrement relus en entier (`ticks.csv`, `sensors.csv`, `events.jsonl`, `drive_frames.jsonl`, blocs ECG) | celles de `FILE_BOUNDS` et `LARGEST_BLOCK_FILE` (`src/record/reader.py`) | `reader.read` : refusé. Il les juge déjà par `lstat` avant d'en lire un octet ; la lecture gardée ferme la fenêtre entre ce contrôle et la lecture. Chaque fichier que `checksums.sha256` liste est haché par morceaux (`open_kept`) : un lien est refusé, une FIFO, qui n'est pas un fichier, est dite manquante sans être ouverte |
+| les autres fichiers d'un enregistrement relus en entier (`ticks.csv`, `sensors.csv`, `events.jsonl`, `drive_frames.jsonl`, blocs ECG) | celles de `FILE_BOUNDS` et `LARGEST_BLOCK_FILE` (`src/record/reader.py`) | `reader.read` : refusé. Il les juge déjà par `lstat` avant d'en lire un octet ; la lecture gardée ferme la fenêtre entre ce contrôle et la lecture. Chaque fichier que `checksums.sha256` liste est haché par morceaux (`open_kept`), au plus à la borne de son nom (la sienne, celle d'un bloc sous `ecg_raw/`, la plus grande pour un autre) : un lien est refusé, une FIFO, qui n'est pas un fichier, est dite manquante sans être ouverte |
+| un document de configuration gardé sous son empreinte (`config/<sha>.json`) | 64 Kio (`MAX_CONFIG_BYTES`) | `configuration.persist`, sur le fil du journal : un avertissement de la séance, le document n'est pas remplacé |
+| chaque fichier d'un enregistrement, à sa fermeture | haché par morceaux (`open_kept`) | `Writer.close`, sur le fil du journal : un lien planté fait échouer la fermeture (aucun `checksums.sha256` : l'enregistrement n'est pas pris pour fermé ni déposé) ; une FIFO n'est ni listée ni ouverte |
+
+`O_NOFOLLOW` ne garde que le dernier élément d'un chemin. Un enregistrement dont
+le répertoire, ou son `ecg_raw`, est un lien est donc refusé à part, par
+`lstat` (`kept_file.refuse_link`) : à la liste (`retention.records`), au
+dépôt (`deposit_files.eligible_record`, `inventory`, et `payload` juste avant
+chaque ouverture, puisqu'un dépôt dure des minutes), à la confirmation et à la
+purge (`retention`), à l'en-tête lu pour le tableau de bord (`upload.read_head`)
+et à la relecture (`reader.read`, refus `linked_directory`). Il reste une
+fenêtre entre ce contrôle et l'ouverture qui le suit, de l'ordre de la
+microseconde.
+
+Reste ouvert : l'export d'un enregistrement (`export.build_archive`, sur le fil
+que l'opérateur lance depuis la console) refuse un enregistrement dont le
+répertoire est un lien (`export.locate`), mais `tarfile` ouvre chaque fichier
+sans `O_NONBLOCK` après son propre `lstat`. Une FIFO mise à la place d'un
+fichier entre les deux bloque ce fil d'export, borné par `RecordIo`, pas la
+console.
+
+Sous Windows (un poste de développement), `O_NOFOLLOW` et `O_NONBLOCK`
+n'existent pas : les liens y sont suivis. La menace est propre au Pi, où ces
+drapeaux s'appliquent. Les fichiers y sont ouverts en binaire (`O_BINARY`).
 
 ## Mise en service, console et Docker arrêtés
 

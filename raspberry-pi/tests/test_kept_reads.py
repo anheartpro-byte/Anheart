@@ -10,7 +10,9 @@ never what it holds.
 from __future__ import annotations
 
 import errno
+import hashlib
 import os
+import shutil
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Final
@@ -18,6 +20,7 @@ from typing import Final
 import pytest
 
 from src import service_state
+from src.clock import ManualClock
 from src.contract import UNKNOWN_SOFTWARE_VERSION, VERSION_FILE_MAX_BYTES, read_software_version
 from src.health_counters import COUNTERS, COUNTERS_FILE_MAX_BYTES, Counters, load_counters
 from src.kept_file import open_kept
@@ -32,8 +35,16 @@ from src.medical import (
 from src.medical_unusable import MedicalParametersUnusableError
 from src.programme_catalog import PUBLIC_KEY_MAX_BYTES, read_public_key
 from src.record import cursor, reader, upload
+from src.record.configuration import DIRECTORY, WARNING_PREFIX, persist
+from src.record.containment import resolve_under
 from src.record.deposit_files import MAX_FILE_BYTES, eligible_record, payload
-from src.record.retention import MARKER_MAX_BYTES, confirm_deposit, confirmed_deposit, marker_of
+from src.record.retention import (
+    MARKER_MAX_BYTES,
+    confirm_deposit,
+    confirmed_deposit,
+    marker_of,
+    records,
+)
 from src.record.writer import CHECKSUMS_MAX_BYTES, MANIFEST_MAX_BYTES
 from src.result import Err, Ok
 from src.training.plan import (
@@ -44,6 +55,7 @@ from src.training.plan import (
     ProfileStore,
 )
 from tests.medical_support import write_signed
+from tests.record_support import writer
 from tests.test_record_deposit import ready_record
 from tests.test_record_retention import CONFIRMED, closed_record
 
@@ -445,3 +457,168 @@ def test_a_checksummed_file_that_is_a_link_refuses_the_record_and_a_fifo_is_not_
 def test_the_bounds_of_a_record_s_files_are_the_reader_s() -> None:
     assert reader.FILE_BOUNDS["manifest.json"] == MANIFEST_MAX_BYTES
     assert CHECKSUMS_MAX_BYTES == (reader.MAX_RAW_BLOCKS + 16) * 128
+
+
+# =========================================================================
+# On the journal thread: a configuration kept by its hash, and the close's checksums
+# =========================================================================
+
+CONFIGURATION: Final[bytes] = b'{"MOTOR_MAX_RPM": 1500}\n'
+
+
+@pytest.mark.parametrize("odd", ["link", "fifo"])
+def test_a_configuration_already_kept_in_an_odd_file_is_said_never_waited_on(
+    tmp_path: Path, odd: str
+) -> None:
+    """``persist`` reads a document already kept under its hash as a kept file: a link or
+    a FIFO in its place is a warning of the session, never a read through it, never a
+    journal thread held."""
+    assert persist(tmp_path / "regular", CONFIGURATION) is None
+    assert persist(tmp_path / "regular", CONFIGURATION) is None, "the same document: kept"
+    directory = tmp_path / "odd" / DIRECTORY
+    directory.mkdir(parents=True)
+    path = directory / (hashlib.sha256(CONFIGURATION).hexdigest() + ".json")
+    ODD[odd](path, CONFIGURATION, 0)
+    said = persist(tmp_path / "odd", CONFIGURATION)
+    assert said == f"{WARNING_PREFIX} " + ("OSError:ELOOP" if odd == "link" else "OSError:EINVAL")
+
+
+def test_a_link_planted_in_a_record_refuses_its_close_and_a_fifo_is_not_listed(
+    tmp_path: Path,
+) -> None:
+    """The close hashes every file of the record as a kept file: a link, which the writer
+    never makes, refuses the close (no checksums: the record is not taken for closed, nor
+    deposited); a FIFO is no file, and is neither listed nor opened."""
+    linked_writer = writer(tmp_path / "linked")
+    (linked_writer.path / "planted").symlink_to(linked_writer.path / "ticks.csv")
+    refused = linked_writer.close(ManualClock(), "operator_stop")
+    assert isinstance(refused, Err)
+    assert refused.error.operation == "close"
+    assert not (linked_writer.path / "checksums.sha256").exists()
+    fifo_writer = writer(tmp_path / "fifo")
+    os.mkfifo(fifo_writer.path / "planted")
+    assert isinstance(fifo_writer.close(ManualClock(), "operator_stop"), Ok)
+    listed = (fifo_writer.path / "checksums.sha256").read_text(encoding="ascii")
+    assert "planted" not in listed
+
+
+# =========================================================================
+# A link on a directory above the file: O_NOFOLLOW guards only the last component
+# =========================================================================
+
+
+def linked_in_place(record: Path, elsewhere: Path) -> None:
+    """``record`` moved aside and a link to ``elsewhere`` put in its place."""
+    record.rename(record.with_name(record.name + ".moved"))
+    record.symlink_to(elsewhere, target_is_directory=True)
+
+
+def test_a_record_swapped_for_a_link_while_its_file_is_deposited_is_not_sent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The deposit takes minutes: a record made a link between ``resolve_under`` and the
+    open would hand over another directory's ``checksums.sha256``, which carries no digest
+    of its own to check. Refused, and so is the record already a link."""
+    record = ready_record(tmp_path / "records")
+    eligible = eligible_record(record)
+    assert isinstance(eligible, Ok)
+    selected = eligible.value
+    assert selected is not None
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (elsewhere / "checksums.sha256").write_bytes(b"not this record's checksums\n")
+    real = resolve_under
+
+    def swapping(root: Path, name: str) -> Path | None:
+        found = real(root, name)
+        linked_in_place(root, elsewhere)
+        return found
+
+    monkeypatch.setattr("src.record.deposit_files.resolve_under", swapping)
+    swapped = payload(selected, "checksums.sha256")
+    assert isinstance(swapped, Err)
+    assert swapped.error.detail == "OSError:ELOOP"
+    monkeypatch.setattr("src.record.deposit_files.resolve_under", real)
+    for name in ("checksums.sha256", "ticks.csv"):
+        linked = payload(selected, name)
+        assert isinstance(linked, Err)
+        assert linked.error.detail == "OSError:ELOOP"
+
+
+def test_a_record_swapped_for_a_link_after_it_is_listed_is_neither_read_nor_confirmed(
+    tmp_path: Path,
+) -> None:
+    """Listed as a directory (``records`` leaves a link out), then a link to a copy of it:
+    not deposited, no confirmation written or held, not read by the replay, nor its head by
+    the dashboard. The copy is the same record: what refuses is the link."""
+    root = tmp_path / "records"
+    record = ready_record(root)
+    assert isinstance(confirm_deposit(record, "kg2storage", CONFIRMED), Ok)
+    assert records(root) == (record,)
+    copy = tmp_path / "copy"
+    shutil.copytree(record, copy)
+    marker_of(record).rename(marker_of(record).with_name("kept-marker"))
+    linked_in_place(record, copy)
+    assert records(root) == ()
+    refused = eligible_record(record)
+    assert isinstance(refused, Err)
+    assert refused.error.detail == "OSError:ELOOP"
+    marker_of(record).with_name("kept-marker").rename(marker_of(record))
+    assert confirmed_deposit(record) is None
+    marker_of(record).unlink()
+    confirmed = confirm_deposit(record, "kg2storage", CONFIRMED)
+    assert isinstance(confirmed, Err)
+    assert confirmed.error.operation == "close"
+    assert not marker_of(record).exists()
+    replayed = reader.read(record)
+    assert isinstance(replayed, Err)
+    assert replayed.error.detail == reader.LINKED_DIRECTORY
+    head = upload.read_head(record)
+    assert isinstance(head, Err)
+    assert head.error.detail == "OSError:ELOOP"
+
+
+def test_a_linked_ecg_raw_directory_is_refused_by_the_reader(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Another record's blocks, through a linked ``ecg_raw``: refused before a byte is read,
+    and still refused when the link is put there after that check."""
+    record = closed_record(tmp_path / "a")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "000000.bin.gz").write_bytes(b"another record's block")
+    raw = record / "ecg_raw"
+    shutil.rmtree(raw)
+    raw.symlink_to(outside, target_is_directory=True)
+    refused = reader.read(record)
+    assert isinstance(refused, Err)
+    assert refused.error.detail == reader.LINKED_DIRECTORY
+
+    def unchecked(_path: Path) -> str | None:
+        return None
+
+    monkeypatch.setattr(reader, "_outside_bounds", unchecked)
+    swapped = reader.read(record)
+    assert isinstance(swapped, Err)
+    assert swapped.error.detail == "OSError"
+
+
+def test_a_checksummed_file_is_hashed_within_the_bound_of_its_name(tmp_path: Path) -> None:
+    """A file the checksums list is hashed only when no larger than a file of its name can
+    be: its own bound, a raw block's under ``ecg_raw/``, the largest for any other."""
+    record = closed_record(tmp_path)
+    checksums = record / "checksums.sha256"
+    listed = checksums.read_text(encoding="ascii")
+    (record / "extra.txt").write_bytes(b"listed, of a digest it does not have\n")
+    large = record / "ecg_raw" / "extra.dat"
+    large.write_bytes(b" " * (reader.LARGEST_BLOCK_FILE + 1))
+    checksums.write_text(listed + f"{'0' * 64}  extra.txt\n", encoding="ascii")
+    read = reader.read(record)
+    assert isinstance(read, Ok)
+    assert ("extra.txt", "checksum_mismatch") in {
+        (warning.file, warning.code) for warning in read.value.warnings
+    }
+    checksums.write_text(listed + f"{'0' * 64}  ecg_raw/extra.dat\n", encoding="ascii")
+    refused = reader.read(record)
+    assert isinstance(refused, Err)
+    assert refused.error.detail == reader.FILE_ABOVE_ITS_BOUND

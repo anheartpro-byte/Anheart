@@ -40,7 +40,7 @@ from typing import Final, Literal
 from pydantic import ConfigDict, TypeAdapter, ValidationError
 from pydantic.dataclasses import dataclass as validated
 
-from src.kept_file import read_kept
+from src.kept_file import read_kept, refuse_link
 from src.record.codec import IDENTIFIER
 from src.record.schema import RecordError
 from src.record.writer import CHECKSUMS_MAX_BYTES, create_private, describe_os_error
@@ -109,7 +109,9 @@ def marker_of(record: Path) -> Path:
 
 
 def _content_checksum(record: Path) -> str:
-    """The SHA-256 of the record's checksums, read as a kept file. Raises ``OSError``."""
+    """The SHA-256 of the record's checksums, read as a kept file, in a record that is no
+    link. Raises ``OSError``: no confirmation is then written, and none holds."""
+    refuse_link(record)
     return hashlib.sha256(read_kept(record / CHECKSUMS, CHECKSUMS_MAX_BYTES)).hexdigest()
 
 

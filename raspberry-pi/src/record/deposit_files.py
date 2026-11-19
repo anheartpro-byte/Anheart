@@ -7,7 +7,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Final, NewType
 
-from src.kept_file import open_kept, read_kept
+from src.kept_file import open_kept, read_kept, refuse_link
 from src.record.containment import resolve_under
 from src.record.cursor import Cursor, load, store
 from src.record.retention import confirm_deposit, confirmed_deposit, records
@@ -84,6 +84,8 @@ def next_record(
 
 def eligible_record(path: Path) -> Result[DepositRecord | None, RecordError]:
     try:
+        # Listed as a directory (``records``), and maybe swapped for a link since.
+        refuse_link(path)
         if confirmed_deposit(path) is not None:
             return Ok(None)
         cursor = load(path)
@@ -113,6 +115,7 @@ def inventory(
         len(name) > MAX_PATH_LENGTH or SAFE_PATH.fullmatch(name) is None for name in files
     ):
         return Err(RecordError("read", "invalid_deposit_manifest"))
+    refuse_link(path)
     checksums: dict[str, Sha256] = {}
     kept = read_kept(path / "checksums.sha256", CHECKSUMS_MAX_BYTES)
     for line in kept.decode("ascii").splitlines():
@@ -140,6 +143,10 @@ def payload(record: DepositRecord, name: str) -> Result[FilePayload, RecordError
     if path is None:
         return Err(RecordError("read", "file_outside_record"))
     try:
+        # The deposit takes minutes: the record, or the directory of the file in it, may
+        # have become a link since it was listed, or since ``resolve_under`` looked.
+        refuse_link(record.path)
+        refuse_link(path.parent)
         with open_kept(path) as handle:
             content = handle.read(MAX_FILE_BYTES + 1)
         if len(content) > MAX_FILE_BYTES:

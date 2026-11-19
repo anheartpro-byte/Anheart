@@ -911,8 +911,8 @@ def test_one_reading_fails_when_only_the_last_tick_cannot_be_read(
     def refuse(_descriptor: int) -> object:
         raise OSError(5, "Input/output error")
 
-    # The ticks are opened as a kept file (``open_kept``), which asks ``fstat`` too: only
-    # the tail's own size is refused, after the points were read.
+    # Refused only within the tail read, after the points were read: the first ``fstat``
+    # refused there is the one ``open_kept`` asks as it opens the ticks.
     real_tail = upload.read_last_tick_ms
 
     def tail_refused(record: Path) -> Result[int | None, RecordError]:
