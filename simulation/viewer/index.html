@@ -9,7 +9,7 @@
      base address, no form. Change the style or the script below and its hash
      must follow: simulation/tests/test_viewer_page.py gives the value to
      write here. -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-sRYvmBO+y2yVuBj7YwgC6knyZqJKL4aZHVGdmQa1HVI='; style-src 'sha256-pgXEJqXqJommJWAIfLhnjo349pfpbY/rmc1lzNfMX4o='; connect-src 'self'; img-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-QUqU5HdDs4u6U7c/+60Q2qzqmpbxzG9K4DrPruK0GuE='; style-src 'sha256-pgXEJqXqJommJWAIfLhnjo349pfpbY/rmc1lzNfMX4o='; connect-src 'self'; img-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Anheart 2D Simulator</title>
 <style>
@@ -368,13 +368,19 @@ function startLive(name, speed) {
 
 // A running console, read by the server (python -m simulation.live --console): the
 // same meta and rows as a scenario, until the tab is closed. An error event is a
-// console that did not answer; the server tries again by itself.
+// console that did not answer; the server tries again by itself, and the last row
+// stays drawn meanwhile. A stream the browser reopened starts again at t = 0: the
+// rows of the previous one are dropped rather than drawn backwards in time.
 function startConsole() {
   reset(); S.live = true;
   $("source").textContent = "live: console (connexion...)";
   const es = new EventSource("/console"); S.es = es;
   es.addEventListener("meta", (e) => { S.meta = JSON.parse(e.data); afterLoad(); });
-  es.addEventListener("row", (e) => { addRow(JSON.parse(e.data)); $("source").textContent = "live: console"; });
+  es.addEventListener("row", (e) => {
+    const row = JSON.parse(e.data);
+    if (S.rows.length && row.t < S.rows[S.rows.length - 1].t) { S.rows = []; S.angle = [0]; }
+    addRow(row); $("source").textContent = "live: console";
+  });
   es.addEventListener("error", (e) => { if (e.data) $("source").textContent = "console: " + JSON.parse(e.data).detail; });
 }
 

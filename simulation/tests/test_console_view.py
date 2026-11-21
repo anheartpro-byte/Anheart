@@ -8,9 +8,11 @@ import urllib.request
 from collections.abc import Iterator, Mapping, Sequence
 from http.client import HTTPResponse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from typing import Final, override
 
 import pytest
+from pydantic import TypeAdapter
 
 from simulation import console_view as view
 from simulation import live
@@ -33,44 +35,56 @@ from simulation.rig import RigGeometry
 from src.record.rows import JsonValue
 from src.result import Err, Ok, Result
 from src.units import OutputRpm
+from src.web.schemas import SnapshotRow
 
 PANEL: Final[str] = json.dumps({"radius_m": 1.5, "gear_ratio": 49.79, "motor_backend": "sim"})
 
+FIXTURE: Final[Path] = Path(__file__).resolve().parent / "console_snapshots.json"
+"""Two answers of ``GET /api/snapshot`` of a real console in simulation: at its start
+(``heart_rate`` still ``null``) and running."""
 
-def snapshot(
-    *,
-    at: float = 100.0,
-    output_rpm: float = 3.0,
-    drive_state: str = "operation_enabled",
-    safety: Mapping[str, JsonValue] | None = None,
-    manual: bool = True,
-) -> str:
-    """A snapshot of the shape the console serves, with fields the viewer ignores."""
-    speeds: Mapping[str, JsonValue] = {
-        "motor_rpm": output_rpm * 49.79,
+
+CAPTURED: Final[TypeAdapter[dict[str, dict[str, JsonValue]]]] = TypeAdapter(
+    dict[str, dict[str, JsonValue]]
+)
+
+
+def captured(name: str) -> dict[str, JsonValue]:
+    return dict(CAPTURED.validate_json(FIXTURE.read_text(encoding="utf-8"))[name])
+
+
+def speeds(output_rpm: float | None) -> Mapping[str, JsonValue]:
+    """A ``SpeedRow`` at ``output_rpm`` at the arm, every field ``None`` when it is."""
+    if output_rpm is None:
+        return dict.fromkeys(("motor_rpm", "output_rpm", "hertz", "g_load", "resultant_g"))
+    motor = output_rpm * 49.79
+    return {
+        "motor_rpm": motor,
         "output_rpm": output_rpm,
-        "hertz": output_rpm * 49.79 / 27.6,
-        "g_load": 0.015,
-        "resultant_g": 1.0001,
+        "hertz": motor / 27.6,
+        "g_load": 0.0,
+        "resultant_g": 1.0,
     }
-    body: dict[str, JsonValue] = {
-        "at": at,
-        "wall_clock": 1795284004955,
-        "phase": "hold",
-        "mode": "manuel",
-        "heart_rate": {"bpm": 77, "quality": "good", "age_s": 0.06, "stale": False, "seq": 1},
-        "target_bpm": None,
-        "live_bpm": 77,
-        "setpoint": speeds,
-        "measured": speeds,
-        "drive_state": drive_state,
-        "drive_status_stale": False,
-        "current_a": 1.25,
-        "safety": safety,
-        "safety_action": "none" if safety is None else "quick_stop",
-        "manual": {"target": speeds, "occupancy": "bench"} if manual else None,
-    }
+
+
+def snapshot(name: str = "running", /, **changes: JsonValue) -> str:
+    """A captured answer, with ``changes`` written over its fields."""
+    body = captured(name)
+    body.update(changes)
     return json.dumps(body)
+
+
+def turning(output_rpm: float | None = 3.0, /, **changes: JsonValue) -> str:
+    """The running answer with the arm at ``output_rpm``, in a manual session."""
+    return snapshot(
+        measured=speeds(output_rpm),
+        setpoint=speeds(output_rpm),
+        manual={"target": speeds(output_rpm)},
+        drive_state="operation_enabled",
+        mode="manuel",
+        phase="hold",
+        **changes,
+    )
 
 
 @pytest.fixture
@@ -111,12 +125,38 @@ def test_a_port_out_of_range_is_refused() -> None:
 # ------------------------------------------------------------ what is parsed
 
 
-def test_a_snapshot_keeps_what_the_viewer_needs_and_ignores_the_rest() -> None:
-    read = read_snapshot(snapshot())
+@pytest.mark.parametrize("name", ["at_start", "running"])
+def test_the_captured_answers_are_what_the_console_serves(name: str) -> None:
+    """The fixture is checked against the console's own schema: it cannot drift from it."""
+    TypeAdapter(SnapshotRow).validate_python(captured(name))
+
+
+@pytest.mark.parametrize("name", ["at_start", "running"])
+def test_a_captured_answer_is_read(name: str) -> None:
+    read = read_snapshot(snapshot(name))
     assert isinstance(read, Ok)
-    assert read.value.measured.output_rpm == 3.0
-    assert read.value.heart_rate.bpm == 77
-    assert read.value.safety is None
+    assert read.value.instance == captured(name)["instance"]
+
+
+def test_a_console_with_no_heart_rate_yet_is_read() -> None:
+    read = read_snapshot(snapshot("at_start"))
+    assert isinstance(read, Ok)
+    assert read.value.heart_rate is None
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"measured": {"motor_rpm": 1e200, "output_rpm": 3.0, "hertz": 1.0}},
+        {"measured": {"motor_rpm": 100.0, "output_rpm": 1e200, "hertz": 1.0}},
+        {"setpoint": {"motor_rpm": 100.0, "output_rpm": 3.0, "hertz": -1e9}},
+        {"current_a": 1e9},
+    ],
+)
+def test_a_number_no_machine_can_reach_is_refused(changes: dict[str, JsonValue]) -> None:
+    read = read_snapshot(snapshot(**changes))
+    assert isinstance(read, Err)
+    assert read.error.detail.startswith("snapshot illisible")
 
 
 @pytest.mark.parametrize("text", ["not json", "{}", json.dumps({"at": "soon"})])
@@ -154,25 +194,61 @@ def test_the_header_draws_the_cad_machine_at_the_console_radius(rig: RigGeometry
 
 
 def test_a_row_carries_the_console_speeds_g_and_heart_rate(rig: RigGeometry) -> None:
-    read = read_snapshot(snapshot(safety={"rule": "operator_estop", "rank": 4}))
+    read = read_snapshot(
+        turning(
+            safety={"rule": "operator_estop", "rank": 4}, safety_action="quick_stop", live_bpm=74
+        )
+    )
     assert isinstance(read, Ok)
     row = console_row(read.value, rig, 2.5)
     assert row.t == 2.5
     assert row.output_rpm == 3.0
     assert row.measured_motor_rpm == round(3.0 * 49.79)
+    assert row.lfrd_motor_rpm == round(3.0 * 49.79)
     assert row.manual_target_motor_rpm == round(3.0 * 49.79)
-    assert row.g_reference == 0.015
+    assert row.g_reference == rig.g_reference(OutputRpm(3.0))
     assert row.g_leg_tip == rig.g_leg_tip(OutputRpm(3.0))
     assert row.drive_state == "OPERATION_ENABLED"
     assert row.output_enabled
     assert row.measured_fresh
-    assert (row.hr_true, row.hr_live, row.hr_raw, row.hr_quality) == (None, 77, 77, "good")
-    assert (row.safety_rule, row.safety_action) == ("operator_estop", "quick_stop")
-    assert row.sim_state == "console"
+    assert (row.hr_true, row.hr_live, row.hr_confirmed) == (None, 74, 74)
+    assert (row.hr_raw, row.hr_quality) == (70, "good")
+    assert (row.safety_rule, row.safety_action) == ("operator_estop", "QUICK_STOP")
+    assert (row.state, row.sim_state, row.silent) == ("console", "console", False)
+
+
+def test_a_reverse_rotation_is_drawn_by_its_motor_sign(rig: RigGeometry) -> None:
+    read = read_snapshot(turning(-3.0))
+    assert isinstance(read, Ok)
+    row = console_row(read.value, rig, 0.0)
+    assert (row.output_rpm, row.setpoint_output_rpm) == (3.0, 3.0)
+    assert row.hertz > 0
+    assert row.measured_motor_rpm == round(-3.0 * 49.79)
+
+
+def test_a_row_before_any_heart_rate(rig: RigGeometry) -> None:
+    read = read_snapshot(snapshot("at_start"))
+    assert isinstance(read, Ok)
+    row = console_row(read.value, rig, 0.0)
+    assert (row.hr_raw, row.hr_quality, row.hr_live) == (None, "no_signal", None)
+
+
+def test_a_speed_the_console_has_not_read_is_drawn_still_and_not_fresh(rig: RigGeometry) -> None:
+    read = read_snapshot(turning(None))
+    assert isinstance(read, Ok)
+    row = console_row(read.value, rig, 0.0)
+    assert (row.output_rpm, row.hertz, row.measured_motor_rpm, row.g_reference) == (
+        0.0,
+        0.0,
+        0,
+        0.0,
+    )
+    assert row.manual_target_motor_rpm == 0
+    assert not row.measured_fresh
 
 
 def test_a_row_without_a_manual_target_or_a_verdict(rig: RigGeometry) -> None:
-    read = read_snapshot(snapshot(drive_state="ready", manual=False))
+    read = read_snapshot(snapshot(drive_state="ready", manual=None, safety=None))
     assert isinstance(read, Ok)
     row = console_row(read.value, rig, 0.0)
     assert row.manual_target_motor_rpm == 0
@@ -260,6 +336,29 @@ def test_the_stream_time_goes_on_across_a_restart_of_the_console() -> None:
     assert times == [0.0, 1.0, 1.0 + PERIOD_S]
 
 
+def test_another_run_of_the_console_has_its_radius_read_again() -> None:
+    answers = [
+        Ok(PANEL),
+        Ok(snapshot(at=50.0, instance="first")),
+        Ok(snapshot(at=51.0, instance="first")),
+        Ok(snapshot(at=2.0, instance="second")),
+        Ok(PANEL),
+        Ok(snapshot(at=2.2, instance="second")),
+    ]
+    script = Script(answers, events=6)
+    script.run()
+    assert script.events == ["meta", "row", "row", "row", "meta", "row"]
+    times = [payload["t"] for event, payload in script.sent if event == "row"]
+    assert times == pytest.approx([0.0, 1.0, 1.0 + PERIOD_S, 1.2 + PERIOD_S])
+
+
+def test_a_whole_stream_from_a_console_with_no_heart_rate_yet() -> None:
+    script = Script([Ok(PANEL), Ok(snapshot("at_start"))], events=2)
+    script.run()
+    assert script.events == ["meta", "row"]
+    assert script.sent[1][1]["hr_quality"] == "no_signal"
+
+
 # ---------------------------------------------------------------- over HTTP
 
 
@@ -329,7 +428,10 @@ def test_the_viewer_server_streams_its_console(console: tuple[str, int]) -> None
             lines = [response.readline().decode().strip() for _ in range(5)]
         assert lines[0] == "event: meta"
         assert lines[3] == "event: row"
-        assert json.loads(lines[4].removeprefix("data: "))["hr_live"] == 77
+        assert (
+            json.loads(lines[4].removeprefix("data: "))["hr_live"]
+            == captured("running")["live_bpm"]
+        )
     finally:
         httpd.shutdown()
         httpd.server_close()

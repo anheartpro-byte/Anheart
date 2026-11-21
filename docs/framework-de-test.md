@@ -446,7 +446,7 @@ fonction, `simulation/tests/test_cli_and_live.py` pour le serveur.
 | `live` | nom de scénario | lance ce scénario en direct via `/stream` |
 | `speed` | nombre ; le serveur borne à 0,1 … 200 (défaut 20) | facteur d'accélération du temps simulé |
 | `clock` | `sim` (sinon `manual`) | `manual` (défaut) : temps simulé déterministe, affiché à `speed` × ; `sim` : l'horloge `SimClock` du code (temps réel accéléré). Gardez alors une vitesse modeste : une pause de la machine hôte devient un arrêt de boucle auquel le runtime réagit, comme il doit le faire |
-| `console` | sans valeur | suit en direct la console de `--console` via `/console` : le bras tourne à la vitesse mesurée par la console. Rayon de référence lu sur la console, pointe du pied à la borne CAO (la console ne la publie pas), pas de FC vraie. Seulement avec `python -m simulation.live` : la version en ligne n'a pas de console |
+| `console` | sans valeur | suit en direct la console de `--console` via `/console` : le bras tourne à la vitesse mesurée par la console. Rayon de référence lu sur la console (relu quand elle redémarre), pointe du pied à la borne CAO (la console ne la publie pas), pas de FC vraie ; une vitesse que la console n'a pas lue est dessinée à 0 et marquée périmée. Quand la console ne répond plus, la dernière image reste et la ligne de source dit l'erreur. Seule une console en boucle locale et sans `DEVICE_TOKEN` se suit ainsi : hors boucle locale elle exige TLS et un jeton, que ce mode ne porte pas. Seulement avec `python -m simulation.live` : la version en ligne n'a pas de console |
 | `trace` | chemin relatif à `simulation/` (ex. `out/manual_27_rpm.jsonl`) ou absolu (commençant par `/`) | rejoue une trace écrite par `simulation.run` |
 
 Exemples :
