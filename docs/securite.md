@@ -2475,8 +2475,9 @@ en rejouant une ancienne réponse. Détail :
 Depuis le 21 novembre 2026, la clé privée du catalogue est posée sur le
 développement et la production, et `config/anheart_catalog.pub` en est la
 partie publique ([secrets.md, 3.4](secrets.md#34-clés-de-signature)). Une
-image antérieure porte l'ancienne clé publique, sans partie privée : elle
-n'accepte aucune liste et n'ouvre que STOP, E-STOP et les lectures ; l'amorçage est écrit dans
+image qui exige la connexion des opérateurs (ANH-152) et porte l'ancienne clé
+publique, sans partie privée, n'accepte aucune liste et n'ouvre que STOP,
+E-STOP et les lectures (une image d'avant ANH-152 se comporte comme avant) ; l'amorçage est écrit dans
 [raspberry-pi.md, 8.9](raspberry-pi.md#89-la-liste-des-opérateurs-signée-anh-152).
 
 ### 17.4 Ce que la console garantit

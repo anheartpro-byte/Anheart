@@ -182,7 +182,8 @@ révision. La signature est Ed25519, par la clé privée Anheart que Convex lit
 dans `ANHEART_CATALOG_SIGNING_KEY` ; la machine la vérifie avec la clé
 publique de son image, `raspberry-pi/config/anheart_catalog.pub`. Sans clé
 posée dans Convex, rien n'est signé (`not_configured`) et les machines
-gardent leurs programmes : c'est l'état de tous les déploiements aujourd'hui
+gardent leurs programmes : c'était l'état de tous les déploiements jusqu'au
+21 novembre 2026, où la clé a été posée sur le développement et la production
 ([secrets.md](secrets.md#34-clés-de-signature)).
 
 Un programme retiré n'est plus envoyé : la machine le perd à sa prochaine
