@@ -393,8 +393,9 @@ def test_main_serves_until_interrupted(
         def server_close(self) -> None:
             Stub.closed = True
 
-    def fake_serve(port: int) -> Stub:
+    def fake_serve(port: int, *, console: tuple[str, int]) -> Stub:
         assert port == 0
+        assert console == live.CONSOLE
         return Stub()
 
     monkeypatch.setattr(live, "serve", fake_serve)
