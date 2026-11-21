@@ -3632,8 +3632,8 @@ qui porte ANH-152 sur une machine en service :
    (`ANHEART_CATALOG_SIGNING_KEY`), et sa clé publique dans l'image
    ([secrets.md, 3.4](secrets.md#34-clés-de-signature)). Sans elles aucune
    console n'accepte de liste, et toutes n'ouvrent plus que STOP, E-STOP et
-   les lectures. **Aujourd'hui la clé n'est posée nulle part** : c'est une
-   action de l'utilisateur.
+   les lectures. Depuis le 21 novembre 2026, la clé est posée sur le
+   développement et la production, et sa partie publique est celle du dépôt.
 2. Sur la fiche de la machine du site, un admin active au moins un opérateur
    (carte « Accès à la console ») ; chaque opérateur choisit son code, page
    « Mes machines ». Pour une tablette autre que celle du `.env`, l'admin
