@@ -3520,9 +3520,10 @@ boîte aux lettres : le programme qui part est celui que l'opérateur a vu.
 **Sans catalogue.** Un serveur qui ne signe rien (`not_configured`, l'état
 de tous les déploiements tant que la clé n'est pas posée), un serveur
 antérieur au contrat 1.11 (404), pas de réponse : rien n'est reçu, rien ne
-change, rien n'est écrit dans le journal de bord. La clé publique livrée
-aujourd'hui n'a pas de partie privée ([secrets.md](secrets.md#34-clés-de-signature)) :
-tant qu'elle n'est pas remplacée, aucune console n'accepte de catalogue.
+change, rien n'est écrit dans le journal de bord. La clé publique d'ANH-138
+n'avait pas de partie privée ; depuis le 21 novembre 2026, celle du dépôt est la
+partie publique de la clé posée sur le développement et la production
+([secrets.md](secrets.md#34-clés-de-signature)).
 
 **Limite : le rejeu.** Comme pour le fichier médical, la console ne refuse
 pas une révision plus ancienne que celle qu'elle tient : un texte signé un
@@ -3540,7 +3541,9 @@ lancement ; le démarrage avec et sans tableau de bord),
 sous un moteur qui tourne), `tests/test_plan.py`, `tests/test_web_api.py`
 (l'empreinte refusée après un redémarrage sous des programmes de secours
 changés) et `tests/web/panel_profiles.test.mjs` (la page). Non
-vérifié : aucun déploiement Convex réel n'a signé de catalogue, et le délai
+vérifié : aucun programme publié n'a encore été signé par un déploiement réel
+(le 21 novembre 2026, le développement a signé une liste des opérateurs,
+acceptée par une console reliée, sans programme publié), et le délai
 de deux minutes entre une publication et un programme lançable sur le site
 (au plus une minute pour la demande, puis l'envoi des profils) n'a pas été
 mesuré contre le déploiement de développement.
@@ -3632,8 +3635,8 @@ qui porte ANH-152 sur une machine en service :
    (`ANHEART_CATALOG_SIGNING_KEY`), et sa clé publique dans l'image
    ([secrets.md, 3.4](secrets.md#34-clés-de-signature)). Sans elles aucune
    console n'accepte de liste, et toutes n'ouvrent plus que STOP, E-STOP et
-   les lectures. **Aujourd'hui la clé n'est posée nulle part** : c'est une
-   action de l'utilisateur.
+   les lectures. Depuis le 21 novembre 2026, la clé est posée sur le
+   développement et la production, et sa partie publique est celle du dépôt.
 2. Sur la fiche de la machine du site, un admin active au moins un opérateur
    (carte « Accès à la console ») ; chaque opérateur choisit son code, page
    « Mes machines ». Pour une tablette autre que celle du `.env`, l'admin

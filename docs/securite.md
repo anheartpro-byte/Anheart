@@ -2472,12 +2472,12 @@ ancienne que la sienne, ce qui empêche de réactiver un opérateur désactivé
 en rejouant une ancienne réponse. Détail :
 [convex.md](convex.md#la-liste-des-opérateurs-signée-contrat-113-anh-152).
 
-Aujourd'hui la clé privée du catalogue n'est posée sur aucun déploiement, et
-la clé publique livrée n'a pas de partie privée
-([secrets.md, 3.4](secrets.md#34-clés-de-signature)) : aucune console ne
-peut encore accepter de liste. Une image qui porte le lot de la console,
-installée avant que la clé soit posée, n'ouvrirait plus que STOP, E-STOP et
-les lectures ; l'amorçage est écrit dans
+Depuis le 21 novembre 2026, la clé privée du catalogue est posée sur le
+développement et la production, et `config/anheart_catalog.pub` en est la
+partie publique ([secrets.md, 3.4](secrets.md#34-clés-de-signature)). Une
+image qui exige la connexion des opérateurs (ANH-152) et porte l'ancienne clé
+publique, sans partie privée, n'accepte aucune liste et n'ouvre que STOP,
+E-STOP et les lectures (une image d'avant ANH-152 se comporte comme avant) ; l'amorçage est écrit dans
 [raspberry-pi.md, 8.9](raspberry-pi.md#89-la-liste-des-opérateurs-signée-anh-152).
 
 ### 17.4 Ce que la console garantit

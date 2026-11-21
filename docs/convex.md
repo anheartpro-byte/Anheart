@@ -3794,7 +3794,8 @@ l'entrée `programme_catalog` de
   répond `{status: "not_configured"}` et ne lit rien ; avec une valeur qui
   n'est pas une clé Ed25519, la même réponse et une erreur dans les journaux
   de Convex. Dans les deux cas la console n'a rien reçu et garde ses
-  programmes. Aujourd'hui la variable n'est posée sur aucun déploiement.
+  programmes. Depuis le 21 novembre 2026, la variable est posée sur le
+  développement et la production, la même clé sur les deux.
 - **Ce qui n'est pas signé** (`status`, `server_contract_version`) ne peut
   qu'empêcher une mise à jour : rien hors du texte signé ne fait accepter un
   programme.

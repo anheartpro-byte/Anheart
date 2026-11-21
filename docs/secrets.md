@@ -54,7 +54,7 @@ projet de les tenir.
 | Mot de passe du Wi-Fi de la console | le réseau que le Pi crée pour les tablettes | `/etc/anheart/wifi-password` (root, mode 600) ; la fiche privée de mise en service | root du Pi ; le technicien ; chaque tablette jointe | [3.3](#33-mot-de-passe-du-wi-fi-de-la-console) |
 | Clé du volume chiffré des données du Pi | les enregistrements de séance au repos | `/etc/anheart/data.key` (root, mode 600), sur la même carte que le volume ([pi-stockage.md](pi-stockage.md)) | root du Pi ; quiconque a la carte SD | aucune procédure écrite ([section 5](#5-ce-qui-reste)) |
 | Clé de signature « médical » (Ed25519, ANH-139) | prouver que `config/medical_parameters.json` est le fichier qu'une personne habilitée a signé : sans signature vérifiée, la console ne démarre qu'en mode banc ([securite.md, section 13](securite.md#13-décisions-médicales--un-fichier-signé-anh-139)) | partie publique, qui n'est pas un secret : `raspberry-pi/config/medical.pub`, dans le dépôt et dans l'image de chaque console. Partie privée : chez le signataire seul, dans un fichier chiffré par une phrase secrète, hors du dépôt (`scripts/sign_medical_parameters.py` refuse de l'écrire dans le dépôt) et hors de tout Pi. **Aujourd'hui une clé de test**, dont la partie privée a été détruite après la signature du fichier livré : personne ne peut plus signer avec elle | aujourd'hui personne ; le signataire médical une fois la clé réelle créée (ANH-98) ; remplacer la partie publique demande une PR relue et une nouvelle version de la console | [3.4](#34-clés-de-signature) |
-| Clé de signature « catalogue » (Ed25519, ANH-138) | prouver à la console que le catalogue de programmes qu'elle reçoit est celui que Convex a signé : sans signature vérifiée, elle n'en lit rien et garde ses programmes ([convex.md](convex.md#le-catalogue-signé-contrat-111-anh-138)). Signe aussi, depuis ANH-152, la liste des opérateurs et des tablettes de chaque machine ([convex.md](convex.md#la-liste-des-opérateurs-signée-contrat-113-anh-152)) : qui la tient peut faire accepter à une console une liste de son choix | partie privée : variable d'environnement `ANHEART_CATALOG_SIGNING_KEY` du déploiement Convex, **posée sur aucun déploiement aujourd'hui** (action de l'utilisateur), jamais dans le dépôt. Partie publique, qui n'est pas un secret : `raspberry-pi/config/anheart_catalog.pub`, dans le dépôt et dans l'image de chaque console. **Aujourd'hui une clé publique sans partie privée** : créée en mémoire par ANH-138, sa partie privée n'a jamais été écrite nulle part, et personne ne peut signer pour elle. Une clé distincte de la clé « médical » | les membres de l'équipe Convex (lire et remplacer la variable) ; remplacer la partie publique demande une PR relue et une nouvelle version de la console | [3.4](#34-clés-de-signature) |
+| Clé de signature « catalogue » (Ed25519, ANH-138) | prouver à la console que le catalogue de programmes qu'elle reçoit est celui que Convex a signé : sans signature vérifiée, elle n'en lit rien et garde ses programmes ([convex.md](convex.md#le-catalogue-signé-contrat-111-anh-138)). Signe aussi, depuis ANH-152, la liste des opérateurs et des tablettes de chaque machine ([convex.md](convex.md#la-liste-des-opérateurs-signée-contrat-113-anh-152)) : qui la tient peut faire accepter à une console une liste de son choix | partie privée : variable d'environnement `ANHEART_CATALOG_SIGNING_KEY` du déploiement Convex, **posée depuis le 21 novembre 2026 sur le développement et la production, la même clé sur les deux** (conséquence en [3.4](#34-clés-de-signature) : qui peut lire la variable du développement peut signer pour les consoles de production) ; jamais dans le dépôt, et son fichier local a été détruit une fois posée (elle se relit avec `npx convex env get`). Partie publique, qui n'est pas un secret : `raspberry-pi/config/anheart_catalog.pub`, dans le dépôt et dans l'image de chaque console. La clé publique d'avant, créée en mémoire par ANH-138, n'avait pas de partie privée : une image qui la porte n'accepte ni catalogue ni liste des opérateurs. Une clé distincte de la clé « médical » | les membres de l'équipe Convex (lire et remplacer la variable) ; remplacer la partie publique demande une PR relue et une nouvelle version de la console | [3.4](#34-clés-de-signature) |
 | Clé de déploiement Convex de **production** | déployer le backend de production, lire et écrire ses données et ses variables | prévue comme secret `CONVEX_DEPLOY_KEY` de l'environnement GitHub `production`, mais **pas encore créée** ([état au 14 octobre 2026](#ce-que-github-porte-aujourdhui)) ; `CONVEX_DEPLOY_KEY_PROD` dans `.env.local` du poste du responsable | une fois le secret créé : le job `convex` de la pipeline de release, et les administrateurs du dépôt (remplacer, pas relire) ; les membres de l'équipe Convex ; le poste qui a `.env.local` | [3.5](#35-clés-de-déploiement-convex) |
 | Clé de déploiement Convex de développement | la même chose sur le déploiement de développement | `CONVEX_DEPLOY_KEY` dans `.env.local` | les membres de l'équipe Convex ; le poste qui a `.env.local` | [3.5](#35-clés-de-déploiement-convex) |
 | Jeton Vercel, `VERCEL_TOKEN` | déployer le site **et** la simulation hébergée, en production comme en préversion ; lire les variables des deux projets ([MEN-21](menaces.md#men-21-service-de-simulation-hébergé-ouvert-à-internet)) | prévu comme secret des environnements GitHub `production` **et** `preview`, mais **pas encore créé** ([état au 14 octobre 2026](#ce-que-github-porte-aujourdhui)) | une fois le secret créé : les jobs des deux boutons de déploiement et de la pipeline, et les administrateurs du dépôt (remplacer) ; le compte Vercel qui crée le jeton | [3.6](#36-jeton-et-connexion-vercel) |
@@ -297,11 +297,12 @@ clé de test a été détruite : il n'y a rien d'autre à retirer.
 Une clé distincte de la clé « médical » : une clé ne signe jamais pour
 l'autre. Convex signe chaque réponse de `GET /api/machine/programmes` avec la
 partie privée, la console vérifie avec la partie publique de son image. La
-clé livrée aujourd'hui dans `config/anheart_catalog.pub` n'a pas de partie
-privée (créée en mémoire, jamais écrite) : tant qu'elle n'est pas remplacée,
-aucun catalogue n'est accepté par une console, et chacune garde ses
-programmes. Procédure, jamais essayée, sur le poste du responsable, la
-partie privée hors du dépôt :
+clé publique d'ANH-138 n'avait pas de partie privée (créée en mémoire,
+jamais écrite) ; elle a été remplacée le 21 novembre 2026 par une paire
+dont la partie privée est posée sur le développement et la production (la
+même sur les deux, pour qu'une image serve l'un et l'autre). Procédure, faite
+une fois ce jour-là (la paire tirée avec `cryptography` plutôt qu'`openssl`,
+même format), sur le poste du responsable, la partie privée hors du dépôt :
 
 1. `openssl genpkey -algorithm ed25519 -out <chemin hors du dépôt>/catalogue.key`,
    puis `openssl pkey -in <chemin hors du dépôt>/catalogue.key -pubout -out raspberry-pi/config/anheart_catalog.pub`.
@@ -329,6 +330,19 @@ partie privée hors du dépôt :
    garder chiffré par une phrase secrète si la même clé doit être posée sur un
    autre déploiement.
 
+**Une clé pour le développement et la production (21 novembre 2026).** La
+même partie privée est posée sur les deux, pour qu'une image serve l'un et
+l'autre. Le coût : qui peut lire la variable du développement (la clé de
+déploiement de développement de `.env.local`, ou du code non relu que
+`npx convex dev` pousse sur le développement, une dépendance compromise
+comprise) peut signer ce que les consoles de **production** acceptent : un
+catalogue (il ne nomme aucune machine), la liste des opérateurs, la
+configuration ou la fiche de mise en service d'une machine dont il connaît
+l'identifiant ; une liste datée loin dans le futur ferait même refuser à une
+console toutes les vraies listes suivantes. Cela dure jusqu'à la nouvelle
+image qui porte une autre clé publique. Deux clés, une par déploiement,
+demanderaient deux images (règle 4).
+
 Rotation : refaire 1 à 3. Entre la variable changée et la nouvelle image,
 les consoles refusent le catalogue et gardent ce qu'elles avaient : rien ne
 s'arrête, rien de nouveau n'arrive.
@@ -342,8 +356,10 @@ le restent sur la console jusqu'à la nouvelle image. Une console qui n'a
 encore jamais reçu de liste n'ouvre que l'E-STOP et les lectures jusque-là :
 poser la variable et livrer l'image qui porte la clé publique **avant**
 l'image de la console qui exige la connexion. Si la partie privée a fui, retirer la
-variable (`npx convex env remove ANHEART_CATALOG_SIGNING_KEY`) arrête toute
-signature à la requête suivante ; une console garde la clé publique qui a
+variable de **chaque** déploiement qui la porte, chacun avec sa clé de
+déploiement (`CONVEX_DEPLOY_KEY=<clé> npx convex env remove ANHEART_CATALOG_SIGNING_KEY`,
+le développement puis la production : sans `CONVEX_DEPLOY_KEY`, la commande ne
+touche que le développement), arrête toute signature à la requête suivante ; une console garde la clé publique qui a
 fui jusqu'à sa nouvelle version, et accepterait jusque-là un catalogue signé
 par elle qui lui parviendrait.
 
