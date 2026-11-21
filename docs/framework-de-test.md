@@ -407,22 +407,24 @@ thèmes clair et sombre). Ouvrez-le dans un navigateur.
 > [deploiement.md](deploiement.md#6-le-moteur-de-simulation-hébergé).
 
 ```text
-usage: python -m simulation.live [-h] [--port PORT]
+usage: python -m simulation.live [-h] [--port PORT] [--console CONSOLE]
 ```
 
 ```sh
 $PY -m simulation.live               # http://127.0.0.1:8765/
 $PY -m simulation.live --port 9000
+$PY -m simulation.live --console http://127.0.0.1:8090   # la console que suit ?console (défaut)
 ```
 
 Le serveur (bibliothèque standard seulement, écoute sur `127.0.0.1`) sert
-`simulation/viewer/index.html` et trois points d'accès :
+`simulation/viewer/index.html` et ces points d'accès :
 
 | Chemin | Rôle |
 |---|---|
 | `/` | redirige vers `/viewer/index.html` en gardant les paramètres, ramenés sur une seule ligne |
 | `/api/scenarios` | liste JSON des scénarios |
 | `/stream?scenario=…&speed=…&clock=…` | le flux Server-Sent Events d'une exécution (événements `meta`, `row`, `event`, `final`, `error`, `end`) |
+| `/console` | le flux Server-Sent Events d'une console en marche (`meta` une fois son rayon lu, puis une `row` toutes les 0,2 s ; `error` quand elle ne répond pas, et le serveur réessaie chaque seconde). Le serveur lit `GET /api/panel` et `GET /api/snapshot` de la console de `--console` (`http://hôte:port`, défaut `http://127.0.0.1:8090`) et n'envoie rien d'autre : une page d'une autre origine ne peut pas lire la console, qui n'accepte que la sienne ([`simulation/console_view.py`](../simulation/console_view.py)) |
 | `/api/record?path=…` | un dossier d'enregistrement de schéma 2, lu par le lecteur partagé et rendu ligne par ligne pour le visualiseur ; `path` est relatif à `simulation/` |
 
 Chaque connexion navigateur a sa propre exécution, dans son propre thread.
@@ -444,6 +446,7 @@ fonction, `simulation/tests/test_cli_and_live.py` pour le serveur.
 | `live` | nom de scénario | lance ce scénario en direct via `/stream` |
 | `speed` | nombre ; le serveur borne à 0,1 … 200 (défaut 20) | facteur d'accélération du temps simulé |
 | `clock` | `sim` (sinon `manual`) | `manual` (défaut) : temps simulé déterministe, affiché à `speed` × ; `sim` : l'horloge `SimClock` du code (temps réel accéléré). Gardez alors une vitesse modeste : une pause de la machine hôte devient un arrêt de boucle auquel le runtime réagit, comme il doit le faire |
+| `console` | sans valeur | suit en direct la console de `--console` via `/console` : le bras tourne à la vitesse mesurée par la console. Rayon de référence lu sur la console (relu quand elle redémarre), pointe du pied à la borne CAO (la console ne la publie pas), pas de FC vraie ; une vitesse que la console n'a pas lue est dessinée à 0 et marquée périmée. Quand la console ne répond plus, la dernière image reste et la ligne de source dit l'erreur. Seule une console en boucle locale et sans `DEVICE_TOKEN` se suit ainsi : hors boucle locale elle exige TLS et un jeton, que ce mode ne porte pas. Seulement avec `python -m simulation.live` : la version en ligne n'a pas de console |
 | `trace` | chemin relatif à `simulation/` (ex. `out/manual_27_rpm.jsonl`) ou absolu (commençant par `/`) | rejoue une trace écrite par `simulation.run` |
 
 Exemples :
@@ -453,6 +456,7 @@ http://127.0.0.1:8765/?live=manual_27_rpm&speed=20
 http://127.0.0.1:8765/?live=vasovagal_auto_hold&speed=60
 http://127.0.0.1:8765/?live=manual_27_rpm&speed=5&clock=sim
 http://127.0.0.1:8765/?trace=out/manual_27_rpm.jsonl
+http://127.0.0.1:8765/?console
 ```
 
 Sans serveur : ouvrez `simulation/viewer/index.html` directement et chargez un

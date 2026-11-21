@@ -1,0 +1,110 @@
+{
+ "at_start": {
+  "at": 109202.175560666,
+  "coast_hold_s": null,
+  "counters": {
+   "above_zone_s": 0.0,
+   "below_zone_s": 0.0,
+   "in_zone_s": 0.0,
+   "total_s": 0.0
+  },
+  "current_a": 0.0,
+  "drive_state": "switch_on_disabled",
+  "drive_status_age_s": 0.0,
+  "drive_status_stale": false,
+  "elapsed_s": 0.0,
+  "fault": null,
+  "heart_rate": null,
+  "instance": "f249452ffd8a48c8a39cc7116254c880",
+  "live_bpm": null,
+  "manual": null,
+  "measured": {
+   "g_load": 0.0,
+   "hertz": 0.0,
+   "motor_rpm": 0.0,
+   "output_rpm": 0.0,
+   "resultant_g": 1.0
+  },
+  "mode": "repos",
+  "phase": "done",
+  "remaining_s": 0.0,
+  "safety": null,
+  "safety_action": "none",
+  "safety_rank": 0,
+  "setpoint": {
+   "g_load": 0.0,
+   "hertz": 0.0,
+   "motor_rpm": 0.0,
+   "output_rpm": 0.0,
+   "resultant_g": 1.0
+  },
+  "setpoint_confirmed": true,
+  "sto": {
+   "age_s": 0.049330916997860186,
+   "refusal": null,
+   "source": "sim_ready",
+   "stale_after_s": 2.0,
+   "state": "ready",
+   "unknown_refusal": "etat STO inconnu : retablir une lecture fiable de la chaine de securite"
+  },
+  "target_bpm": null,
+  "wall_clock": 1795286148556
+ },
+ "running": {
+  "at": 109214.234407375,
+  "coast_hold_s": null,
+  "counters": {
+   "above_zone_s": 0.0,
+   "below_zone_s": 0.0,
+   "in_zone_s": 0.0,
+   "total_s": 0.0
+  },
+  "current_a": 0.0,
+  "drive_state": "switch_on_disabled",
+  "drive_status_age_s": 0.0,
+  "drive_status_stale": false,
+  "elapsed_s": 0.0,
+  "fault": null,
+  "heart_rate": {
+   "age_s": 0.19085299999278504,
+   "bpm": 70,
+   "quality": "good",
+   "seq": 36,
+   "stale": false
+  },
+  "instance": "f249452ffd8a48c8a39cc7116254c880",
+  "live_bpm": 70,
+  "manual": null,
+  "measured": {
+   "g_load": 0.0,
+   "hertz": 0.0,
+   "motor_rpm": 0.0,
+   "output_rpm": 0.0,
+   "resultant_g": 1.0
+  },
+  "mode": "repos",
+  "phase": "done",
+  "remaining_s": 0.0,
+  "safety": null,
+  "safety_action": "none",
+  "safety_rank": 0,
+  "setpoint": {
+   "g_load": 0.0,
+   "hertz": 0.0,
+   "motor_rpm": 0.0,
+   "output_rpm": 0.0,
+   "resultant_g": 1.0
+  },
+  "setpoint_confirmed": true,
+  "sto": {
+   "age_s": 0.017783999996026978,
+   "refusal": null,
+   "source": "sim_ready",
+   "stale_after_s": 2.0,
+   "state": "ready",
+   "unknown_refusal": "etat STO inconnu : retablir une lecture fiable de la chaine de securite"
+  },
+  "target_bpm": null,
+  "wall_clock": 1795286160582
+ }
+}
