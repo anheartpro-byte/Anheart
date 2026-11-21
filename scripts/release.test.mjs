@@ -784,6 +784,18 @@ test("EX-2 a gate skipped by one run of a commit does not hide that another run 
   assert.match(result.stdout, /^CI : verte \(9 vérifications terminées, toutes les gates réussies\)$/m);
 });
 
+test("ANH-83 the browser suite is no gate: its check run never holds a release back", (t) => {
+  const fx = fixture(t);
+  for (const e2e of ["completed\tfailure", "completed\tcancelled", "in_progress\t", "queued\t", "completed\tsuccess"]) {
+    const result = fx.run(["prepare", ...ALL, "--dry-run"], { checks: ci({}, `${VERCEL}e2e\t${e2e}\n`) });
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /^CI : verte \(7 vérifications terminées, toutes les gates réussies\)$/m);
+  }
+  // Only its name is spared: any other check run in that state still refuses.
+  refuses(fx.run(["prepare", ...ALL], { checks: ci({}, `${VERCEL}e2e-other\tcompleted\tfailure\n`) }), /develop n'est pas vert[\s\S]*e2e-other : completed failure/);
+  refuses(fx.run(["prepare", ...ALL], { checks: `e2e\tcompleted\tsuccess\n` }), /aucune vérification CI pour develop/);
+});
+
 test("EX-2 the gates release.sh requires are the required checks of the CI workflow", () => {
   const required = /^REQUIRED_CHECKS="([^"]+)"$/m.exec(real("scripts/release.sh"));
   assert.ok(required, "REQUIRED_CHECKS not found in scripts/release.sh");

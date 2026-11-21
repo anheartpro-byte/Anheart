@@ -708,7 +708,8 @@ jobs:
   # served by the suite, a local Convex backend thrown away at the end, test
   # accounts of a Clerk development instance kept for these tests, the real
   # console of the Pi in simulation. Not a gate: no branch protection requires
-  # it, and the quality report does not wait for it.
+  # it, the quality report does not wait for it, and scripts/release.sh does
+  # not judge its check run.
   #
   # Skipped, never failed, while the repository variable
   # E2E_CLERK_PUBLISHABLE_KEY is unset: the `if` of a job may read `vars`
