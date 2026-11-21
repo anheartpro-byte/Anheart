@@ -265,11 +265,12 @@ class DriveInputStoSource:
 
         The other logic inputs wired to the drive are read from it, in the same
         frame as the relay feedback, without another Modbus transaction. None
-        before any success, and again as soon as an attempt fails, so an older
-        word is never presented as the last one; a read still in flight keeps
-        the word of the last success, as :meth:`latest` keeps its reading with
-        ``read_unresolved``. Its freshness is judged by :meth:`latest`: the
-        same ``last_success_at`` and the same ageing.
+        before any success, and again as soon as an attempt returns an error, so
+        an older word is never presented as the last one; a read still in
+        flight, cancelled, or ended by an exception keeps the word of the last
+        success, as :meth:`latest` keeps its reading with ``read_unresolved``.
+        Its freshness is judged by :meth:`latest`: the same ``last_success_at``
+        and the same ageing.
         """
         return self._last_word
 

@@ -675,7 +675,7 @@ class SimulatedDrive:
         """
         if input_ in self._logic_inputs:
             raise ValueError(f"logic input {input_.name} already connected")
-        if input_ is self._config.sto_input:
+        if input_ == self._config.sto_input:
             raise ValueError(f"logic input {input_.name} is the STO relay feedback")
         self._logic_inputs[input_] = level
 
