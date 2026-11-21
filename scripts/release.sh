@@ -205,6 +205,11 @@ is_level() {
 # attente d'approbation sur ce commit fait refuser (docs/release.md, section 4,
 # « Les boutons de déploiement et le script »).
 #
+# Le check run `e2e`, la suite de bout en bout dans un navigateur (ANH-83),
+# n'est pas jugé : ce n'est pas une gate, et son exécution du push, en échec,
+# annulée ou en attente de l'instance Clerk qu'elle partage, ne retient pas une
+# release.
+#
 # Les statuts de commit sont lus aussi (ANH-195). GitHub garde le dernier de
 # chaque nom, et un statut qui n'est pas « success » (en échec, en erreur ou en
 # attente) fait refuser, comme un check run. Un commit qui ne porte aucun
@@ -226,6 +231,7 @@ require_green() { # sha branche
   runs="$(gh api "repos/{owner}/{repo}/commits/$1/check-runs" --paginate \
     --jq '.check_runs[] | [.name, .status, (.conclusion // ""), (.details_url // "")] | @tsv')" ||
     die "lecture des vérifications CI impossible pour $2 ($1)"
+  runs="$(printf '%s\n' "$runs" | awk -F '\t' '$1 != "" && $1 != "e2e"')"
   [ -n "$runs" ] || die "aucune vérification CI pour $2 ($1) : attendre la CI"
   if [ -n "$PIPELINE_RUN" ]; then
     all="$(printf '%s\n' "$runs" | wc -l | tr -d ' ')"

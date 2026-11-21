@@ -586,6 +586,11 @@ Un commit sur lequel la CI n'a pas tourné n'est donc pas vert, même si un chec
 run tiers y a réussi (les commentaires d'aperçu de Vercel, par exemple,
 répondent avant que les gates ne démarrent).
 
+Le check run `e2e`, la suite de bout en bout dans un navigateur (ANH-83), n'est
+pas jugé : ce n'est pas une gate, et son exécution du push sur `main`, en
+échec, annulée ou en attente de l'instance Clerk qu'elle partage, ne retient pas
+la release.
+
 Une gate ignorée (`skipped`) ne compte ni pour ni contre. La CI n'ignore une
 gate que sur une PR dont les fichiers changés ne peuvent pas la concerner ; sur
 un push vers `develop` ou `main`, toutes tournent
